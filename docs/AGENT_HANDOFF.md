@@ -68,11 +68,32 @@ finish it in one pass.
 
 ## Where things stand right now
 
-Phase 0 (architecture and planning) is complete. No application code exists. Nothing has been
-scaffolded, no dependencies installed, no external service connected. See
+Phase 0 (architecture) and Phase 1 (foundation, design system, staff/admin auth) are both
+complete. A real Next.js app runs, with Welcome/Home/placeholder screens and full
+shared-password authentication — no database, Google, or AI integration yet. See
 `docs/IMPLEMENTATION_STATUS.md` for the authoritative, continuously updated detail — this
 file only orients you to the process, not the current state, since state changes every phase
 and duplicating it here would drift.
+
+## Practical lessons from Phase 1 (worth knowing before touching auth or styling code)
+
+- **The Next.js `middleware.ts` convention is now `proxy.ts`** (Next.js 16 renamed it,
+  migrated via `npx @next/codemod@canary middleware-to-proxy .`) — the exported function is
+  named `proxy`, not `middleware`. Don't reintroduce a `middleware.ts` file.
+- **Session cookies need `SESSION_COOKIE_SECURE` awareness.** `next start` sets
+  `NODE_ENV=production` even over plain HTTP; a bare `secure: NODE_ENV === "production"` broke
+  session persistence specifically on WebKit (real iPhone Safari's engine) for any
+  client-side navigation after the first. See `docs/SECURITY.md` for the full story before
+  touching `src/lib/auth/session.ts`'s cookie logic.
+- **Don't trust a color pairing's contrast by eye** — verify it with the actual WCAG
+  relative-luminance formula (see `docs/ACCESSIBILITY.md`'s method). Two placeholder-palette
+  tokens failed real measurement in Phase 1 despite looking fine visually.
+- **Always test on real WebKit, not just Chromium**, for anything session/cookie/navigation
+  related — this is the engine behind actual iPhone Safari, which this app will be used on
+  heavily, and it caught a real bug Chromium alone would have hidden.
+- **Test for real headings, not just visible text** — an E2E assertion expecting a heading
+  role caught that "Find a Book"/"Add a Book" had been built as plain `<span>`s, which was
+  also a real accessibility gap, not just a test-strictness issue.
 
 ## Key architectural decisions already made (see `docs/DECISIONS.md` for full reasoning)
 

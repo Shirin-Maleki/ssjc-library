@@ -40,7 +40,7 @@ export function PasswordInput({
           aria-invalid={Boolean(error)}
           aria-describedby={errorId}
           className={cn(
-            "h-12 w-full rounded-md border border-border bg-surface pl-4 pr-20 text-base text-text-primary placeholder:text-text-muted",
+            "h-12 w-full rounded-md border border-border-input bg-surface pl-4 pr-20 text-base text-text-primary placeholder:text-text-muted",
             "focus:outline-none",
             error && "border-danger"
           )}

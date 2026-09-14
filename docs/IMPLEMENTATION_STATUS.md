@@ -1,22 +1,21 @@
 # Implementation Status
 
-Last updated: 2026-09-13 (Phase 0, after first architecture review round). This document is
-continuity insurance — it should always let another coding agent open this repository cold
-and know exactly where things stand. Keep it current at the end of every phase and review
-round.
+Last updated: 2026-09-13 (end of Phase 1). This document is continuity insurance — it should
+always let another coding agent open this repository cold and know exactly where things
+stand. Keep it current at the end of every phase.
 
 ## Current phase
 
-**Phase 0 — Repository Inspection + Architecture: revised after first review round, still
-awaiting approval to close.** No application code exists. Phase 1 has not started and must
-not start until Phase 0 is explicitly approved.
+**Phase 1 — Foundation + Design System + Access: complete, awaiting review.** A real
+application exists and runs. Phase 2 has not started and must not start until Phase 1 is
+explicitly approved.
 
 ## Full phase plan (for reference — do not execute ahead of approval)
 
 | Phase | Name | Status |
 |---|---|---|
-| 0 | Repository inspection + architecture | **In review — revision 2 delivered, awaiting approval** |
-| 1 | Foundation + design system + access | Not started |
+| 0 | Repository inspection + architecture | Complete (approved) |
+| 1 | Foundation + design system + access | **Complete — awaiting review** |
 | 2 | Mock library + Find a Book | Not started |
 | 3 | Voice + reading lists + guide | Not started |
 | 4 | Real database | Not started |
@@ -30,42 +29,41 @@ not start until Phase 0 is explicitly approved.
 | 12 | Full import | Not started |
 | 13 | Hardening / QA / deployment | Not started |
 
-Each phase executes only after explicit approval of the previous one's report. Never
-executed automatically or combined without approval.
+Each phase executes only after explicit approval of the previous one's report.
 
-## Completed work (Phase 0, both rounds)
+## Completed work (Phase 1)
 
-**Round 1:** full architecture proposal, 25-table schema, 16-entry decision log, local git
-repo initialized.
-
-**Round 2 (this revision), addressing 10 review points:**
-1. Split `books` into `books` (bibliographic/edition) + new `book_copies` (physical
-   instances) — supports per-copy location without a checkout system or individual labels.
-2. Locked age representation as whole integer months, with a documented, tested display-
-   conversion function and explicit unknown/open-ended handling.
-3. Redesigned metadata provenance (`book_field_status` → `book_field_provenance`): field
-   vocabulary is now an app-level Zod registry, not a database enum; the table preserves
-   full evidence history (append + supersede) rather than only the latest value; source
-   classification expanded to external/AI-inferred/human-corrected/human-verified.
-4. Corrected the bulk-import execution model: a standalone Node.js worker script
-   (`scripts/import/run.ts`), never a Vercel Server Action/API request — the first draft had
-   left this ambiguous, and a long-running serverless request would not actually have worked.
-5. Made original-capture vs. display-cover an explicit, named distinction with a defined,
-   configurable fallback order (our own derived photo first, external thumbnail fallback,
-   Drive proxy last resort).
-6. Rewrote search architecture as five explicit layers with defined graceful degradation —
-   exact/normalized matching, structured filters, and Postgres text/trigram search all work
-   with zero AI dependency; semantic retrieval only ever adds to that.
-7. Fully specified the shared-password session mechanism: cookie flags, expiration, admin
-   elevation, logout, CSRF/same-origin handling, login-attempt throttling.
-8. Performed a full table-by-table complexity review (25 → 23 tables): removed `languages`,
-   `work_groups`, and `taxonomy_suggestion_evidence` as over-modeled for current needs; kept
-   everything else with a stated justification.
-9. Compared Kysely against Drizzle specifically against this project's priorities (agent-
-   modifiability, rapid iteration, single-source-of-truth schema) and **switched the
-   recommendation to Drizzle**, before any code exists.
-10. Updated `docs/ARCHITECTURE.md`, `docs/DATA_MODEL.md`, `docs/DECISIONS.md`, this file, and
-    `docs/AGENT_HANDOFF.md` to reflect all of the above.
+- Next.js 16 (App Router) + React 19 + TypeScript (strict) + Tailwind v4 scaffold, generated
+  via `create-next-app` then customized — not hand-rolled from scratch, to start from a
+  correct, current baseline.
+- Poppins loaded via `next/font/google`, weights 400/500/600/700 only, applied through one
+  CSS variable — no component sets its own font.
+- A centralized semantic design-token system (`src/app/globals.css`) — every color, radius,
+  and font reference goes through a named token, never a raw value in a component. Palette is
+  a deliberately neutral placeholder (see `docs/BRANDING.md`), and every text/border pairing
+  actually in use was checked against real WCAG contrast math, not eyeballed (see
+  `docs/ACCESSIBILITY.md`) — this caught and fixed two real failing pairs.
+- Full shared-password staff/admin authentication: bcrypt verification, signed HTTP-only
+  session cookies (`jose`), sliding expiry, admin elevation with its own shorter window that
+  silently downgrades rather than logging out, logout, and an in-memory login-attempt
+  throttle (explicitly a Phase 1 interim stand-in for the Postgres-backed table designed in
+  Phase 0 — see `docs/SECURITY.md`).
+- Server-side route protection via `src/proxy.ts` (Next.js 16 renamed the `middleware`
+  convention to `proxy` — migrated via the official codemod) plus a Server Component guard,
+  not client-side hiding.
+- Welcome screen (Tap to Enter → staff password), Home screen with the two dominant Find/Add
+  actions and visually subordinate secondary navigation, and polished "coming in a later
+  phase" placeholders for Find, Add, Reading Lists, Library Guide, Teacher Catalog, and the
+  Admin dashboard — no fake functionality anywhere.
+- 19 unit tests (Vitest) + 38 E2E tests (Playwright, run against **both real Chromium and
+  real WebKit** — WebKit standing in for iPhone Safari) — all passing. Two real bugs were
+  found and fixed by this testing, not just theoretical coverage: a WebKit-specific session
+  cookie bug (`docs/SECURITY.md`, `docs/TESTING.md`) and a missing semantic heading on the
+  two primary Home actions.
+- Real screenshots (not just code review) captured and visually inspected at a mobile
+  (390×844) and desktop (1440×900) viewport for every major screen — caught and fixed an
+  unresolved-empty-space layout issue on Home.
+- Typecheck, lint, and production build all pass cleanly.
 
 ## In-progress work
 
@@ -73,68 +71,59 @@ None.
 
 ## Blocked work
 
-None. Phase 1 (project scaffold, using mock data throughout) can begin without any external
-credential or asset, once Phase 0 is approved.
+None. Phase 2 (mock library + Find a Book UI) can begin without any external credential.
 
 ## Deferred work
 
-Everything in Phases 1–13. Also explicitly deferred within the data model itself: work-group
-linking (`work_groups`) until a real same-work/different-language case exists in the
-collection.
+Everything in Phases 2–13, by design.
 
 ## Pending user inputs
 
-None of these block Phase 1–3. Listed here so they're tracked, not forgotten:
+Unchanged from Phase 0 — none block Phase 2:
 
-- Final application name (placeholder in centralized config).
-- School logo file and color palette.
-- Google Drive folder URL(s) — existing ~1,500-photo folder, and the new-upload target.
-- Google Sheet (or confirmation the app should create one).
-- Which AI provider(s) you hold API/billing access to — needed before Phase 5 and Phase 7.
-- Supabase project credentials — needed before Phase 4.
+- Final application name, school logo, color palette.
+- Google Drive folder URL(s), Google Sheet.
+- Which AI provider(s) you hold API/billing access to.
+- Supabase project credentials.
 
 ## Known bugs
 
-None — no application code exists yet.
+None open. Two were found and fixed during this phase (see Testing above) — neither remains.
 
 ## Environment variables
 
-None required yet. Anticipated (informational only): `STAFF_PASSWORD_HASH`,
-`ADMIN_PASSWORD_HASH`, `SESSION_SECRET`, `DATABASE_URL`, `MOCK_AI`, `MOCK_GOOGLE` — introduced
-starting Phase 1.
+| Name | Purpose | Required? |
+|---|---|---|
+| `STAFF_PASSWORD_HASH` | bcrypt hash of the shared staff password | Yes |
+| `ADMIN_PASSWORD_HASH` | bcrypt hash of the shared admin password/PIN | Yes |
+| `SESSION_SECRET` | Signs session cookies | Yes |
+| `SESSION_COOKIE_SECURE` | Override the cookie's `Secure` flag (`true`/`false`) | No — only for a deliberate plain-HTTP context; never set on a real deployment |
+
+Generate the two hashes with `npm run auth:hash-password -- "your password"`. None of these
+are committed anywhere; see `.env.example`.
 
 ## Migrations
 
-None created yet. First migrations land in Phase 4, generated by `drizzle-kit` from the
-schema in `docs/DATA_MODEL.md` (23 tables).
+None yet — no database exists until Phase 4.
 
 ## External services
 
-| Service | Status |
-|---|---|
-| Supabase / Postgres | Not connected — planned Phase 4 |
-| Google Drive | Not connected — planned Phase 6 |
-| Google Sheets | Not connected — planned Phase 9 |
-| AI provider (vision/LLM) | Not connected — planned Phase 7 (mocked before then) |
-| Embeddings provider | Not connected — planned Phase 5 (mocked before then) |
-| Google Books / Open Library | Not connected — planned Phase 7 |
-
-Everything above runs against mocks (`MOCK_AI=true`, `MOCK_GOOGLE=true`) for Phases 1–3.
+Unchanged from Phase 0 — nothing connected. Phase 1 needed no mocks, since nothing in its
+scope talks to an external service at all (auth is entirely self-contained).
 
 ## Git status
 
-- Local repository, no remote, nothing pushed. One commit so far (Phase 0 round 1); this
-  revision's documentation changes are staged for a second commit once you confirm you'd
-  like it committed (or will be included in whatever commit you next request).
-- No application code, no dependencies, no build artifacts.
+Local repository, no remote, nothing pushed. Commits so far: Phase 0 architecture (2 commits,
+initial + review revision), Phase 1 scaffold and implementation (committed in this phase,
+including the WebKit cookie fix, accessibility contrast fixes, and the `proxy.ts` migration).
+Working tree clean at the end of this phase.
 
 ## Next recommended task
 
-Await your review of this revised Phase 0 architecture. Once approved, **Phase 1 —
-Foundation + Design System + Access** proceeds exactly as previously scoped: Next.js/
-TypeScript/Tailwind/Drizzle scaffold, Poppins, centralized brand-token system with neutral
-placeholders, Welcome screen + staff password + secure session (per the now-fully-specified
-mechanism in `docs/ARCHITECTURE.md` §14), Home screen, admin-unlock framework — all with mock
-data, no real external services connected.
+Await review of this Phase 1 report. Once approved, **Phase 2 — Mock Library + Find a Book**:
+realistic mock catalog data, natural-language text search UI (logic can be deterministic/mock
+at this stage), autocomplete, browse/filters, Top 5 ranked results, book detail, and the
+loading/empty/no-result states — validating the teacher search experience before any real
+database or AI is connected.
 
-Do not begin Phase 1 without explicit approval.
+Do not begin Phase 2 without explicit approval.

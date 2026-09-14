@@ -715,3 +715,73 @@ folder layout.
 place, but never a data-model-level concern.
 
 **Relevant files:** `docs/ARCHITECTURE.md` §26.
+
+---
+
+## Session cookie `Secure` flag: explicit override, not a bare `NODE_ENV` check
+
+**Date:** 2026-09-13 (Phase 1) · **Status:** Locked
+
+**Problem:** `next start` sets `NODE_ENV=production` even when serving plain HTTP locally, so
+a `secure: NODE_ENV === "production"` cookie flag conflates "production build" with "served
+over HTTPS" — these aren't the same thing. This surfaced as a real bug: the mobile/WebKit E2E
+project silently lost the session cookie on every navigation after the first, because WebKit
+(unlike Chromium) doesn't reliably treat `localhost` as a trustworthy origin for `Secure`
+cookies sent from client-side `fetch()`-driven navigations.
+
+**Options considered:** (a) an explicit `SESSION_COOKIE_SECURE` env override, defaulting to
+the previous `NODE_ENV`-based behavior; (b) always force `secure: true` and require HTTPS
+even for local/E2E testing (e.g., a local TLS cert); (c) always force `secure: false` and rely
+on `HttpOnly`+`SameSite` alone.
+
+**Chosen approach:** (a).
+
+**Why:** (b) adds real friction to local development and CI for a property that's already
+correct by default for the only environment where it matters (a real deployment, which is
+always HTTPS on Vercel). (c) would silently weaken a real deployment's security. An explicit,
+opt-in-only override keeps the secure default correct while unblocking legitimate plain-HTTP
+contexts (local dev, this test suite) without touching production behavior.
+
+**Consequences:** One more environment variable, documented in `.env.example` with an
+explicit warning not to set it on a real deployment.
+
+**How to change later:** N/A — this is a narrow, low-risk mechanism; no reason to revisit
+unless the deployment model itself changes.
+
+**Relevant files:** `src/lib/auth/session.ts`; `docs/SECURITY.md`; `playwright.config.ts`.
+
+---
+
+## A dedicated `border-input` token for form controls, separate from decorative borders
+
+**Date:** 2026-09-13 (Phase 1) · **Status:** Locked
+
+**Problem:** The placeholder palette's general-purpose `--color-border` token measured 1.34:1
+contrast against `--color-surface` — well under WCAG 1.4.11's 3:1 minimum for a UI
+component's boundary. Applying that same token to `PasswordInput` meant the only visual cue to
+where the field could be clicked/typed into was barely perceptible for low-vision users.
+
+**Options considered:** (a) a separate `border-input` token (~3:1 verified) used only on form
+controls, leaving the softer `border`/`border-strong` tokens for decorative/structural use
+(card outlines, dividers); (b) darken `border` globally to meet 3:1 everywhere; (c) leave it
+as-is.
+
+**Chosen approach:** (a).
+
+**Why:** (b) would make every card outline and divider in the app noticeably heavier, working
+against the explicit calm/restrained/editorial visual direction, for a contrast requirement
+that (per WCAG 1.4.11's own scope) doesn't actually apply to those elements — a card's
+boundary isn't the sole cue to its content or clickability the way an empty input field's
+border is. (c) leaves a real, measured accessibility failure in place. (a) fixes the actual
+problem (form-control perceivability) without a disproportionate visual side effect.
+
+**Consequences:** One more token to maintain when the real palette arrives — `docs/BRANDING.md`
+explicitly calls out re-verifying this pairing's contrast when that happens, not just copying
+over hex values.
+
+**How to change later:** If a future component (e.g., a text `Input` primitive, when one is
+actually needed) also relies solely on its border for boundary perception, it should use
+`border-input` too — the pattern generalizes.
+
+**Relevant files:** `src/app/globals.css`; `src/components/ui/PasswordInput.tsx`;
+`docs/ACCESSIBILITY.md`.

@@ -46,7 +46,7 @@ the first draft, not a restatement).
   Drive (§5).
 - **Fonts:** Poppins via `next/font/google`, weights 400/500/600/700 only.
 - **Routing/access:** route groups separate public, staff, and admin areas;
-  `middleware.ts` enforces session requirements before any protected route renders.
+  `proxy.ts` (Next.js 16's renamed middleware convention) enforces session requirements before any protected route renders.
 
 ## 3. Backend / server architecture
 
@@ -266,7 +266,7 @@ explicit, per review.
   (sent on normal same-site navigation and form submissions, withheld on cross-site requests —
   the primary CSRF mitigation).
 - **Expiration.** Sliding expiry — e.g., valid 12 hours from issuance, silently extended on
-  activity within that window (checked in `middleware.ts`), up to a hard cap (e.g., 24h)
+  activity within that window (checked in `proxy.ts`), up to a hard cap (e.g., 24h)
   requiring re-entry of the password. Exact durations live in `system_settings`/env, not
   hard-coded in route code.
 - **Logout.** A Server Action clears the cookie (sets it with an immediate past expiry).

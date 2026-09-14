@@ -54,7 +54,9 @@ next-env.d.ts
 tmp/
 *.tmp
 
-# Large source book-photo collections — never belong in git
+# Large source book-photo collections — never belong in git. This also intentionally
+# covers docs/screenshots/ (phase-report visual review artifacts) — referenced by local
+# path in each phase's report, not committed as binary blobs across 13 phases.
 *.jpg
 *.jpeg
 *.png

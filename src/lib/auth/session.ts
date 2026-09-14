@@ -84,9 +84,20 @@ export async function maybeRenewSessionToken(session: Session): Promise<string |
 }
 
 export function sessionCookieOptions(maxAgeSeconds: number) {
+  // Defaults to NODE_ENV, but "production build" and "served over HTTPS" are not the
+  // same thing — `next start` is a production build even for local/E2E testing over
+  // plain HTTP. WebKit (unlike Chromium) does not reliably treat a Secure cookie on
+  // localhost/127.0.0.1 as sendable from fetch()-driven client-side navigations, so it
+  // silently drops the session cookie on the second request. SESSION_COOKIE_SECURE lets
+  // a real plain-HTTP context (local builds, this test suite) opt out explicitly, without
+  // weakening the default for an actual HTTPS deployment.
+  const secure =
+    process.env.SESSION_COOKIE_SECURE !== undefined
+      ? process.env.SESSION_COOKIE_SECURE === "true"
+      : process.env.NODE_ENV === "production";
   return {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
+    secure,
     sameSite: "lax" as const,
     path: "/",
     maxAge: maxAgeSeconds,

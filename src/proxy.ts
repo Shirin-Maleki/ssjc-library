@@ -20,7 +20,7 @@ export const config = {
  * "staff session but admin not yet elevated" branch is decided at the page level
  * (see src/app/(staff)/admin/page.tsx), since that's a UI state, not an access denial.
  */
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const token = request.cookies.get(sessionConfig.cookieName)?.value;
   const session = token ? await verifySessionToken(token) : null;
 

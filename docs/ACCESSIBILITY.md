@@ -1,0 +1,83 @@
+# Accessibility
+
+Status: reflects what Phase 1 actually implements and verifies. This is the accessibility
+foundation the brief requires from the start, not a checklist deferred to a later "polish"
+phase.
+
+## Semantic structure
+
+- **Landmarks:** `<header>` (site identity + logout, shared across every staff/admin page),
+  `<main>` on the Welcome screen, `<nav aria-label="More library tools">` around the
+  secondary Home navigation.
+- **Heading hierarchy:** exactly one `<h1>` per page (Welcome: the app name; each placeholder
+  page: its own title; Admin: "Admin" in both its unlock and placeholder states). Home's `<h1>`
+  is visually hidden (`sr-only`) — sighted users get the two dominant tiles immediately with
+  no extra visual heading clutter, while screen-reader users still get correct page structure.
+  "Find a Book" / "Add a Book" are `<h2>` elements (initially built as plain `<span>`s, caught
+  by an E2E test expecting a heading role and fixed — see `docs/TESTING.md`).
+- **Forms:** every input has a real `<label htmlFor>` association (`PasswordInput`), not a
+  placeholder-as-label anti-pattern. Errors are associated via `aria-describedby` and
+  `aria-invalid`, and rendered as `<p role="alert">` (an implicit assertive live region) — no
+  `aria-live` was hand-added since `role="alert"` already provides it.
+
+## Keyboard navigation
+
+Verified by real E2E tests, not just asserted: tabbing to "Tap to Enter" and pressing Enter
+reveals the password field; filling it and pressing Enter (no mouse) submits the form and
+reaches Home. All interactive elements are real `<button>`/`<a>`/`<input>` elements, so tab
+order follows document order with no custom `tabindex` needed anywhere.
+
+## Focus visibility
+
+One global rule (`:focus-visible` in `globals.css`) applies a consistent 2px outline using the
+dedicated `--color-focus` token across every interactive element — no component defines its
+own focus style, so there's no risk of an inconsistent or missing focus ring anywhere.
+
+## Touch targets
+
+Buttons are 48px (`h-12`) or 56px (`h-14`) tall; the primary Home tiles have generous padding
+well beyond minimum tap-target guidance; the password show/hide toggle is a real button with
+adequate padding, not a bare icon.
+
+## Reduced motion
+
+One global rule (`@media (prefers-reduced-motion: reduce)`) collapses all animations and
+transitions to ~0ms. The only animation in Phase 1 (the Welcome password field's reveal) is a
+plain CSS `@keyframes` triggered on mount — no JavaScript timing logic to separately gate on
+`prefers-reduced-motion`, since the global CSS rule already neutralizes it.
+
+## Color contrast — verified, not assumed
+
+Every token pair actually used for text was checked against the WCAG relative-luminance
+formula (a small script, not a visual guess) before this phase was considered done:
+
+| Pair | Ratio | Result |
+|---|---|---|
+| `text-primary` on `background` | 14.61:1 | Passes AAA |
+| `text-secondary` on `background` | 7.21:1 | Passes AAA |
+| `text-muted` on `background` | 3.42:1 → **fixed to 5.31:1** | Was failing AA (4.5:1 required for normal text) — the token was darkened from `#8a867d` to `#6b675f` |
+| `danger` text on `danger-bg` | 5.66:1 | Passes AA |
+| default `border` on `surface` | 1.34:1 | Acceptable — decorative/structural only (card outlines, dividers), not relied on alone to convey an interactive boundary |
+| new `border-input` on `surface` | 3.01:1 | Passes WCAG 1.4.11's 3:1 non-text contrast minimum for form-control boundaries |
+
+The second finding (`border`) is why `PasswordInput` now uses a dedicated `border-input`
+token instead of the general-purpose `border` token: an input field's boundary is the only
+cue to where it can be clicked/typed into, which WCAG 1.4.11 holds to a 3:1 minimum — a card
+outline, which has other visual cues (fill, content, whitespace) establishing its boundary,
+is treated differently and was deliberately left soft, matching the calm/restrained visual
+direction. See `docs/DECISIONS.md` for this reasoning recorded as a decision, and
+`src/app/globals.css` for both tokens with their measured ratios in comments.
+
+## No information conveyed by color alone
+
+The error state on `PasswordInput` is never color-only: an invalid field gets a red border
+*and* a visible text error message *and* `aria-invalid="true"`. Admin/staff distinction is
+communicated through actual page content ("Enter the admin password to continue" /
+"Review queues...") — never a color badge alone.
+
+## What's deliberately not done yet
+
+No screen-reader-specific microphone control (voice search is Phase 3). No skip-to-content
+link yet — each page's content starts immediately after a slim header, and there's no long
+repeated navigation block to skip past yet; worth revisiting once Find/Add/Admin get real
+content in later phases.

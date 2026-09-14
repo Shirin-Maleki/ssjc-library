@@ -15,10 +15,35 @@ exactly what exists right now versus what is planned.
 
 ## Project status
 
-**Current phase: Phase 0 — Architecture & Planning (complete, awaiting review).**
-No application code exists yet. This phase produced the architecture, data model, and
-decision record that Phase 1 (project scaffold) will build against. See the Phase 0
-implementation report delivered alongside this repository for the full write-up.
+**Current phase: Phase 1 — Foundation, Design System & Access (complete, awaiting review).**
+A real Next.js application now exists: the Welcome/staff-login screen, the Home screen with
+its two dominant actions, polished placeholders for every not-yet-built destination, and an
+Admin unlock framework — all using mock-free, database-free, credential-free logic (there's
+nothing to mock yet at this phase; only shared-password auth is implemented, and it needs no
+external service). See `docs/IMPLEMENTATION_STATUS.md` for exactly what's built.
+
+## Local setup
+
+```
+npm install
+npm run auth:hash-password -- "choose-a-staff-password"   # copy the printed hash
+npm run auth:hash-password -- "choose-a-different-admin-password"
+```
+
+Create `.env.local` (never committed) from `.env.example`, pasting in the two hashes above and
+a random `SESSION_SECRET` (`openssl rand -base64 32`). Then:
+
+```
+npm run dev          # http://localhost:3000
+npm run build         # production build
+npm run typecheck
+npm run lint
+npm run test          # unit tests (Vitest)
+npm run test:e2e      # end-to-end tests (Playwright, builds its own fixture server)
+```
+
+No database, Google, or AI credentials are needed for anything above — Phase 1 doesn't
+connect to any external service.
 
 ## How to read this repository
 
@@ -30,6 +55,11 @@ Start here, in order:
 4. [`docs/PRODUCT_SPEC.md`](docs/PRODUCT_SPEC.md) — the product requirements this project is building toward.
 5. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — the technical architecture: frontend, backend, database, AI, Google integrations, search, deployment.
 6. [`docs/DATA_MODEL.md`](docs/DATA_MODEL.md) — the relational schema in full detail.
+
+Phase-specific detail, split out once a subject becomes operationally real (per the "don't
+create placeholder docs" rule): [`docs/SECURITY.md`](docs/SECURITY.md),
+[`docs/ACCESSIBILITY.md`](docs/ACCESSIBILITY.md), [`docs/BRANDING.md`](docs/BRANDING.md),
+[`docs/TESTING.md`](docs/TESTING.md).
 
 ## Non-negotiable product principles (short version)
 

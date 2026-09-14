@@ -15,15 +15,24 @@
 
   --color-text-primary: #262420;
   --color-text-secondary: #57534c;
-  --color-text-muted: #8a867d;
+  /* 5.31:1 against --color-background — the original #8a867d measured 3.42:1 and
+     failed WCAG AA for normal text; verified with docs/ACCESSIBILITY.md's method. */
+  --color-text-muted: #6b675f;
   --color-text-on-brand: #faf8f5;
 
   --color-brand-primary: #2b2a27;
   --color-brand-secondary: #6b6862;
   --color-accent: #a8724f;
 
+  /* Decorative/structural borders (card outlines, dividers) — not relied on alone to
+     convey an interactive boundary, so WCAG 1.4.11's 3:1 non-text contrast minimum
+     doesn't apply here. Deliberately soft, per the calm/restrained visual direction. */
   --color-border: #e3ded4;
   --color-border-strong: #cfc8ba;
+  /* Used specifically for form-control boundaries (e.g. PasswordInput), where the
+     border IS the only cue to an input's boundary and clickable/typeable area — this
+     one is held to the 3:1 minimum (measures 3.01:1 against --color-surface). */
+  --color-border-input: #9c9484;
   --color-focus: #2563eb;
 
   --color-success: #2f6f4e;
@@ -53,6 +62,7 @@
   --color-accent: var(--color-accent);
   --color-border: var(--color-border);
   --color-border-strong: var(--color-border-strong);
+  --color-border-input: var(--color-border-input);
   --color-focus: var(--color-focus);
   --color-success: var(--color-success);
   --color-success-bg: var(--color-success-bg);
