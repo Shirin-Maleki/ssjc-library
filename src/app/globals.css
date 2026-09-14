@@ -1,0 +1,106 @@
+@import "tailwindcss";
+
+/*
+ * Design tokens — Phase 1 branding status: PENDING.
+ *
+ * These are deliberately restrained, neutral placeholder values, not an invented
+ * Scandinavian School identity. See docs/BRANDING.md before changing any value here.
+ * When the real logo/palette are provided, only this block (plus public/brand/*) should
+ * need to change — components must never reference raw colors, only these tokens.
+ */
+:root {
+  --color-background: #faf8f5;
+  --color-surface: #ffffff;
+  --color-surface-subtle: #f2efe9;
+
+  --color-text-primary: #262420;
+  --color-text-secondary: #57534c;
+  --color-text-muted: #8a867d;
+  --color-text-on-brand: #faf8f5;
+
+  --color-brand-primary: #2b2a27;
+  --color-brand-secondary: #6b6862;
+  --color-accent: #a8724f;
+
+  --color-border: #e3ded4;
+  --color-border-strong: #cfc8ba;
+  --color-focus: #2563eb;
+
+  --color-success: #2f6f4e;
+  --color-success-bg: #eaf3ed;
+  --color-warning: #92621b;
+  --color-warning-bg: #faf1e2;
+  --color-danger: #b3261e;
+  --color-danger-bg: #fbebea;
+
+  --radius-sm: 0.375rem;
+  --radius-md: 0.625rem;
+  --radius-lg: 1rem;
+
+  --font-sans: var(--font-poppins), ui-sans-serif, system-ui, -apple-system, sans-serif;
+}
+
+@theme inline {
+  --color-background: var(--color-background);
+  --color-surface: var(--color-surface);
+  --color-surface-subtle: var(--color-surface-subtle);
+  --color-text-primary: var(--color-text-primary);
+  --color-text-secondary: var(--color-text-secondary);
+  --color-text-muted: var(--color-text-muted);
+  --color-text-on-brand: var(--color-text-on-brand);
+  --color-brand-primary: var(--color-brand-primary);
+  --color-brand-secondary: var(--color-brand-secondary);
+  --color-accent: var(--color-accent);
+  --color-border: var(--color-border);
+  --color-border-strong: var(--color-border-strong);
+  --color-focus: var(--color-focus);
+  --color-success: var(--color-success);
+  --color-success-bg: var(--color-success-bg);
+  --color-warning: var(--color-warning);
+  --color-warning-bg: var(--color-warning-bg);
+  --color-danger: var(--color-danger);
+  --color-danger-bg: var(--color-danger-bg);
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+  --font-sans: var(--font-sans);
+}
+
+html {
+  color-scheme: light;
+}
+
+body {
+  background: var(--color-background);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+}
+
+/* A single, consistent focus treatment across every interactive element. */
+:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+@keyframes gentle-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(0.25rem);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
