@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+
+# Environment / secrets — never commit real values
+.env
+.env.local
+.env.*.local
+*.pem
+*credentials*.json
+*service-account*.json
+
+# Build output
+.next/
+out/
+dist/
+build/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+
+# Local caches / temp
+.cache/
+tmp/
+*.tmp
+
+# Test artifacts not meant for version control
+coverage/
+playwright-report/
+test-results/
+
+# Large source book-photo collections — never belong in git
+*.jpg
+*.jpeg
+*.png
+*.heic
+!public/brand/**
