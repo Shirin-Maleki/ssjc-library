@@ -76,12 +76,38 @@ and duplicating it here would drift.
 
 ## Key architectural decisions already made (see `docs/DECISIONS.md` for full reasoning)
 
-Postgres via Supabase as canonical database; Kysely (not an ORM) for data access; Next.js
-Server Actions/Route Handlers with no separate backend service; Google Drive as the
-original-image source of truth with Google Sheets as a one-way generated projection; pgvector
-inside the same Postgres database for semantic search (no separate vector DB); a unified
-`book_field_status` table for provenance + confidence; a `book_duplicates` relationship table
-distinguishing exact-copy/different-edition/different-language/false-match; and a shared
-ingestion pipeline used by both single Add-a-Book and bulk import. AI provider, embedding
-model, and exact Google auth mechanism remain genuinely open pending real credentials and the
-requester's input — don't lock these in silently.
+Postgres via Supabase as canonical database; **Drizzle** (not Kysely, not an ORM like Prisma)
+for schema, migrations, and data access — revised from an initial Kysely choice during Phase
+0 review, before any code existed, specifically because a TypeScript-schema-as-source-of-
+truth tool suits a project built by AI coding agents and maintained by a designer better than
+a purer-but-more-manual query-builder-only approach. Next.js Server Actions/Route Handlers
+with no separate backend service for the web app. Google Drive as the original-image source
+of truth with Google Sheets as a one-way generated projection; **original capture and display
+cover are explicitly distinct** — the display cover prefers a derived copy of our own
+photographed original, falling back to an external provider thumbnail, then a Drive proxy,
+never the reverse. pgvector inside the same Postgres database for semantic search, but search
+is layered so **exact matching, structured filters, and full-text/trigram search all work
+with zero AI dependency** — semantic retrieval only ever augments that, never gates it.
+
+**Books and physical copies are separate tables** (`books` = bibliographic/edition record,
+`book_copies` = physical instances with their own location) — do not put location or a copy
+counter back on `books`; "Copies: N" is always a derived count, never stored. Age is stored
+as **whole integer months**, converted to friendly year ranges only for display, via one pure
+function — never store or reason about years directly. Metadata provenance/confidence lives
+in `book_field_provenance`, whose tracked-field vocabulary is an **application-level Zod
+registry, not a database enum** (add fields there, not via migration), and which preserves a
+full evidence history rather than only the latest value. A `book_duplicates` relationship
+table distinguishes exact-copy/different-edition/different-language/false-match. **Bulk
+import runs as a standalone worker script (`scripts/import/run.ts`), never inside a Vercel
+request** — a shared ingestion pipeline (`lib/ingestion`) is used by both single Add-a-Book
+and the bulk-import script, but the execution environment differs; do not build bulk
+processing as a long-running API route, it will not work within serverless time limits.
+
+The schema was deliberately trimmed from 25 to 23 tables during review (removed `languages`,
+`work_groups`, `taxonomy_suggestion_evidence` as over-modeled for current needs) — see
+`docs/DATA_MODEL.md` §12 before proposing new tables; check whether an existing table, an
+array column, or an application-level constant already covers the need before normalizing
+further.
+
+AI provider, embedding model, and exact Google auth mechanism remain genuinely open pending
+real credentials and the requester's input — don't lock these in silently.
