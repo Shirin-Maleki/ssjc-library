@@ -121,9 +121,39 @@ communicated through actual page content ("Enter the admin password to continue"
   reader user who just changed a filter or query hears the updated count without needing to
   re-navigate to find it.
 
+## Phase 3 additions: voice, Reading Lists, and the Guide
+
+- **Voice search** (`VoiceSearchButton`, `SearchInput`): a real `<button>` with an accessible
+  name that changes between "Search by voice" (idle) and "Stop voice search" (listening) —
+  never a generic label the state change is invisible to assistive tech through. Listening is
+  never communicated by color alone: the icon itself changes shape (outline mic → filled
+  square), and a text status line ("Listening…") accompanies it. A visually-hidden
+  `aria-live="polite"` region announces every status transition (listening, heard-and-
+  searching, no-speech, permission-denied, generic error) — duplicated as visible text for
+  sighted users, with the visible copy marked `aria-hidden` so it isn't announced twice. The
+  decorative pulsing animation on the listening icon uses `motion-safe:`, so
+  `prefers-reduced-motion` users simply don't see it (the text label already carries the
+  state). An unsupported browser renders no microphone control at all, rather than a
+  non-functional one, plus one plain sentence explaining typed search still works.
+- **Reading Lists dialogs** (Create/Rename/Delete/Add-to-list) all reuse Radix Dialog, the
+  same primitive `FilterDialog` already relies on — focus trap, Escape-to-close, and
+  `Dialog.Title`/`Dialog.Description` labelling come for free. The destructive Delete dialog
+  explicitly moves focus to Cancel (the non-destructive option) on open via `onOpenAutoFocus`,
+  rather than accepting whatever Radix's default focus target happens to be.
+- **Reading List semantics**: list rows and book rows are real `<ul>/<li>`; every date is a
+  real `<time dateTime="...">` alongside its friendly display text; every Remove/Rename/Delete
+  action has a specific accessible name (e.g. `aria-label="Remove \"Title\" from My List"`, not
+  a bare "Remove" repeated identically down a list); a visually-hidden `aria-live` region
+  announces removals and additions.
+- **A real bug this phase's testing caught**: a native HTML `required` attribute on the
+  Reading List name fields silently intercepted form submission via the browser's own
+  validation UI before the custom, more-informative `role="alert"` error message (matching
+  `PasswordInput`'s existing pattern) ever ran — an E2E assertion expecting that message to
+  appear caught it. Fixed by removing `required` and relying solely on the JS-driven,
+  accessible validation already in place. See `docs/TESTING.md` for the full writeup.
+
 ## What's deliberately not done yet
 
-No screen-reader-specific microphone control (voice search is Phase 3). No skip-to-content
-link yet — each page's content starts immediately after a slim header, and there's no long
-repeated navigation block to skip past yet; worth revisiting once Add/Admin get real content
-in later phases.
+No skip-to-content link yet — each page's content starts immediately after a slim header, and
+there's no long repeated navigation block to skip past yet; worth revisiting once Add/Admin
+get real content in later phases.

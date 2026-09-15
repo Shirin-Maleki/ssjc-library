@@ -1073,3 +1073,110 @@ pattern.
 
 **Relevant files:** `docs/SECURITY.md`; `scripts/hash-password.mjs`; `playwright.config.ts`;
 `tests/unit/scripts/hashPassword.test.ts`.
+
+---
+
+## Voice search: the browser's own Web Speech API, feeding the exact same search pipeline typed queries use
+
+**Date:** 2026-09-15 (Phase 3) · **Status:** Locked
+
+**Problem:** Need voice as a natural secondary input to Find a Book without pretending the
+deterministic Phase 2 search engine understands arbitrary spoken language semantically, and
+without adding a paid speech API, a server-side audio pipeline, or a second ranking/results
+path that could drift from typed search's behavior.
+
+**Options considered:** (a) the browser's built-in `SpeechRecognition`/
+`webkitSpeechRecognition` Web Speech API, used purely as a transcription source — the
+resulting text is placed into the exact same query value and passed through the exact same
+`navigate()` → `buildFindHref()` → `/find?q=...` → `searchBooks()` path typed Enter already
+uses; (b) the same browser API, but with a separate `voiceSearchBooks()` ranking function
+tuned for spoken phrasing; (c) a paid third-party speech-to-text API (e.g. a cloud STT
+service) called from a server route, enabling audio to be sent off-device; (d) an LLM
+interpretation layer that turns the transcript into structured filters automatically.
+
+**Chosen approach:** (a).
+
+**Why:** (b) would create two result-generation paths that could silently diverge, and there
+is no evidence spoken queries need different ranking weights than typed ones — a transcript is
+just text once captured. (c) requires a paid API, a server-side key, and (worse) sending audio
+off the user's device by design, contradicting the product brief's explicit privacy stance
+("SSJC Library doesn't save audio"); the browser's own API keeps audio handling entirely
+outside this application's code and infrastructure. (d) is exactly the kind of natural-
+language-interpretation layer Phase 2 deliberately deferred (`docs/SEARCH.md`, "no AI, no
+LLM query interpretation") — adding it for voice specifically, while typed search stays
+purely deterministic, would make the two input methods behave inconsistently for the same
+words.
+
+**Consequences:** Voice search inherits every limitation of the deterministic search engine —
+"gentle about saying goodbye to a parent" ranks by whatever keywords survive normalization,
+the same as if typed. Browser support varies (Safari/Chrome support it; some browsers don't);
+the app must degrade gracefully to typed-search-only, which it does (`getVoiceUnsupportedMessage`
+in `src/lib/voice/messages.ts`). Voice cannot be said to be strictly "on-device" — a browser
+may implement recognition using its own remote service — so the in-UI privacy note is worded
+carefully to avoid that specific claim (`docs/SECURITY.md`/`docs/ACCESSIBILITY.md`).
+
+**A related sub-decision — Stop vs. Cancel are distinct outcomes:** `stop()` asks the browser
+to finish gracefully (whatever was heard so far still produces a real search); `cancel()`
+aborts immediately with no result and restores the query that existed before listening
+started. These map to the browser's own `recognition.stop()` vs. `recognition.abort()`, and
+are exposed as two separate UI affordances (`VoiceSearchButton`) rather than one ambiguous
+"stop" button, so a teacher who wants to bail out entirely has a clearly different action from
+one who's just done talking.
+
+**How to change later:** If a paid speech API is ever wanted (e.g., for reliability on a
+browser with poor built-in support), it sits behind the same `src/lib/voice/
+speechRecognition.ts` adapter boundary — `useVoiceSearch` and everything above it already
+only depends on that module's small interface, not on `window.SpeechRecognition` directly.
+
+**Relevant files:** `src/lib/voice/{speechRecognition,useVoiceSearch,messages}.ts`;
+`src/components/find/{SearchInput,VoiceSearchButton}.tsx`; `docs/PRODUCT_SPEC.md` §6;
+`docs/SEARCH.md`.
+
+---
+
+## Reading Lists persistence: localStorage behind a repository interface, not a real backend
+
+**Date:** 2026-09-15 (Phase 3) · **Status:** Locked for Phase 3; superseded by a real
+database-backed implementation in Phase 4.
+
+**Problem:** The product brief describes Reading Lists as a genuinely shared, accountless
+staff resource — but Phase 3 is explicitly a pre-production-database phase, with no Supabase/
+Postgres connection yet. Need real, working create/rename/delete/add/remove behavior now
+without either (a) building a throwaway backend just for this one feature, or (b) writing
+components that call `localStorage` directly, which Phase 4 would then have to rewrite
+wholesale.
+
+**Options considered:** (a) a `ReadingListRepository` interface
+(`get all/getById/create/rename/delete/addBook/removeBook`, every method `async`) with exactly
+one implementation for now, `LocalStorageReadingListRepository`, consumed everywhere through a
+single `ReadingListsProvider` React context; (b) call `window.localStorage` directly from
+each component/dialog that needs list data; (c) stand up a minimal serverless API route
+backed by an in-memory or file-based store, just for this phase.
+
+**Chosen approach:** (a).
+
+**Why:** (b) is exactly the "components aware of storage shape" outcome the brief warns
+against — every future Phase 4 change would mean re-touching every call site instead of one
+adapter class. (c) would be a fake backend built and then thrown away one phase later,
+disproportionate effort for a feature explicitly scoped to be local-only in this phase, and it
+would falsely suggest server-side persistence where none exists. (a) makes the repository
+interface — not `localStorage` — the seam every component actually depends on; every method is
+declared `async` even though the current implementation is synchronous under the hood,
+specifically so Phase 4's real, genuinely asynchronous database-backed implementation is a
+drop-in replacement with no call-site changes.
+
+**Consequences:** Lists are visible only in the browser that created them — genuinely not
+shared across devices or staff members yet, despite the product concept being a shared
+resource. The UI discloses this honestly (`ReadingListsOverview`'s standing note, and the
+Library Guide) rather than implying real collaboration. Storage is namespaced and versioned
+(`ssjc-library:reading-lists:v1`) and corrupted/malformed content is treated as an empty list
+rather than crashing, both deliberately defensive since this data isn't validated by a server.
+
+**How to change later:** Write a new class implementing `ReadingListRepository` against the
+real database once Phase 4 lands, and change the one line in `ReadingListsProvider` that
+constructs `LocalStorageReadingListRepository`. No dialog, page, or the provider's public
+interface needs to change.
+
+**Relevant files:** `src/lib/reading-lists/{types,repository,localStorageRepository,
+format}.ts`; `src/components/reading-lists/ReadingListsProvider.tsx`; `docs/DATA_MODEL.md` §9;
+`docs/ARCHITECTURE.md` §20.

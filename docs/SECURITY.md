@@ -94,6 +94,28 @@ Anyone manually typing or pasting a bcrypt hash into any `.env*` file — for th
 any other Next.js project — should escape every `$` as `\$` first. This is worth knowing
 generally, not just for this codebase.
 
+## Voice search privacy (Phase 3)
+
+- **No audio, ever.** This app never records, buffers, uploads, or persists microphone audio.
+  Recognition is handled entirely by the browser's own built-in `SpeechRecognition` /
+  `webkitSpeechRecognition` API (`src/lib/voice/speechRecognition.ts`) — this application code
+  never touches raw audio, only the text transcript the browser hands back.
+- **No transcript persistence or analytics.** A final transcript is placed into the search
+  query and passed straight through the normal Find pipeline; it is never written to
+  `localStorage`, never sent to an analytics endpoint, and never logged server-side (there is
+  no server-side involvement in voice at all). `tests/unit/voice/useVoiceSearch.test.ts`
+  includes a regression test asserting `localStorage.setItem` is never called during a full
+  listening session.
+- **No false "on-device" claim.** The in-UI privacy note (`src/lib/voice/messages.ts`) says
+  precisely: *"Voice search uses your browser's speech recognition. SSJC Library doesn't save
+  audio. Please don't include children's names or identifying information."* It deliberately
+  does not claim recognition happens only on-device — a browser is free to implement
+  `SpeechRecognition` using its own remote service, and this app has no visibility into or
+  control over that. The note appears only while the microphone is actually engaged
+  (listening/processing), not as permanent interface clutter.
+- **No server-side speech key or endpoint.** Nothing in this app's environment variables,
+  Server Actions, or Route Handlers is voice-related — see Environment Variables below.
+
 ## What's explicitly out of scope for Phase 1
 
 - No database, so no `login_attempts` table yet (see above).

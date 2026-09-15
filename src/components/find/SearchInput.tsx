@@ -1,17 +1,29 @@
 "use client";
 
-import { useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { books } from "@/lib/catalog/fixtures";
 import { deriveAutocompleteOptions, getSuggestionTypeLabel } from "@/lib/search/autocomplete";
 import type { Filters } from "@/lib/search/filters";
 import { buildFindHref } from "@/lib/search/urlParams";
+import { useVoiceSearch } from "@/lib/voice/useVoiceSearch";
+import {
+  getVoicePrivacyNoteText,
+  getVoiceStatusMessage,
+  getVoiceUnsupportedMessage,
+  shouldShowVoicePrivacyNote,
+} from "@/lib/voice/messages";
 import { cn } from "@/lib/utils/cn";
+import { VoiceSearchButton } from "./VoiceSearchButton";
 
 interface SearchInputProps {
   initialQuery: string;
   filters: Filters;
 }
+
+/** How long the transcript stays visible, alone, before the search actually runs —
+ * long enough to read what was heard, short enough that voice still feels instant. */
+const VOICE_SEARCH_DELAY_MS = 350;
 
 export function SearchInput({ initialQuery, filters }: SearchInputProps) {
   const router = useRouter();
@@ -21,14 +33,28 @@ export function SearchInput({ initialQuery, filters }: SearchInputProps) {
   const listboxId = useId();
   const inputId = useId();
   const containerRef = useRef<HTMLDivElement>(null);
+  const preVoiceQueryRef = useRef("");
+
+  const {
+    status: voiceStatus,
+    interimTranscript: voiceInterimTranscript,
+    finalTranscript: voiceFinalTranscript,
+    start: startVoice,
+    stop: stopVoice,
+    cancel: cancelVoice,
+    reset: resetVoice,
+  } = useVoiceSearch();
 
   const suggestions = useMemo(() => (open ? deriveAutocompleteOptions(books, value) : []), [open, value]);
 
-  function navigate(query: string) {
-    setOpen(false);
-    setActiveIndex(-1);
-    router.push(buildFindHref(query, filters));
-  }
+  const navigate = useCallback(
+    (query: string) => {
+      setOpen(false);
+      setActiveIndex(-1);
+      router.push(buildFindHref(query, filters));
+    },
+    [router, filters]
+  );
 
   function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -66,6 +92,47 @@ export function SearchInput({ initialQuery, filters }: SearchInputProps) {
     navigate(value);
   }
 
+  // Voice: a final transcript reuses the exact same navigation path typed search
+  // uses — this effect never scores or filters books itself. The transcript is shown
+  // immediately via `displayValue` below; `value` itself (the real query state) is
+  // only committed once the delay elapses, inside the timeout callback rather than
+  // synchronously in the effect body (react-hooks/set-state-in-effect).
+  useEffect(() => {
+    if (voiceStatus === "processing" && voiceFinalTranscript !== null) {
+      const transcript = voiceFinalTranscript;
+      const timer = window.setTimeout(() => {
+        setValue(transcript);
+        navigate(transcript);
+        resetVoice();
+      }, VOICE_SEARCH_DELAY_MS);
+      return () => window.clearTimeout(timer);
+    }
+  }, [voiceStatus, voiceFinalTranscript, navigate, resetVoice]);
+
+  // Derived, not synced via effect: while listening or processing, the field shows
+  // what voice is hearing/heard; otherwise it shows the normal typed/committed value.
+  const displayValue =
+    voiceStatus === "listening" && voiceInterimTranscript
+      ? voiceInterimTranscript
+      : voiceStatus === "processing" && voiceFinalTranscript !== null
+        ? voiceFinalTranscript
+        : value;
+
+  function handleStartVoice() {
+    preVoiceQueryRef.current = value;
+    setOpen(false);
+    setActiveIndex(-1);
+    startVoice();
+  }
+
+  function handleCancelVoice() {
+    cancelVoice();
+    setValue(preVoiceQueryRef.current);
+  }
+
+  const voiceStatusMessage = getVoiceStatusMessage(voiceStatus, voiceInterimTranscript);
+  const showVoiceButton = voiceStatus !== "unsupported";
+
   return (
     <div ref={containerRef} className="relative w-full">
       <form role="search" onSubmit={handleSubmit}>
@@ -94,11 +161,15 @@ export function SearchInput({ initialQuery, filters }: SearchInputProps) {
             aria-activedescendant={activeIndex >= 0 ? `${listboxId}-option-${activeIndex}` : undefined}
             autoComplete="off"
             placeholder="Search by title, author, topic, or describe what you need"
-            value={value}
+            value={displayValue}
+            readOnly={voiceStatus === "listening" || voiceStatus === "processing"}
             onChange={(event) => {
               setValue(event.target.value);
               setOpen(event.target.value.trim().length >= 2);
               setActiveIndex(-1);
+              if (voiceStatus === "no-speech" || voiceStatus === "error" || voiceStatus === "permission-denied") {
+                resetVoice();
+              }
             }}
             onFocus={() => setOpen(value.trim().length >= 2)}
             onBlur={() => {
@@ -106,8 +177,21 @@ export function SearchInput({ initialQuery, filters }: SearchInputProps) {
               window.setTimeout(() => setOpen(false), 120);
             }}
             onKeyDown={handleKeyDown}
-            className="h-14 w-full rounded-lg border border-border-input bg-surface pl-12 pr-4 text-base text-text-primary placeholder:text-text-muted focus:outline-none"
+            className={cn(
+              "h-14 w-full rounded-lg border border-border-input bg-surface pl-12 text-base text-text-primary placeholder:text-text-muted focus:outline-none",
+              showVoiceButton ? (voiceStatus === "listening" ? "pr-24" : "pr-14") : "pr-4"
+            )}
           />
+          {showVoiceButton && (
+            <div className="absolute right-1.5 top-1/2 -translate-y-1/2">
+              <VoiceSearchButton
+                status={voiceStatus}
+                onStart={handleStartVoice}
+                onStop={stopVoice}
+                onCancel={handleCancelVoice}
+              />
+            </div>
+          )}
         </div>
       </form>
 
@@ -139,6 +223,23 @@ export function SearchInput({ initialQuery, filters }: SearchInputProps) {
             </li>
           ))}
         </ul>
+      )}
+
+      <div aria-live="polite" role="status" className="sr-only">
+        {voiceStatusMessage}
+      </div>
+
+      {voiceStatus === "unsupported" && (
+        <p className="mt-2 text-xs text-text-muted">{getVoiceUnsupportedMessage()}</p>
+      )}
+
+      {voiceStatusMessage && voiceStatus !== "unsupported" && (
+        <div className="mt-2 flex flex-col gap-1" aria-hidden="true">
+          <p className="text-sm text-text-secondary">{voiceStatusMessage}</p>
+          {shouldShowVoicePrivacyNote(voiceStatus) && (
+            <p className="text-xs text-text-muted">{getVoicePrivacyNoteText()}</p>
+          )}
+        </div>
       )}
     </div>
   );

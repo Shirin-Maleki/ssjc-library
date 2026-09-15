@@ -380,7 +380,15 @@ Unchanged: admin dashboard sections are filtered views over `books`, `review_fla
 
 ## 20. Reading list architecture
 
-Unchanged: `reading_lists` + `reading_list_items`, no accounts, no ownership.
+Target schema unchanged: `reading_lists` + `reading_list_items`, no accounts, no ownership
+(`docs/DATA_MODEL.md` §9). **Phase 3 update:** built ahead of the real database behind a
+`ReadingListRepository` interface (`get all/getById/create/rename/delete/addBook/removeBook`,
+all `async`), with exactly one implementation today —
+`LocalStorageReadingListRepository`, persisting to the browser's `localStorage` only (see
+`docs/DECISIONS.md`, "Reading Lists persistence"). Every component reaches this through one
+`ReadingListsProvider` React context, never `localStorage` directly. Phase 4 implements a
+second, database-backed class against the same interface and swaps it in at the provider's
+single construction point — no UI code changes.
 
 ## 21. Privacy & security architecture
 

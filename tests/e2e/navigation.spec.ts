@@ -6,26 +6,16 @@ test.describe("Home navigation", () => {
     await loginAsStaff(page);
   });
 
-  // "Find a Book" is intentionally not in this list any more — Phase 2 replaced its
-  // placeholder with the real Find experience, covered by find.spec.ts instead.
+  // "Find a Book" (Phase 2) and "Reading Lists" / "Library Guide" (Phase 3) are
+  // intentionally not in this list any more — each replaced its placeholder with a
+  // real experience, covered by its own spec file instead (find.spec.ts,
+  // readingLists.spec.ts, guide.spec.ts).
   const placeholders: Array<{ link: string; path: string; heading: string; copy: string }> = [
     {
       link: "Add a Book",
       path: "/add",
       heading: "Add a Book",
       copy: "Book intake will be added in a later phase.",
-    },
-    {
-      link: "Reading Lists",
-      path: "/lists",
-      heading: "Reading Lists",
-      copy: "Shared reading lists will be added in a later phase.",
-    },
-    {
-      link: "Library Guide",
-      path: "/guide",
-      heading: "Library Guide",
-      copy: "A visual guide to how the library is organized will be added in a later phase.",
     },
     {
       link: "Teacher Catalog",

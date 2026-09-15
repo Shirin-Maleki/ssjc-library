@@ -6,6 +6,16 @@ database queries and, optionally, an embeddings-based semantic layer — the int
 documented here (`searchBooks`, `Filters`, `SearchResult`) are the seam that stays stable
 across that change.
 
+## Voice search feeds this exact pipeline (Phase 3)
+
+Voice search (`src/lib/voice/`) is not a second search implementation. A final transcript is
+placed into `SearchInput`'s query value and passed through the same `navigate()` →
+`buildFindHref()` → `/find?q=...` → `searchBooks()` path a typed Enter already uses — so
+everything below in this document (ranking weights, stop words, intent parsing) applies
+identically whether the words came from typing or speech. See `docs/DECISIONS.md`, "Voice
+search: the browser's own Web Speech API, feeding the exact same search pipeline typed
+queries use," for the full reasoning.
+
 ## Pipeline
 
 ```
@@ -144,7 +154,7 @@ All four are covered by regression tests in `tests/unit/search/` and
 
 ## What's deliberately not here yet
 
-No AI, no embeddings, no semantic search, no LLM query interpretation — Phase 2 is
-explicitly deterministic. No real database — `lib/catalog/fixtures.ts` is a development-only
-array (see its own header comment). No voice input. These all land in later phases per the
-approved roadmap (`docs/IMPLEMENTATION_STATUS.md`).
+No AI, no embeddings, no semantic search, no LLM query interpretation — this engine is
+explicitly deterministic, whether fed by typing or (Phase 3) voice. No real database —
+`lib/catalog/fixtures.ts` is a development-only array (see its own header comment). These
+land in later phases per the approved roadmap (`docs/IMPLEMENTATION_STATUS.md`).

@@ -7,18 +7,25 @@ import { getLanguageName } from "@/lib/catalog/languages";
 import { BookCover } from "@/components/find/BookCover";
 import { CategoryBadge } from "@/components/find/CategoryBadge";
 import { Tag } from "@/components/find/Tag";
+import { AddToListButton } from "@/components/reading-lists/AddToListButton";
 
 interface BookDetailPageProps {
   params: Promise<{ id: string }>;
   searchParams: Promise<{ from?: string }>;
 }
 
-/** Only a `from` value that actually points back into Find is trusted — anything
- * else (missing, malformed, or pointing elsewhere) falls back to a plain `/find`
- * rather than risking an open redirect or a confusing "back" link. */
+/** Only a `from` value that actually points back into Find or a reading list is
+ * trusted — anything else (missing, malformed, or pointing elsewhere) falls back to a
+ * plain `/find` rather than risking an open redirect or a confusing "back" link.
+ * `/lists/<id>` was added in Phase 3 (product brief §23) alongside the existing
+ * `/find` sources; the back link's own label distinguishes the two (see below). */
 function resolveBackHref(from: string | undefined): string {
-  if (from && from.startsWith("/find")) return from;
+  if (from && (from.startsWith("/find") || /^\/lists\/[A-Za-z0-9_-]+$/.test(from))) return from;
   return "/find";
+}
+
+function backLinkLabel(backHref: string): string {
+  return backHref.startsWith("/lists/") ? "Back to reading list" : "Back to results";
 }
 
 export default async function BookDetailPage({ params, searchParams }: BookDetailPageProps) {
@@ -47,7 +54,7 @@ export default async function BookDetailPage({ params, searchParams }: BookDetai
         href={backHref}
         className="-ml-2 inline-flex min-h-11 w-fit items-center gap-1.5 px-2 text-sm font-medium text-text-secondary hover:text-text-primary"
       >
-        <span aria-hidden="true">←</span> Back to results
+        <span aria-hidden="true">←</span> {backLinkLabel(backHref)}
       </Link>
 
       <div className="flex flex-col gap-6 sm:flex-row sm:gap-10">
@@ -67,7 +74,10 @@ export default async function BookDetailPage({ params, searchParams }: BookDetai
             </p>
           </div>
 
-          <CategoryBadge categoryId={book.physicalCategory} className="w-fit" />
+          <div className="flex flex-wrap items-center gap-3">
+            <CategoryBadge categoryId={book.physicalCategory} className="w-fit" />
+            <AddToListButton bookId={book.id} bookTitle={book.title} variant="button" />
+          </div>
 
           <p className="max-w-2xl text-text-secondary">{book.description}</p>
 

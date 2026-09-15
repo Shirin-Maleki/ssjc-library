@@ -68,14 +68,16 @@ finish it in one pass.
 
 ## Where things stand right now
 
-Phase 0 (architecture), Phase 1 (foundation, design system, staff/admin auth), and Phase 2
-(mock catalog + Find a Book) are all complete. A real Next.js app runs with a fully
-deterministic search/browse/filter experience against a 48-book development fixture catalog
-— no database, Google, or AI integration yet. The app name, color palette, and typography are
-**real** (see `docs/BRANDING.md`); only the logo mark graphic itself remains a placeholder.
-See `docs/IMPLEMENTATION_STATUS.md` for the authoritative, continuously updated detail — this
-file only orients you to the process, not the current state, since state changes every phase
-and duplicating it here would drift.
+Phase 0 (architecture), Phase 1 (foundation, design system, staff/admin auth), Phase 2 (mock
+catalog + Find a Book, plus a visual/mobile revision), and Phase 3 (voice search, Reading
+Lists, Library Guide) are all complete. A real Next.js app runs a fully deterministic search/
+browse/filter experience against a 48-book development fixture catalog, now reachable by
+voice as well as typed/browsed search; shared Reading Lists persist locally (browser-only
+until Phase 4's real database); the Library Guide is real content. Still no database, Google,
+or AI integration. The full brand system (name, palette, typography, logo) is real — nothing
+placeholder remains there. See `docs/IMPLEMENTATION_STATUS.md` for the authoritative,
+continuously updated detail — this file only orients you to the process, not the current
+state, since state changes every phase and duplicating it here would drift.
 
 ## A cross-cutting lesson: bcrypt hashes and `.env` files
 
@@ -89,6 +91,43 @@ just values sourced from a file). Full story in `docs/SECURITY.md` and `docs/DEC
 This bug was invisible to the E2E suite for a while because the suite's own fixture-hash
 generation had the identical flaw — don't assume "the tests pass" rules this class of bug out
 if the test harness touches the same platform behavior the app does.
+
+## Practical lessons from Phase 3 (worth knowing before touching voice or Reading Lists code)
+
+- **`react-hooks/set-state-in-effect` (a newer, stricter lint rule) flags calling any local
+  `useCallback`-wrapped function that itself calls `setState`, from inside a `useEffect` —
+  even if that function is `async` and the actual `setState` call happens after an `await`.**
+  This caught a real instance in `ReadingListsProvider`'s mount effect (it called its own
+  `refresh()` helper, which calls `setLists`). The fix was to inline the repository call and
+  handle its `.then()` resolution directly in the effect, rather than going through a named
+  helper — the same fix pattern used in `SearchInput`'s voice-transcript effect. If you hit
+  this error, look for an indirect call to a state-setting function, not just a literal
+  `setState(...)` line.
+- **A native HTML `required` attribute silently defeats custom JS validation.** The Reading
+  List name fields originally had both `required` and a custom `handleSubmit` check with an
+  accessible error message — the browser's own validation UI intercepted the empty submission
+  first, so the custom error never rendered (and Playwright never saw it). If a field has its
+  own accessible error-message pattern (matching `PasswordInput`'s `role="alert"` convention),
+  don't also add `required`.
+- **WebKit's default Tab order excludes plain `<button>` elements** unless the OS's Full
+  Keyboard Access is enabled — real Safari behavior, reproduced by Playwright's WebKit
+  project. A keyboard-only E2E test that tabs through a dialog's Cancel/Submit buttons will
+  fail on `[mobile]` (WebKit) even though the dialog is fully keyboard-operable in practice.
+  Submit via Enter from within the last text field instead of tabbing to the submit button —
+  it's both the more realistic interaction and the cross-browser-reliable one to test.
+- **Voice reuses Find's exact navigation path, on purpose — resist the urge to give it its own
+  result rendering.** `useVoiceSearch` (`src/lib/voice/`) knows nothing about search, filters,
+  or URLs; it only tracks browser SpeechRecognition state. `SearchInput` is the only place a
+  final transcript becomes a query, via the same `navigate()`/`buildFindHref()` call typed
+  Enter already uses. If a future change needs voice to behave differently from typed search,
+  that's a sign the architecture is being violated, not a sign a new voice-specific code path
+  is needed.
+- **Mock browser APIs via `page.addInitScript()` for voice E2E tests, not a real microphone.**
+  `tests/e2e/voice.spec.ts` installs a scripted fake `SpeechRecognition` class before the app
+  loads, exercising the real production `useVoiceSearch`/`SearchInput` code end to end. The
+  same fake class shape (`onstart`/`onresult`/`onerror`/`onend`) is reused for the Vitest+jsdom
+  component test (`tests/unit/components/SearchInput.voice.test.tsx`) via
+  `tests/unit/voice/fakeSpeechRecognition.ts` — one fake, two test layers.
 
 ## Practical lessons from Phase 2 (worth knowing before touching search code)
 
@@ -173,3 +212,13 @@ further.
 
 AI provider, embedding model, and exact Google auth mechanism remain genuinely open pending
 real credentials and the requester's input — don't lock these in silently.
+
+**Reading Lists (Phase 3) persist to `localStorage` only, entirely behind a
+`ReadingListRepository` interface** (`src/lib/reading-lists/repository.ts`) — components call
+`useReadingLists()` (the `ReadingListsProvider` context, mounted once in the staff layout),
+never `localStorage` directly. Phase 4 replaces `LocalStorageReadingListRepository` with a
+real database-backed implementation of the same interface; no component, dialog, or page
+should need to change. Voice search (also Phase 3) is the browser's own Web Speech API only —
+no server-side speech key, no AI interpretation of the transcript; it becomes a query through
+the exact same `buildFindHref()`/`searchBooks()` path typed search already uses. See
+`docs/DECISIONS.md` for the full reasoning behind both.

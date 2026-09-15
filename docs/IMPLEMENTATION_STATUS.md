@@ -1,15 +1,16 @@
 # Implementation Status
 
-Last updated: 2026-09-14 (end of Phase 2). This document is continuity insurance — it should
+Last updated: 2026-09-15 (end of Phase 3). This document is continuity insurance — it should
 always let another coding agent open this repository cold and know exactly where things
 stand. Keep it current at the end of every phase.
 
 ## Current phase
 
-**Phase 2 — Mock Library + Find a Book: complete, awaiting review.** A real, fully
-deterministic search/browse/filter experience now exists against a 48-book development
-fixture catalog. Phase 3 has not started and must not start until Phase 2 is explicitly
-approved.
+**Phase 3 — Voice + Reading Lists + Guide: complete, awaiting review.** Voice search
+(progressive enhancement over the browser's Web Speech API, reusing Find's exact deterministic
+search pipeline), shared local Reading Lists (create/rename/delete/add/remove, localStorage-
+backed behind a repository interface), and a real Library Guide are all built. Phase 4 has
+not started and must not start until Phase 3 is explicitly approved.
 
 ## Full phase plan (for reference — do not execute ahead of approval)
 
@@ -17,8 +18,8 @@ approved.
 |---|---|---|
 | 0 | Repository inspection + architecture | Complete (approved) |
 | 1 | Foundation + design system + access | Complete (approved), branding applied 2026-09-14 |
-| 2 | Mock library + Find a Book | **Complete — awaiting review** |
-| 3 | Voice + reading lists + guide | Not started |
+| 2 | Mock library + Find a Book | Complete (approved), visual/mobile revision 2026-09-14 |
+| 3 | Voice + reading lists + guide | **Complete — awaiting review** |
 | 4 | Real database | Not started |
 | 5 | Real search architecture | Not started |
 | 6 | Google Drive connection | Not started |
@@ -95,21 +96,61 @@ four-color brand palette. Full detail in the phase report; summary:
   (`li:has(h3)`, "Real photography", "Under 5 minutes", the Filters dialog flows) needed no
   changes, since none of the above touched the DOM structure or text those tests depend on.
 
+## Completed work (Phase 3)
+
+- **Voice search**, integrated directly into `SearchInput` rather than a separate panel:
+  progressive enhancement over the browser's Web Speech Recognition API
+  (`src/lib/voice/speechRecognition.ts` adapter, `useVoiceSearch` hook, `VoiceSearchButton`
+  component), with an explicit status machine (idle/listening/processing/permission-denied/
+  no-speech/error/unsupported). A final transcript reuses the exact same `navigate()` →
+  `buildFindHref()` → `/find?q=...` → `searchBooks()` path typed search already uses — no
+  separate voice ranking, no AI interpretation layer. Existing filters survive a voice search
+  exactly as they survive a typed one (tested). No audio or transcript is ever persisted; a
+  subtle in-UI privacy note appears only while the microphone is actually engaged.
+- **Reading Lists**, a shared, accountless, local-only (Phase 3 prototype) feature: a domain
+  layer (`src/lib/reading-lists/{types,repository,localStorageRepository,format}.ts`) behind
+  a `ReadingListRepository` interface, a `ReadingListsProvider` client context (mounted once in
+  the staff layout), and a full UI — overview (`/lists`), detail (`/lists/[id]`), create/
+  rename/delete dialogs, and an Add-to-Reading-List dialog reachable from both Search Results
+  and Book Detail. Blank "Created By" displays as "Anonymous"; adding a book already on a list
+  is idempotent; deleting a list never touches the fixture catalog. Book Detail's `?from=`
+  return-context mechanism now also accepts `/lists/<id>` alongside `/find`, with its own
+  "Back to reading list" label.
+- **Library Guide** (`/guide`): a real, concise, scannable explainer — physical category vs.
+  digital tags (with a real, non-invented example drawn from the actual fixture catalog),
+  how to find/return a book, and honest future-tense descriptions of Add a Book and Review
+  Later (neither exists yet; the guide says so explicitly, with no fake buttons).
+- **Teacher Catalog**: Home's nav copy ("Open the shared spreadsheet view.") was corrected to
+  "Shared spreadsheet view, coming later." — the placeholder route/copy itself was already
+  honest and needed no other change.
+- 59 new unit tests (voice adapter/hook/messages, a component-level `SearchInput` voice
+  integration test, the Reading Lists domain/repository, formatting helpers) and 62 new E2E
+  tests (`voice.spec.ts`, `readingLists.spec.ts`, `guide.spec.ts`), plus 2 existing
+  `navigation.spec.ts` placeholder assertions retired now that Reading Lists and Library Guide
+  are real destinations — 146 unit / 118 E2E tests total, all passing across both the desktop/
+  Chromium and mobile/WebKit projects.
+- Real screenshots captured and visually inspected at 320/390/820(tablet)/1440 for every voice
+  state, every Reading Lists screen and dialog, and the Guide — including a deliberate
+  longer-list stress test of the tinted `BookCover` system, which remained legible and
+  restrained, not noisy (see `docs/BRANDING.md`/`docs/DECISIONS.md` — no code change needed).
+- Typecheck, lint, and production build all pass cleanly.
+
 ## In-progress work
 
 None.
 
 ## Blocked work
 
-None. Phase 3 (voice input, reading lists, library guide) can begin without any external
-credential.
+None. Phase 4 (the real database) can begin without any external credential blocking it, but
+per the approved roadmap it should wait for explicit approval of this Phase 3 report first.
 
 ## Deferred work
 
-Everything in Phases 3–13, by design. Notably still not built: any AI/LLM involvement in
-search (Phase 2 is deterministic by explicit design), voice input, a real database, and the
-school's final physical taxonomy (Phase 2's 8 categories are explicitly provisional
-development data — see `docs/PRODUCT_SPEC.md` and `src/lib/catalog/categories.ts`).
+Everything in Phases 4–13, by design. Notably still not built: any AI/LLM involvement in
+search (still fully deterministic), a real database (Reading Lists are local-only until then),
+Google/Sheets/Drive integration, and the school's final physical taxonomy (still the 8
+provisional development categories — see `docs/PRODUCT_SPEC.md` and
+`src/lib/catalog/categories.ts`).
 
 ## Pending user inputs
 
@@ -119,7 +160,7 @@ discrepancy between the logo's actual pixels and the documented official palette
 a genuine open question (which should be the "true" reference) rather than resolved by
 assumption. Branding is now fully real end to end — nothing placeholder remains.
 
-None of these block Phase 3:
+None of these block Phase 4:
 
 - **Google Drive folder — link received 2026-09-14** (three sub-folders of scanned book
   covers). Not yet inspected: the Google Drive connector isn't authorized in-session yet, and
@@ -135,37 +176,51 @@ None of these block Phase 3:
 
 ## Known bugs
 
-None open. Four search-ranking bugs and one diacritics bug were found and fixed during this
-phase (see `docs/SEARCH.md`, `docs/TESTING.md`) — all covered by regression tests now.
+None open. This phase found and fixed three real bugs during its own testing — none search-
+related, all in the new Reading Lists/voice UI — full writeups in `docs/TESTING.md`:
+1. A native HTML `required` attribute on the Create/Rename/Add-to-list name fields silently
+   blocked the custom, more-accessible JS validation message from ever running.
+2. The Add-to-list dialog auto-skipped straight to its "create new list" form whenever no
+   lists existed yet, silently bypassing the documented "select an existing list" view (which
+   already correctly handled the empty case) — an unintended shortcut, not a deliberate one.
+3. `react-hooks/set-state-in-effect` (a newer, stricter lint rule) caught a real anti-pattern
+   in `ReadingListsProvider`'s initial load effect — calling a local `useCallback`-wrapped
+   function that itself calls `setState`, from inside an effect. Fixed by inlining the
+   repository call and handling its resolution directly, per `docs/AGENT_HANDOFF.md`.
 
 ## Environment variables
 
 Unchanged from Phase 1 (`STAFF_PASSWORD_HASH`, `ADMIN_PASSWORD_HASH`, `SESSION_SECRET`,
-optional `SESSION_COOKIE_SECURE`) — Phase 2 needed no new environment variables, since the
-entire mock catalog and search engine run in-process with no external service.
+optional `SESSION_COOKIE_SECURE`) — Phase 3 needed no new environment variables. Voice search
+uses only the browser's own Web Speech API (no server-side key); Reading Lists use only
+`localStorage`.
 
 ## Migrations
 
 None yet — no database exists until Phase 4. When it arrives, `books` in
-`src/lib/catalog/fixtures.ts` is the seam that gets replaced by a real query — the shape was
-deliberately kept close to the eventual schema (`docs/DATA_MODEL.md`) for exactly this reason.
+`src/lib/catalog/fixtures.ts` is the seam that gets replaced by a real query, and
+`LocalStorageReadingListRepository` is the seam that gets replaced by a real
+`ReadingListRepository` implementation — both shapes were deliberately kept close to the
+eventual schema (`docs/DATA_MODEL.md`) for exactly this reason.
 
 ## External services
 
-Unchanged — nothing connected. Phase 2 needed no mocks, since nothing in its scope talks to
-an external service (search runs entirely against the in-process fixture array).
+Unchanged — nothing connected. Voice search talks only to the browser's own built-in speech
+recognition (no network call this app makes or controls); Reading Lists talk only to
+`localStorage`. Phase 3 needed no mocks.
 
 ## Git status
 
-Local repository, no remote, nothing pushed. New commit(s) this phase add the Phase 2
-catalog, search engine, Find/Book Detail UI, tests, and documentation on top of the Phase 0/1
-history. Working tree clean at the end of this phase.
+Repository is linked to `github.com/Shirin-Maleki/ssjc-library` (`origin`, `main`). New
+commit(s) this phase add voice search, Reading Lists, and the Library Guide on top of the
+Phase 0–2 history (including the Phase 2 visual/mobile revision). See the phase report for
+exact commit SHA(s) and push status.
 
 ## Next recommended task
 
-Await review of this Phase 2 report. Once approved, **Phase 3 — Voice + Reading Lists +
-Guide**: browser speech-recognition search input with typed fallback and explicit no-recording
-privacy guidance, shared accountless reading lists (create/rename/delete/add/remove), and the
-Library Guide content screen.
+Await review of this Phase 3 report. Once approved, **Phase 4 — the real database**: Supabase/
+Postgres via Drizzle, replacing `src/lib/catalog/fixtures.ts` and
+`LocalStorageReadingListRepository` with real queries behind the same interfaces, per
+`docs/DATA_MODEL.md` and `docs/DECISIONS.md`.
 
-Do not begin Phase 3 without explicit approval.
+Do not begin Phase 4 without explicit approval.

@@ -33,6 +33,12 @@ to disk. No real environment variables or `.env.local` are needed to run any of 
 | `search/autocomplete.test.ts` | Minimum-length gating, catalog-derived suggestions, category-vs-topic type labelling, prefix-over-substring ranking, deduplication, result cap |
 | `search/urlParams.test.ts` | Query/filter round-trip through URL search params |
 | `search/searchBooks.test.ts` | Every deterministic scenario the brief names by example — see below |
+| `voice/messages.test.ts` | Every voice status message, the privacy note's exact wording (no "on-device" claim, no audio-saving claim), button label changes |
+| `voice/speechRecognition.test.ts` | Capability detection (both `SpeechRecognition` and `webkitSpeechRecognition`), final/interim transcript extraction, an empty-but-final transcript vs. no result at all |
+| `voice/useVoiceSearch.test.ts` | The full status machine against a scripted fake `SpeechRecognition`: idle→listening→processing, no-speech (both an empty final transcript and the browser ending with no result at all), permission-denied, generic error, cancel→idle, and a dedicated assertion that `localStorage.setItem` is never called during a listening session |
+| `components/SearchInput.voice.test.tsx` | Component-level: a final transcript navigates through the exact same `buildFindHref()` URL typed Enter produces, with existing filters preserved; cancel restores the pre-voice query without navigating; no-speech/permission-denied/unsupported all render the right calm copy |
+| `reading-lists/format.test.ts` | `formatCreatedBy` (Anonymous fallback for undefined/whitespace), `formatBookCount` pluralization, `formatListDate` (including an unparseable-date fallback), `isBookInList` |
+| `reading-lists/localStorageRepository.test.ts` | Every repository method against real `localStorage` (jsdom): required-name rejection, trimming, Anonymous normalization, survives a simulated reload, rename preserves `createdAt`, idempotent `addBook`, a book in multiple lists, corrupted/malformed stored JSON treated as empty, most-recently-updated-first ordering |
 
 Environment note: tests run with `environment: "node"`, not `jsdom` — an early attempt to use
 `jsdom` caused `jose`'s WebCrypto key handling to see cross-realm `Uint8Array` instances and
@@ -52,8 +58,11 @@ used heavily on phones, so testing only against Chromium would have missed a rea
 | `auth.spec.ts` | Welcome screen rendering, Tap to Enter reveal, wrong/right password, show/hide toggle, full keyboard-only login, route protection on every protected path, logout, admin unlock (wrong/right password), admin elevation clearing on logout |
 | `navigation.spec.ts` | Every remaining placeholder Home destination (Add, Lists, Guide, Teacher Catalog) reaches its "coming later" state and can navigate back; the two primary tiles are meaningfully larger than secondary nav items |
 | `find.spec.ts` | The ten numbered flows the brief requires — see below |
+| `voice.spec.ts` | A scripted fake `SpeechRecognition` (installed via `page.addInitScript()`, never a real microphone) exercising the real production UI: Home → Find → voice → mocked transcript → normal results; existing filters survive a voice search; no-speech, permission-denied, cancel, and an unsupported-browser fallback |
+| `readingLists.spec.ts` | Empty/populated overview, create (required name, optional/whitespace/trimmed creator), a list surviving reload, rename, delete with confirmation (and cancelling it), an empty list's guidance, add-to-list from both Search Results and Book Detail (including that it never accidentally navigates to Book Detail), duplicate-add idempotency and "Already added" messaging, remove (without touching the catalog), Book Detail↔list-detail return navigation, a malformed/external `from=` value falling back safely, corrupted localStorage recovering gracefully, a nonexistent list id's not-found state, and a full keyboard-only create flow |
+| `guide.spec.ts` | The real Guide renders with one `<h1>` and the expected section headings; the physical-category-vs-tags example matches real fixture data; the alphabetical-return rule is stated; Add a Book/Review Later are described in the future tense with no fake button; links to Find a Book and Reading Lists work; the device-local limitation is disclosed |
 
-**56 tests** (29 per browser project × mobile/WebKit + desktop/Chromium) — all passing.
+**118 tests** (59 per browser project × mobile/WebKit + desktop/Chromium) — all passing.
 
 ### Find a Book flow coverage (`find.spec.ts`)
 
@@ -124,6 +133,39 @@ noting as a testing-process lesson: this bug was invisible to the existing E2E s
 sharing the same blind spot is a real risk whenever the test harness and the thing it's
 testing both touch the same non-obvious platform behavior.
 
+### Real bugs this suite caught — Phase 3
+
+None of these are search bugs — all three are in the new Reading Lists/voice UI, caught by
+this phase's own testing:
+
+1. **A native HTML `required` attribute silently blocked the custom validation message.** The
+   Create/Rename/Add-to-list name fields had both `required` and a JS `handleSubmit` check
+   that sets an accessible `role="alert"` error — but the browser's own validation UI
+   intercepted the empty submission first, so the custom message never rendered. Caught by an
+   E2E assertion expecting that message to appear after clicking submit with an empty field.
+   Fixed by removing `required` everywhere a field already has this pattern.
+2. **The Add-to-list dialog auto-skipped its "select an existing list" view whenever no lists
+   existed yet**, jumping straight to the create-new-list form. The JSX for the empty-list
+   case (a "You don't have any reading lists yet" message plus a "Create new list" button) was
+   already correct; a separate `handleOpenChange` shortcut bypassed it entirely. Every test
+   starting from a fresh browser context (i.e., most of them) hit this, several timing out
+   waiting for a "Create new list" button that was never rendered because the dialog had
+   already skipped past it. Fixed by removing the shortcut — the existing empty-state JSX was
+   the right behavior all along.
+3. **`react-hooks/set-state-in-effect`** (a newer, stricter lint rule) caught a real instance
+   in `ReadingListsProvider`'s mount effect: calling a local `useCallback`-wrapped `refresh()`
+   function that itself calls `setLists`, from inside a `useEffect`. Fixed by inlining the
+   repository call and handling its resolution directly in the effect instead of through a
+   named helper — see `docs/AGENT_HANDOFF.md` for the general pattern (also hit, and fixed the
+   same way, in `SearchInput`'s voice-transcript effect).
+
+A fourth finding was a genuine cross-browser platform difference, not an app bug: **WebKit's
+default Tab order excludes plain `<button>` elements** unless the OS's Full Keyboard Access is
+on. A keyboard-only E2E test that tabbed through a dialog's Cancel/Submit buttons passed on
+desktop/Chromium and failed on mobile/WebKit. Rewritten to submit via Enter from within the
+last text field instead — both the more realistic keyboard interaction and the one that's
+reliable on both engines.
+
 ## Manual verification performed
 
 - Visually inspected real Playwright screenshots (not just automated assertions) of every
@@ -142,10 +184,18 @@ testing both touch the same non-obvious platform behavior.
   result set exercising Show More, and Book Detail — at both viewports (`docs/screenshots/
   phase-2/`, same local/not-committed convention as Phase 1). No visual defects were found
   requiring a fix this round, beyond the hover-artifact investigation noted above.
+- Phase 3: captured and inspected real screenshots at 320/390/820(tablet)/1440 of every voice
+  state (idle/listening/permission-denied), every Reading Lists screen and dialog (empty and
+  populated overview, create/rename/delete/add-to-list dialogs, empty and populated detail),
+  and the Guide — see `docs/screenshots/phase-3/`. Included a deliberate stress test: a list
+  seeded with several books to check whether the tinted `BookCover` system (Phase 2 revision)
+  reads as noisy once a list is genuinely book-heavy — it didn't; the four-composition cycle
+  stayed legible and restrained even with repeats, so no change was made.
 
 ## What's not tested yet (by design)
 
-Nothing in Add, Reading Lists, Library Guide, or the Admin dashboard beyond their placeholder
-states — there's no real functionality there yet to test. Database, Google, and AI
-integrations have no tests because nothing is connected yet (Phases 4, 6, 7, 9). Find a Book
-itself is now fully tested at the unit and E2E level for everything Phase 2 actually built.
+Nothing in Add or the Admin dashboard beyond their placeholder states — there's no real
+functionality there yet to test. Database, Google, and AI integrations have no tests because
+nothing is connected yet (Phases 4, 6, 7, 9). Find a Book, voice search, Reading Lists, and the
+Library Guide are all now fully tested at the unit and E2E level for everything Phases 2–3
+actually built.

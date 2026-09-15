@@ -16,13 +16,14 @@ exactly what exists right now versus what is planned.
 
 ## Project status
 
-**Current phase: Phase 2 — Mock Library + Find a Book (complete, awaiting review).** A real,
-fully deterministic (no AI) Find a Book experience now exists: text search, catalog-derived
-autocomplete, browse/filter, ranked results with grounded match explanations, and a real Book
-Detail page — all against a 48-book development fixture catalog, explicitly not the school's
-confirmed inventory. Staff/admin authentication (Phase 1) still gates everything. No
-database, Google, or AI integration yet. See `docs/IMPLEMENTATION_STATUS.md` for exactly
-what's built and `docs/SEARCH.md` for how the search engine works.
+**Current phase: Phase 3 — Voice + Reading Lists + Guide (complete, awaiting review).** On top
+of Phase 2's deterministic Find a Book experience: voice search (progressive enhancement over
+the browser's Web Speech API, reusing the exact same search pipeline typed queries use),
+shared local Reading Lists (create/rename/delete/add/remove, saved in this browser only until
+Phase 4's real database), and a real Library Guide. Staff/admin authentication (Phase 1) still
+gates everything. Still no database, Google, or AI integration. See
+`docs/IMPLEMENTATION_STATUS.md` for exactly what's built and `docs/SEARCH.md` for how the
+search engine works.
 
 ## Local setup
 
@@ -87,8 +88,7 @@ begins. The full phase plan is recorded in [`docs/IMPLEMENTATION_STATUS.md`](doc
 
 ## Branding status
 
-App name, color palette, and typography are real, provided by the school 2026-09-14 — see
-`docs/BRANDING.md` for the full mapping and the accessibility verification behind it. Only
-the **logo mark itself** remains a placeholder (an abstract open-book glyph); when the real
-logo file arrives, it drops into the same centralized token system with no component changes
-needed.
+App name, color palette, typography, and the real logo are all in place, provided by the
+school 2026-09-14/15 — see `docs/BRANDING.md` for the full mapping, the logo integration, and
+the accessibility verification behind every choice. Nothing in the brand system remains a
+placeholder.

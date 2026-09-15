@@ -4,6 +4,7 @@ import { formatAgeRange } from "@/lib/catalog/age";
 import { DURATION_BAND_LABELS, getReadDurationBand } from "@/lib/catalog/duration";
 import { VISUAL_REALISM_LABELS } from "@/lib/catalog/labels";
 import { getLanguageName } from "@/lib/catalog/languages";
+import { AddToListButton } from "@/components/reading-lists/AddToListButton";
 import { BookCover } from "./BookCover";
 import { CategoryBadge } from "./CategoryBadge";
 import { Tag } from "./Tag";
@@ -47,8 +48,9 @@ export function BookResultRow({ result, findUrl }: { result: SearchResult; findU
           <span>{VISUAL_REALISM_LABELS[book.visualRealism]}</span>
         </div>
 
-        <div className="pt-0.5">
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5">
           <CategoryBadge categoryId={book.physicalCategory} />
+          <AddToListButton bookId={book.id} bookTitle={book.title} className="-mr-2" />
         </div>
 
         {visibleTags.length > 0 && (
