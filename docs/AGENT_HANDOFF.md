@@ -8,8 +8,8 @@ prior context, read in this order:
 3. This file.
 4. `docs/DECISIONS.md` — every significant decision and why, so you don't relitigate settled
    choices or accidentally contradict them.
-5. `docs/PRODUCT_SPEC.md` and `docs/ARCHITECTURE.md` / `docs/DATA_MODEL.md` as needed for the
-   task at hand.
+5. `docs/PRODUCT_SPEC.md`, `docs/ARCHITECTURE.md` / `docs/DATA_MODEL.md`, and `docs/SEARCH.md`
+   (if touching Find a Book) as needed for the task at hand.
 
 ## What this project is
 
@@ -68,14 +68,40 @@ finish it in one pass.
 
 ## Where things stand right now
 
-Phase 0 (architecture) and Phase 1 (foundation, design system, staff/admin auth) are both
-complete. A real Next.js app runs, with Welcome/Home/placeholder screens and full
-shared-password authentication — no database, Google, or AI integration yet. The app name,
-color palette, and typography are now **real** (provided 2026-09-14, applied to the existing
-token system — see `docs/BRANDING.md`); only the logo mark graphic itself remains a
-placeholder. See `docs/IMPLEMENTATION_STATUS.md` for the authoritative, continuously updated
-detail — this file only orients you to the process, not the current state, since state changes every phase
+Phase 0 (architecture), Phase 1 (foundation, design system, staff/admin auth), and Phase 2
+(mock catalog + Find a Book) are all complete. A real Next.js app runs with a fully
+deterministic search/browse/filter experience against a 48-book development fixture catalog
+— no database, Google, or AI integration yet. The app name, color palette, and typography are
+**real** (see `docs/BRANDING.md`); only the logo mark graphic itself remains a placeholder.
+See `docs/IMPLEMENTATION_STATUS.md` for the authoritative, continuously updated detail — this
+file only orients you to the process, not the current state, since state changes every phase
 and duplicating it here would drift.
+
+## Practical lessons from Phase 2 (worth knowing before touching search code)
+
+- **Read `docs/SEARCH.md` before changing anything in `src/lib/search/` or
+  `src/lib/catalog/fixtures.ts`.** It documents four real bugs this phase's own testing
+  caught (an author-name collision, a stop-word gap, a fixture-wording accident, and a
+  diacritics bug) — each fixed and regression-tested. Don't reintroduce any-shared-word
+  matching for authors/illustrators/publishers; it's wrong (see the "Named-entity search
+  matching" decision in `docs/DECISIONS.md`).
+- **Filters exclude; free-text query signals only rank.** This is a locked architectural rule
+  (`docs/DECISIONS.md`), not a style preference — don't make a parsed intent signal (age,
+  language, etc.) start excluding books, or you'll silently hide results a teacher didn't ask
+  to hide.
+- **The fixture catalog is real test data, not filler** — `tests/unit/search/
+  searchBooks.test.ts` asserts against actual fixture book IDs for every deterministic
+  scenario the brief names (dinosaurs, Eric Carle, real photographs, etc.). If you edit or add
+  fixtures, re-run that suite; it will tell you if you've broken one of these scenarios.
+- **Don't test hover-order assumptions from a single screenshot** — a visual QA pass this
+  phase almost mistook a Playwright mouse-position hover artifact for a real "pre-checked
+  filter" bug; moving the cursor away before screenshotting resolved it. If a filter/checkbox
+  screenshot looks like it has an unexplained highlighted state, check for this before
+  assuming it's a real bug.
+- **Radix Dialog is now a real dependency** (`@radix-ui/react-dialog`), used for the Filters
+  panel on both mobile and desktop — Phase 0/1 deliberately deferred adding Radix until a
+  real combobox/dialog need existed; this was that moment. Reuse it for future dialogs/sheets
+  rather than hand-rolling another one.
 
 ## Practical lessons from Phase 1 (worth knowing before touching auth or styling code)
 

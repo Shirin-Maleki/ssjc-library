@@ -77,9 +77,53 @@ The error state on `PasswordInput` is never color-only: an invalid field gets a 
 communicated through actual page content ("Enter the admin password to continue" /
 "Review queues...") — never a color badge alone.
 
+## Phase 2 additions: Find a Book
+
+- **Combobox pattern** (`SearchInput`): the search field uses `role="combobox"` with
+  `aria-expanded`, `aria-controls`, and `aria-autocomplete="list"`; the suggestion list is a
+  real `role="listbox"` of `role="option"` elements, with the active one communicated via
+  `aria-activedescendant` (not by moving DOM focus into the list, which would fight normal
+  text input). Arrow Up/Down moves the active suggestion, Enter selects it (or submits the
+  typed text if none is active), Escape closes the list without clearing the input. Verified
+  end to end with real keyboard-only Playwright interaction, not just inline code review.
+- **Filter dialog** (`FilterDialog`): built on Radix's Dialog primitive specifically for its
+  correct, well-tested focus trap, `Escape`-to-close, and labelling — exactly the "reuse an
+  existing accessible primitive" the brief asks for rather than hand-rolling one. Every
+  filter group is a real `<fieldset>`/`<legend>` with real (visually restyled but not
+  visually hidden from assistive tech) checkboxes; a real fix was needed here — see below.
+- **A real focus-visibility bug caught during this phase:** filter checkboxes are visually
+  restyled as pill buttons, with the actual `<input type="checkbox">` hidden via `sr-only`
+  inside a wrapping `<label>`. The global `:focus-visible` rule targets the *focused element
+  itself*, but a hidden 0-size input's own outline is invisible — so keyboard users tabbing
+  through filters would see no focus indicator at all. Fixed with `:focus-within` on the
+  *label* (the parent), which is the correct pseudo-class for "one of my descendants has
+  focus," since `:focus-visible` doesn't cascade to an ancestor via `peer`/sibling selectors
+  the way it would if the input and label were siblings.
+- **Age control**: real `<button aria-pressed>` elements, not a slider — deliberately, per
+  the brief's caution against implying developmental-science precision a slider would
+  suggest.
+- **Active filters** (`ActiveFilters`) and **quick category pills** (`CategoryQuickPills`)
+  are each a labelled `role="group"`, so a screen-reader user can distinguish "the pills that
+  add a filter" from "the chips that remove one" even though both render as small rounded
+  links. Each removable chip's accessible name comes from a dedicated sr-only "Remove X
+  filter" span — the visible "×" glyph is `aria-hidden`, since a decorative glyph has no
+  business being read aloud as part of the name (and, being `aria-hidden`, is correctly
+  excluded from it, which a first draft of this phase's E2E tests initially got wrong before
+  the tests were fixed).
+- **Book covers** are `role="img"` with an `aria-label` of "Cover of {title}" — informative,
+  not redundant with the title text already displayed beside it in normal reading order.
+- **Heading hierarchy**: Find's own `<h1>` is `sr-only` (mirroring Home's pattern from Phase
+  1) since the search input itself is the page's obvious focal point for sighted users; "Top
+  matches" is a real `<h2>`; each result's title is a real `<h3>` containing the link to
+  its detail page — verified by an E2E assertion using `getByRole("heading", { level: 3 })`,
+  not just visual inspection.
+- **Live region**: the results-count line ("N matches") is `aria-live="polite"`, so a screen
+  reader user who just changed a filter or query hears the updated count without needing to
+  re-navigate to find it.
+
 ## What's deliberately not done yet
 
 No screen-reader-specific microphone control (voice search is Phase 3). No skip-to-content
 link yet — each page's content starts immediately after a slim header, and there's no long
-repeated navigation block to skip past yet; worth revisiting once Find/Add/Admin get real
-content in later phases.
+repeated navigation block to skip past yet; worth revisiting once Add/Admin get real content
+in later phases.

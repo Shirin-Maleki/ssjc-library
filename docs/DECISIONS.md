@@ -842,3 +842,149 @@ token change — but it should be a deliberate, informed tradeoff against measur
 accessibility loss, not a silent swap.
 
 **Relevant files:** `docs/BRANDING.md`; `src/app/globals.css`; `src/config/{site,brand}.ts`.
+
+---
+
+## Search: filters are hard constraints, free-text query signals are ranking-only
+
+**Date:** 2026-09-14 (Phase 2) · **Status:** Locked
+
+**Problem:** Need natural-language-like queries ("friendship for age 4") to feel smart
+without ever silently hiding a book a teacher explicitly asked to see via the Filters UI, and
+without the two mechanisms (typed intent vs. explicit filter) fighting each other.
+
+**Options considered:** (a) anything parsed from free text (age, language, duration, realism)
+only ever adjusts ranking/score, never excludes a book — exclusion is the sole job of the
+explicit `Filters` object built from the Filter dialog/pills; (b) treat a strongly-recognized
+free-text signal (e.g. an explicit "age 4") as an implicit hard filter, same as if the teacher
+had clicked it.
+
+**Chosen approach:** (a).
+
+**Why:** (b) would mean a phrase parsed with imperfect confidence from a sentence silently
+removes books from view — exactly the kind of invisible, hard-to-debug behavior the brief's
+"AI suggests, humans decide" spirit argues against, even though Phase 2 has no AI in it yet.
+Keeping the two mechanisms cleanly separated (filters exclude, query text only ranks) means a
+teacher can always fall back to explicit filters if a typed query feels wrong, and the two
+paths are independently testable.
+
+**Consequences:** A book that doesn't satisfy a *parsed* signal can still appear, just ranked
+lower — e.g., "friendship for age 4" still shows an older-readers friendship book, beneath the
+age-appropriate one, rather than hiding it outright. This is intentional, not a leak.
+
+**How to change later:** If a future phase wants a strongly-recognized free-text signal to
+become an explicit filter, the natural place is in the Find page itself: detect the intent
+server-side and additionally set the corresponding filter, rather than changing `rankBooks`'s
+contract.
+
+**Relevant files:** `docs/SEARCH.md`; `src/lib/search/{filters,rank,searchBooks}.ts`.
+
+---
+
+## Named-entity search matching: whole name required, not any shared word
+
+**Date:** 2026-09-14 (Phase 2) · **Status:** Locked
+
+**Problem:** "books by Eric Carle" also matched "Eric Hill" — a real bug caught by testing
+against the actual fixture catalog (`docs/SEARCH.md`), because author/illustrator matching
+credited a book if *any* query token appeared anywhere in the contributor's name, and both
+authors happen to share the first name "Eric."
+
+**Options considered:** (a) require every word of the contributor's own name to appear
+somewhere among the query's tokens (`matchesWholeEntityName`) — the entity's tokens must be a
+subset of the query's, not the reverse; (b) require every query token to appear in the
+specific field being checked (rejected — breaks combined queries like "Eric Carle animal
+books," where "animal" is meant to satisfy a *different* field, not the author name); (c)
+leave any-shared-word matching in place and accept the false positive.
+
+**Chosen approach:** (a).
+
+**Why:** (a) correctly disambiguates "Eric Carle" from "Eric Hill" (the latter is missing
+"carle" from the query's token set) while still correctly handling a combined query like
+"Eric Carle animal books," since it only requires the *author's* two tokens to be present
+somewhere in the query, tolerating extra unrelated tokens meant for other fields. (b) was
+tried first and rejected specifically because it broke that combined-query case. Title, tag,
+and category matching deliberately keep the looser any-token/substring rule this replaced for
+named entities — partial keyword matches are exactly what's wanted for topical search (e.g.
+"animal" should match the tag "animals"), just not for a person's name.
+
+**Consequences:** A bare single-word query like "Eric" alone no longer credits either author
+via this path (their surnames aren't in a one-word query) — considered an acceptable, more
+correct tradeoff, since a bare shared first name is genuinely ambiguous.
+
+**How to change later:** N/A — this is a correctness fix for a real bug, not a stylistic
+choice likely to be revisited.
+
+**Relevant files:** `docs/SEARCH.md`; `src/lib/search/rank.ts`.
+
+---
+
+## Generated typographic cover placeholders, not real or hotlinked images
+
+**Date:** 2026-09-14 (Phase 2) · **Status:** Locked for Phase 2; revisited when Phase 6/7
+connect real cover photography.
+
+**Problem:** Need 48 varied book "covers" for a convincing Find/Detail experience without
+licensed art, public-domain scans, or hotlinking copyrighted cover images (explicitly ruled
+out).
+
+**Options considered:** (a) a generated, typographic placeholder component (title + author on
+a restrained card, with layout — not color — varying for visual interest); (b) hotlink
+publicly-findable cover images from the internet; (c) a single generic "no cover" placeholder
+image reused for every book.
+
+**Chosen approach:** (a).
+
+**Why:** (b) risks copyright and, worse, risks a real teacher believing that's the actual,
+confirmed cover art the school owns — actively misleading for a fixture catalog explicitly
+labelled as non-inventory. (c) would make the results list visually monotonous and unhelpful
+for distinguishing books at a glance. (a) is honest about being a placeholder, gives every
+book a distinct look, and costs nothing to swap later.
+
+**Consequences:** Variety comes from three layout treatments (a thin rule at the top, left, or
+bottom of the card), not color — color was deliberately reserved for the one place it's
+semantically meaningful (the category badge; see the branding decision above), not spent on
+decorative cover variety.
+
+**How to change later:** `BookCover.tsx` is the only file that needs to change when Phase 6/7
+connect real cover images — every caller already just passes a `book` and asks for a size.
+
+**Relevant files:** `src/components/find/BookCover.tsx`; `src/lib/catalog/fixtures.ts`.
+
+---
+
+## Book Detail's "back to results" uses an explicit `?from=` link, not browser history
+
+**Date:** 2026-09-14 (Phase 2) · **Status:** Locked
+
+**Problem:** Returning from Book Detail must reliably preserve the exact search
+(query + filters) a teacher came from — the brief calls this a hard requirement, with scroll
+position only a "where practical" nice-to-have.
+
+**Options considered:** (a) each result link to Book Detail carries the current Find URL as
+an explicit, validated `?from=` parameter; Book Detail's "Back to results" link uses it
+directly; (b) rely on the browser's own Back button / `router.back()`.
+
+**Chosen approach:** (a), with the `from` value validated to actually start with `/find`
+before being trusted, falling back to a bare `/find` otherwise (guards against an unexpected
+or manipulated value being used as a redirect target).
+
+**Why:** (b) is what the brief suggests trying first ("use browser history naturally where
+possible"), but it's genuinely unreliable here: a teacher can reach Book Detail without a
+prior Find navigation in history (a shared link, a fresh tab), and `router.back()` in that
+case would leave the app on the Welcome screen or exit it entirely. An explicit, validated
+link is deterministic or in every case, and is what the brief's own fallback language
+("simple, maintainable" over "elaborate") points to once (b) proves insufficient. An explicit
+link is deterministic in every case, unlike history-dependent navigation. Scroll position
+itself is not restored on this forward-navigation link (only a true browser Back gets free
+scroll restoration) — accepted as the explicitly lower-priority half of the requirement.
+
+**Consequences:** Every link into Book Detail must remember to attach `from` — a small,
+consistent discipline enforced by `BookResultRow` being the only place these links are
+created.
+
+**How to change later:** If scroll restoration becomes important later, the `from` URL could
+additionally carry a scroll anchor; not needed yet.
+
+**Relevant files:** `docs/SEARCH.md`; `src/app/(staff)/books/[id]/page.tsx`;
+`src/components/find/BookResultRow.tsx`.

@@ -1,26 +1,14 @@
-import { test, expect, type Page } from "@playwright/test";
-import { E2E_STAFF_PASSWORD } from "../../playwright.config";
-
-async function loginAsStaff(page: Page) {
-  await page.goto("/");
-  await page.getByRole("button", { name: "Tap to Enter" }).click();
-  await page.getByLabel("Staff password", { exact: true }).fill(E2E_STAFF_PASSWORD);
-  await page.getByRole("button", { name: "Enter" }).click();
-  await expect(page).toHaveURL("/home");
-}
+import { test, expect } from "@playwright/test";
+import { loginAsStaff } from "./helpers";
 
 test.describe("Home navigation", () => {
   test.beforeEach(async ({ page }) => {
     await loginAsStaff(page);
   });
 
+  // "Find a Book" is intentionally not in this list any more — Phase 2 replaced its
+  // placeholder with the real Find experience, covered by find.spec.ts instead.
   const placeholders: Array<{ link: string; path: string; heading: string; copy: string }> = [
-    {
-      link: "Find a Book",
-      path: "/find",
-      heading: "Find a Book",
-      copy: "Search and browse the library will be implemented in the next phase.",
-    },
     {
       link: "Add a Book",
       path: "/add",

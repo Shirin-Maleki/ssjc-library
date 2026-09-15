@@ -56,7 +56,7 @@ four accent hues are reserved for deliberate, small moments, not backgrounds or 
 |---|---|---|---|
 | `text-primary` / `brand-primary` | `#000000` | Official black, verbatim | Same value in both tokens deliberately — both represent the brand's literal black |
 | `brand-secondary` | `#2a2a2a` | Derived (tint of black) | Hover state for brand-primary-filled buttons; teal was considered here first (see below) and rejected |
-| `accent` | `#6dbec6` | Official teal, verbatim | Reserved for sparing decorative use — tags, badges, small highlights. Not yet visibly applied anywhere in Phase 1's sparse UI; there's no tasteful spot for it without inventing new UI structure. Phase 2's search result tags/filter chips are the natural first real use. |
+| `accent` | `#6dbec6` | Official teal, verbatim | **First real application landed in Phase 2** — see below. |
 | `focus` | `#000000` | Official black, verbatim | See below — the official teal was considered and rejected here too |
 | `warning` | `#b44b1f` | **Derived** (darkened from official orange `#e15e27`) | See contrast note below |
 | `danger` | `#be3345` | **Derived** (darkened from official coral `#df3c51`) | See contrast note below |
@@ -104,6 +104,23 @@ The **literal brand swatches remain correct** for large text, non-text decorativ
 context paired with a dark/black background (where contrast is no longer a problem) — the
 darkened shades exist specifically because `warning`/`danger` are text-bearing UI states, not
 because the school's official colors are somehow wrong.
+
+## The accent color's first real use: the physical-category badge (Phase 2)
+
+Every book result and detail view shows a "Located in [category]" badge — the physical
+shelf location, which the product spec requires be "easy to visually locate and clearly
+distinct from ordinary tags." This badge uses the official teal as a **light background
+tint only** (`bg-accent/15`, `border-accent/40`), never as text color (teal fails text
+contrast — see above), with the category name itself rendered in the normal dark text color.
+
+The important restraint: **every category badge uses the same teal tint, regardless of which
+category it names.** The color means "this is the shelf location," not "this specific
+category" — so a result list never turns into a row of differently-colored badges. Ordinary
+digital tags (`Tag.tsx`) stay a plain neutral gray, with no color-coding at all, precisely
+because the brief warns against "chips becom[ing] a large rainbow row." One consistent
+accent, spent on one consistent meaning, is the whole of Phase 2's decorative color use — the
+other three brand hues (coral, orange, yellow) remain unused in the visible UI, still waiting
+for a use case as clearly justified as this one.
 
 ## Logo
 

@@ -1,32 +1,23 @@
 # Implementation Status
 
-Last updated: 2026-09-14 (Phase 1 complete 2026-09-13; real branding applied 2026-09-14,
-still within the Phase 1 review checkpoint — Phase 2 has not begun). This document is
-continuity insurance — it should always let another coding agent open this repository cold
-and know exactly where things stand. Keep it current at the end of every phase.
+Last updated: 2026-09-14 (end of Phase 2). This document is continuity insurance — it should
+always let another coding agent open this repository cold and know exactly where things
+stand. Keep it current at the end of every phase.
 
 ## Current phase
 
-**Phase 1 — Foundation + Design System + Access: complete, awaiting review.** A real
-application exists and runs. Phase 2 has not started and must not start until Phase 1 is
-explicitly approved.
-
-**2026-09-14 addendum (still Phase 1, not a new phase):** the school provided the real app
-name ("SSJC Library"), color palette, and typography system. Applied to the existing
-centralized token system exactly as designed for this — see `docs/BRANDING.md` for the full
-mapping and `docs/DECISIONS.md` for the reasoning behind every color-token choice (including
-two brand colors that needed darkening for text-contrast safety, and two that were
-deliberately *not* used for buttons/focus despite being official brand colors). Note below
-("Completed work (Phase 1)") describes the *original* Phase 1 build with placeholder
-branding; this addendum is what changed since.
+**Phase 2 — Mock Library + Find a Book: complete, awaiting review.** A real, fully
+deterministic search/browse/filter experience now exists against a 48-book development
+fixture catalog. Phase 3 has not started and must not start until Phase 2 is explicitly
+approved.
 
 ## Full phase plan (for reference — do not execute ahead of approval)
 
 | Phase | Name | Status |
 |---|---|---|
 | 0 | Repository inspection + architecture | Complete (approved) |
-| 1 | Foundation + design system + access | **Complete — awaiting review** |
-| 2 | Mock library + Find a Book | Not started |
+| 1 | Foundation + design system + access | Complete (approved), branding applied 2026-09-14 |
+| 2 | Mock library + Find a Book | **Complete — awaiting review** |
 | 3 | Voice + reading lists + guide | Not started |
 | 4 | Real database | Not started |
 | 5 | Real search architecture | Not started |
@@ -41,38 +32,37 @@ branding; this addendum is what changed since.
 
 Each phase executes only after explicit approval of the previous one's report.
 
-## Completed work (Phase 1)
+## Completed work (Phase 2)
 
-- Next.js 16 (App Router) + React 19 + TypeScript (strict) + Tailwind v4 scaffold, generated
-  via `create-next-app` then customized — not hand-rolled from scratch, to start from a
-  correct, current baseline.
-- Poppins loaded via `next/font/google`, weights 400/500/600/700 only, applied through one
-  CSS variable — no component sets its own font.
-- A centralized semantic design-token system (`src/app/globals.css`) — every color, radius,
-  and font reference goes through a named token, never a raw value in a component. Palette is
-  a deliberately neutral placeholder (see `docs/BRANDING.md`), and every text/border pairing
-  actually in use was checked against real WCAG contrast math, not eyeballed (see
-  `docs/ACCESSIBILITY.md`) — this caught and fixed two real failing pairs.
-- Full shared-password staff/admin authentication: bcrypt verification, signed HTTP-only
-  session cookies (`jose`), sliding expiry, admin elevation with its own shorter window that
-  silently downgrades rather than logging out, logout, and an in-memory login-attempt
-  throttle (explicitly a Phase 1 interim stand-in for the Postgres-backed table designed in
-  Phase 0 — see `docs/SECURITY.md`).
-- Server-side route protection via `src/proxy.ts` (Next.js 16 renamed the `middleware`
-  convention to `proxy` — migrated via the official codemod) plus a Server Component guard,
-  not client-side hiding.
-- Welcome screen (Tap to Enter → staff password), Home screen with the two dominant Find/Add
-  actions and visually subordinate secondary navigation, and polished "coming in a later
-  phase" placeholders for Find, Add, Reading Lists, Library Guide, Teacher Catalog, and the
-  Admin dashboard — no fake functionality anywhere.
-- 19 unit tests (Vitest) + 38 E2E tests (Playwright, run against **both real Chromium and
-  real WebKit** — WebKit standing in for iPhone Safari) — all passing. Two real bugs were
-  found and fixed by this testing, not just theoretical coverage: a WebKit-specific session
-  cookie bug (`docs/SECURITY.md`, `docs/TESTING.md`) and a missing semantic heading on the
-  two primary Home actions.
-- Real screenshots (not just code review) captured and visually inspected at a mobile
-  (390×844) and desktop (1440×900) viewport for every major screen — caught and fixed an
-  unresolved-empty-space layout issue on Home.
+- A 48-record development fixture catalog (`src/lib/catalog/fixtures.ts`), explicitly
+  labelled as non-inventory, meaningfully varied across language (6 languages), fiction/
+  nonfiction, format, all 8 provisional physical categories, illustration style, visual
+  realism, and read-aloud duration — enough variation for every filter and ranking test the
+  brief names by example to genuinely exercise real data, not a hand-picked toy set.
+- A fully deterministic (no AI) search/ranking engine (`src/lib/search/`): text
+  normalization with diacritic folding, structured intent parsing from free text (age,
+  duration, visual realism, language, illustration style — ranking signals only, never hard
+  filters), centralized ranking weights, catalog-derived autocomplete, and grounded
+  match explanations built only from fields that actually matched. Full design and every
+  weight documented in the new `docs/SEARCH.md`.
+- A real Find a Book page: large search input with an accessible keyboard-operable
+  autocomplete combobox, category quick-pills, a single consistent Filters dialog (built on
+  Radix Dialog) covering all eleven filter dimensions, removable active-filter chips,
+  URL-backed search state (query and every filter round-trip through `/find?...`), Top-5
+  ranked results with Show More, and distinct initial/zero-result states.
+- A real Book Detail route (`/books/[id]`) with the full teacher-relevant metadata set, no
+  admin/AI internals exposed, and a reliable "back to results" link that preserves the exact
+  originating search via a validated `?from=` parameter.
+- Generated, typographic placeholder book covers (`BookCover.tsx`) — no licensed art, no
+  hotlinked images, swappable for real cover photography later behind one component.
+- A physical-category badge that is the first real, deliberate use of the school's brand
+  accent color, applied consistently (not per-category) to avoid a "rainbow of tags."
+- 84 unit tests (up from 19) and 56 E2E tests (up from 38, across both real Chromium and
+  real WebKit) — all passing. Four real search bugs were found and fixed by this testing,
+  not just theoretical coverage — full writeups in `docs/SEARCH.md` and `docs/TESTING.md`.
+- Real screenshots captured and visually inspected at mobile and desktop for the initial
+  state, populated results, autocomplete, zero results, the Filters dialog, a
+  Show-More-triggering browse result, and Book Detail.
 - Typecheck, lint, and production build all pass cleanly.
 
 ## In-progress work
@@ -81,61 +71,61 @@ None.
 
 ## Blocked work
 
-None. Phase 2 (mock library + Find a Book UI) can begin without any external credential.
+None. Phase 3 (voice input, reading lists, library guide) can begin without any external
+credential.
 
 ## Deferred work
 
-Everything in Phases 2–13, by design.
+Everything in Phases 3–13, by design. Notably still not built: any AI/LLM involvement in
+search (Phase 2 is deterministic by explicit design), voice input, a real database, and the
+school's final physical taxonomy (Phase 2's 8 categories are explicitly provisional
+development data — see `docs/PRODUCT_SPEC.md` and `src/lib/catalog/categories.ts`).
 
 ## Pending user inputs
 
-**Resolved 2026-09-14:** application name ("SSJC Library"), color palette, and typography
-system — see `docs/BRANDING.md`. None of these block Phase 2:
+Unchanged from Phase 1 — none block Phase 3:
 
-- School logo **file** (colors/type/name are real now; the logo mark itself is still a
-  placeholder graphic).
+- School logo **file**.
 - Google Drive folder URL(s), Google Sheet.
 - Which AI provider(s) you hold API/billing access to.
 - Supabase project credentials.
+- Eventually: feedback on whether the 8 provisional physical categories used for Phase 2
+  testing feel like a reasonable direction, once Phase 11's real taxonomy research begins —
+  not needed now.
 
 ## Known bugs
 
-None open. Two were found and fixed during this phase (see Testing above) — neither remains.
+None open. Four search-ranking bugs and one diacritics bug were found and fixed during this
+phase (see `docs/SEARCH.md`, `docs/TESTING.md`) — all covered by regression tests now.
 
 ## Environment variables
 
-| Name | Purpose | Required? |
-|---|---|---|
-| `STAFF_PASSWORD_HASH` | bcrypt hash of the shared staff password | Yes |
-| `ADMIN_PASSWORD_HASH` | bcrypt hash of the shared admin password/PIN | Yes |
-| `SESSION_SECRET` | Signs session cookies | Yes |
-| `SESSION_COOKIE_SECURE` | Override the cookie's `Secure` flag (`true`/`false`) | No — only for a deliberate plain-HTTP context; never set on a real deployment |
-
-Generate the two hashes with `npm run auth:hash-password -- "your password"`. None of these
-are committed anywhere; see `.env.example`.
+Unchanged from Phase 1 (`STAFF_PASSWORD_HASH`, `ADMIN_PASSWORD_HASH`, `SESSION_SECRET`,
+optional `SESSION_COOKIE_SECURE`) — Phase 2 needed no new environment variables, since the
+entire mock catalog and search engine run in-process with no external service.
 
 ## Migrations
 
-None yet — no database exists until Phase 4.
+None yet — no database exists until Phase 4. When it arrives, `books` in
+`src/lib/catalog/fixtures.ts` is the seam that gets replaced by a real query — the shape was
+deliberately kept close to the eventual schema (`docs/DATA_MODEL.md`) for exactly this reason.
 
 ## External services
 
-Unchanged from Phase 0 — nothing connected. Phase 1 needed no mocks, since nothing in its
-scope talks to an external service at all (auth is entirely self-contained).
+Unchanged — nothing connected. Phase 2 needed no mocks, since nothing in its scope talks to
+an external service (search runs entirely against the in-process fixture array).
 
 ## Git status
 
-Local repository, no remote, nothing pushed. Commits so far: Phase 0 architecture (2 commits,
-initial + review revision), Phase 1 scaffold and implementation (committed in this phase,
-including the WebKit cookie fix, accessibility contrast fixes, and the `proxy.ts` migration).
-Working tree clean at the end of this phase.
+Local repository, no remote, nothing pushed. New commit(s) this phase add the Phase 2
+catalog, search engine, Find/Book Detail UI, tests, and documentation on top of the Phase 0/1
+history. Working tree clean at the end of this phase.
 
 ## Next recommended task
 
-Await review of this Phase 1 report. Once approved, **Phase 2 — Mock Library + Find a Book**:
-realistic mock catalog data, natural-language text search UI (logic can be deterministic/mock
-at this stage), autocomplete, browse/filters, Top 5 ranked results, book detail, and the
-loading/empty/no-result states — validating the teacher search experience before any real
-database or AI is connected.
+Await review of this Phase 2 report. Once approved, **Phase 3 — Voice + Reading Lists +
+Guide**: browser speech-recognition search input with typed fallback and explicit no-recording
+privacy guidance, shared accountless reading lists (create/rename/delete/add/remove), and the
+Library Guide content screen.
 
-Do not begin Phase 2 without explicit approval.
+Do not begin Phase 3 without explicit approval.

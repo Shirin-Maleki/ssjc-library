@@ -14,6 +14,7 @@
     "auth:hash-password": "node scripts/hash-password.mjs"
   },
   "dependencies": {
+    "@radix-ui/react-dialog": "^1.1.23",
     "bcryptjs": "^3.0.3",
     "jose": "^6.2.12",
     "next": "16.3.5",

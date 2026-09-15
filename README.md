@@ -16,12 +16,13 @@ exactly what exists right now versus what is planned.
 
 ## Project status
 
-**Current phase: Phase 1 — Foundation, Design System & Access (complete, awaiting review).**
-A real Next.js application now exists: the Welcome/staff-login screen, the Home screen with
-its two dominant actions, polished placeholders for every not-yet-built destination, and an
-Admin unlock framework — all using mock-free, database-free, credential-free logic (there's
-nothing to mock yet at this phase; only shared-password auth is implemented, and it needs no
-external service). See `docs/IMPLEMENTATION_STATUS.md` for exactly what's built.
+**Current phase: Phase 2 — Mock Library + Find a Book (complete, awaiting review).** A real,
+fully deterministic (no AI) Find a Book experience now exists: text search, catalog-derived
+autocomplete, browse/filter, ranked results with grounded match explanations, and a real Book
+Detail page — all against a 48-book development fixture catalog, explicitly not the school's
+confirmed inventory. Staff/admin authentication (Phase 1) still gates everything. No
+database, Google, or AI integration yet. See `docs/IMPLEMENTATION_STATUS.md` for exactly
+what's built and `docs/SEARCH.md` for how the search engine works.
 
 ## Local setup
 
@@ -60,7 +61,7 @@ Start here, in order:
 Phase-specific detail, split out once a subject becomes operationally real (per the "don't
 create placeholder docs" rule): [`docs/SECURITY.md`](docs/SECURITY.md),
 [`docs/ACCESSIBILITY.md`](docs/ACCESSIBILITY.md), [`docs/BRANDING.md`](docs/BRANDING.md),
-[`docs/TESTING.md`](docs/TESTING.md).
+[`docs/TESTING.md`](docs/TESTING.md), [`docs/SEARCH.md`](docs/SEARCH.md).
 
 ## Non-negotiable product principles (short version)
 

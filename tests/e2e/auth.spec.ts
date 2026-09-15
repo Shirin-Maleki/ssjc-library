@@ -1,13 +1,6 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect } from "@playwright/test";
 import { E2E_ADMIN_PASSWORD, E2E_STAFF_PASSWORD } from "../../playwright.config";
-
-async function loginAsStaff(page: Page) {
-  await page.goto("/");
-  await page.getByRole("button", { name: "Tap to Enter" }).click();
-  await page.getByLabel("Staff password", { exact: true }).fill(E2E_STAFF_PASSWORD);
-  await page.getByRole("button", { name: "Enter" }).click();
-  await expect(page).toHaveURL("/home");
-}
+import { loginAsStaff } from "./helpers";
 
 test.describe("Welcome and staff login", () => {
   test("renders the welcome screen without exposing the password field up front", async ({ page }) => {

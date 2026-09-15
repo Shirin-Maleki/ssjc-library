@@ -6,6 +6,7 @@ export const config = {
   matcher: [
     "/home/:path*",
     "/find/:path*",
+    "/books/:path*",
     "/add/:path*",
     "/lists/:path*",
     "/guide/:path*",
