@@ -14,14 +14,20 @@ export function BookResultRow({ result, findUrl }: { result: SearchResult; findU
   const { book } = result;
   const visibleTags = book.tags.slice(0, VISIBLE_TAG_LIMIT);
   const remainingTagCount = book.tags.length - visibleTags.length;
+  const detailHref = `/books/${book.id}?from=${encodeURIComponent(findUrl)}`;
 
   return (
-    <li className="flex gap-4 border-b border-border py-5 last:border-b-0 sm:gap-6">
-      <BookCover book={book} />
-      <div className="flex min-w-0 flex-1 flex-col gap-2">
+    <li className="relative flex gap-4 border-b border-border py-5 last:border-b-0 sm:gap-6">
+      {/* Makes the entire row tappable, not just the title text — the visible title
+          link below remains the real accessible/keyboard link (tabIndex -1 here, and
+          it sits behind the in-flow content in paint order via `relative` on the
+          content below, so a direct click on the title still hits that link first). */}
+      <Link href={detailHref} aria-hidden="true" tabIndex={-1} className="absolute inset-0" />
+      <BookCover book={book} className="relative" />
+      <div className="relative flex min-w-0 flex-1 flex-col gap-1.5 sm:gap-2">
         <div>
           <h3 className="text-base font-semibold leading-snug text-text-primary sm:text-lg">
-            <Link href={`/books/${book.id}?from=${encodeURIComponent(findUrl)}`} className="hover:underline">
+            <Link href={detailHref} className="hover:underline">
               {book.title}
             </Link>
           </h3>
@@ -31,7 +37,7 @@ export function BookResultRow({ result, findUrl }: { result: SearchResult; findU
           </p>
         </div>
 
-        <p className="line-clamp-2 text-sm text-text-secondary">{book.description}</p>
+        <p className="line-clamp-1 text-sm text-text-secondary sm:line-clamp-2">{book.description}</p>
 
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-text-muted">
           <span>{formatAgeRange(book.ageMinMonths, book.ageMaxMonths)}</span>
@@ -41,8 +47,12 @@ export function BookResultRow({ result, findUrl }: { result: SearchResult; findU
           <span>{VISUAL_REALISM_LABELS[book.visualRealism]}</span>
         </div>
 
+        <div className="pt-0.5">
+          <CategoryBadge categoryId={book.physicalCategory} />
+        </div>
+
         {visibleTags.length > 0 && (
-          <div className="flex flex-wrap gap-1.5">
+          <div className="hidden flex-wrap gap-1.5 sm:flex">
             {visibleTags.map((tag) => (
               <Tag key={tag}>{tag}</Tag>
             ))}
@@ -50,11 +60,7 @@ export function BookResultRow({ result, findUrl }: { result: SearchResult; findU
           </div>
         )}
 
-        <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-          <CategoryBadge categoryId={book.physicalCategory} />
-        </div>
-
-        {result.explanation && <p className="text-xs italic text-text-muted">{result.explanation}</p>}
+        {result.explanation && <p className="line-clamp-1 text-xs italic text-text-muted">{result.explanation}</p>}
       </div>
     </li>
   );

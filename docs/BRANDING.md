@@ -122,6 +122,30 @@ accent, spent on one consistent meaning, is the whole of Phase 2's decorative co
 other three brand hues (coral, orange, yellow) remain unused in the visible UI, still waiting
 for a use case as clearly justified as this one.
 
+## The other three brand hues get real roles (mobile/brand-visibility revision, 2026-09-14)
+
+Phase 2's first pass used only teal (the category badge). A follow-up visual revision judged
+the app too close to black/white/cream for a school with a real four-color palette, so the
+remaining three official hues were each given one deliberate, restrained semantic role —
+never a wash of color, per the school's own "use sparingly" guidance, and never at the cost of
+an accessible text pairing:
+
+| Token | Value | Role | Where used |
+|---|---|---|---|
+| `accent` | `#6dbec6` (teal, unchanged) | Principal selection/interaction accent | Category badge; every "selected" state (category quick-pills, filter checkboxes, age buttons); Home's "Find a Book" icon tint; small decorative marks |
+| `accent-emphasis` | `#df3c51` (official coral, verbatim) | Small, sparing emphasis marker | The active-filter count on the Filters button/dialog title only |
+| `highlight` | `#efd51f` (official yellow, verbatim) | Background/highlight, never text | One of four `BookCover` tint compositions; the Welcome screen's logo halo |
+| `accent-warm` | `#e15e27` (official orange, verbatim) | Secondary warm accent | Home's "Add a Book" icon tint; one `BookCover` tint composition's accent rule |
+
+All three are used as backgrounds or non-text decorative fills, consistent with how `accent`
+was already scoped — none of them carry running text. Where a small badge needed to sit
+directly on `accent-emphasis` (the coral count badge), the text color is black, not white:
+measured black-on-`#df3c51` is 4.90:1 (AA), while white-on-`#df3c51` measures only 4.28:1,
+under the 4.5:1 minimum — verified with the same relative-luminance method as the rest of this
+document, not assumed. `warning`/`danger` (the darkened, accessible derivatives of orange/
+coral) remain the only tokens used for actual warning/error text; `accent-emphasis` and
+`accent-warm` are the literal, undarkened brand swatches, reserved for backgrounds only.
+
 ## Logo
 
 `public/brand/logo.png` is the real school logo — a hand-drawn, transparent-background PNG
@@ -130,6 +154,13 @@ preserving its natural proportions (height computed from the caller's `size` usi
 artwork's own 950:1000 ratio, never forced square) rather than the earlier placeholder SVG.
 Used as-is, unmodified and unrecolored, per the standing instruction to never redraw or
 alter the real logo without explicit direction.
+
+**Sizing (revised 2026-09-14):** the initial Phase 2 sizes (28px header, 64px Welcome screen)
+read as too small for a real brand mark once seen in real screenshots. The header mark is now
+42px (still within the same compact `h-16` header — no layout change, just a larger mark) and
+the Welcome screen mark is now 112px, with a small two-tone accent halo (`accent`/`highlight`
+at low opacity) behind it — the one deliberate color moment on that screen. The artwork file
+itself is untouched; only the `size` prop callers pass changed.
 
 ### A real discrepancy worth knowing about: the logo's colors don't exactly match the official swatches
 

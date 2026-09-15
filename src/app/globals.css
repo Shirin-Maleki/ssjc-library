@@ -42,6 +42,28 @@
      used for focus indication; see docs/BRANDING.md. */
   --color-focus: #000000;
 
+  /* Mobile/brand-visibility revision (2026-09-14): three more official brand hues,
+     each given one deliberate, restrained semantic role alongside the existing
+     `--color-accent` (teal) — never a wash of color, only small, meaningful marks,
+     per the school's own "use color sparingly" guidance. See docs/BRANDING.md. */
+
+  /* Official brand coral (#df3c51), used only for a small, sparing emphasis mark
+     (e.g. the active-filter count). Verified: black text on it measures 4.90:1
+     (AA-safe), so it may carry a small bold label directly — but it is never used
+     for running/body text; --color-danger remains the accessible derivative for that. */
+  --color-accent-emphasis: #df3c51;
+
+  /* Official brand yellow (#efd51f) — background/highlight use only, never text
+     (black text on it measures 14.21:1; a yellow foreground on this app's neutral
+     backgrounds would itself fail contrast, so it never carries text). */
+  --color-highlight: #efd51f;
+
+  /* Official brand orange (#e15e27) — a secondary warm decorative accent (icon
+     fills, small containers). Black text on it measures 5.83:1 (AA-safe) if ever
+     needed directly on the swatch; for running warning/error text, --color-warning
+     (the darkened, accessibility-adjusted derivative) is used instead. */
+  --color-accent-warm: #e15e27;
+
   --color-success: #2f6f4e;
   --color-success-bg: #eaf3ed;
   /* A WCAG-AA-adjusted (darkened) shade of the official brand orange (#e15e27), which
@@ -73,6 +95,9 @@
   --color-brand-primary: var(--color-brand-primary);
   --color-brand-secondary: var(--color-brand-secondary);
   --color-accent: var(--color-accent);
+  --color-accent-emphasis: var(--color-accent-emphasis);
+  --color-highlight: var(--color-highlight);
+  --color-accent-warm: var(--color-accent-warm);
   --color-border: var(--color-border);
   --color-border-strong: var(--color-border-strong);
   --color-border-input: var(--color-border-input);
@@ -104,6 +129,17 @@ body {
   outline: 2px solid var(--color-focus);
   outline-offset: 2px;
   border-radius: var(--radius-sm);
+}
+
+/* Used only by the mobile horizontally-scrolling category rail (CategoryQuickPills)
+   — the scroll affordance is communicated by partially-cut-off chips at the edge, not
+   by a visible scrollbar track, which would look like a stray browser artifact here. */
+.scrollbar-none {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
 }
 
 @keyframes gentle-reveal {

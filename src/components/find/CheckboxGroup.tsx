@@ -32,11 +32,11 @@ export function CheckboxGroup({ legend, options, selected, onChange }: CheckboxG
             <label
               key={option.value}
               className={cn(
-                "flex cursor-pointer items-center gap-2 rounded-md border px-3 py-1.5 text-sm transition-colors",
+                "flex min-h-11 cursor-pointer items-center gap-2 rounded-md border px-3.5 text-sm font-medium transition-colors",
                 "focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-focus",
                 checked
-                  ? "border-brand-primary bg-brand-primary text-text-on-brand"
-                  : "border-border bg-surface text-text-secondary hover:bg-surface-subtle"
+                  ? "border-accent bg-accent/25 text-text-primary"
+                  : "border-border bg-surface font-normal text-text-secondary hover:bg-surface-subtle"
               )}
             >
               {/* The checkbox itself is visually hidden but stays keyboard/AT

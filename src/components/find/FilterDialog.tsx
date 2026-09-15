@@ -54,7 +54,7 @@ export function FilterDialog({ query, filters }: FilterDialogProps) {
         <Button variant="secondary" size="md" className="gap-2">
           Filters
           {activeCount > 0 && (
-            <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-brand-primary px-1 text-xs text-text-on-brand">
+            <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-accent-emphasis px-1 text-xs font-semibold text-text-primary">
               {activeCount}
             </span>
           )}
@@ -63,15 +63,26 @@ export function FilterDialog({ query, filters }: FilterDialogProps) {
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-40 bg-black/30" />
         <Dialog.Content
-          className="fixed inset-x-0 bottom-0 z-50 flex max-h-[85dvh] flex-col rounded-t-xl border border-border bg-surface p-6 sm:inset-x-auto sm:bottom-auto sm:left-1/2 sm:top-1/2 sm:max-h-[80dvh] sm:w-full sm:max-w-lg sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-xl"
+          className="fixed inset-x-0 bottom-0 z-50 flex max-h-[85dvh] flex-col rounded-t-xl border border-border bg-surface p-5 pt-4 sm:inset-x-auto sm:bottom-auto sm:left-1/2 sm:top-1/2 sm:max-h-[80dvh] sm:w-full sm:max-w-lg sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-xl sm:p-6"
         >
+          {/* A small grab handle communicates "this is a sheet you could swipe away,"
+              purely decorative — Radix/Escape/the explicit close button remain the
+              real dismiss affordances. */}
+          <div aria-hidden="true" className="mx-auto mb-2 h-1 w-10 rounded-full bg-border-strong sm:hidden" />
           <div className="flex items-center justify-between gap-4 pb-4">
-            <Dialog.Title className="text-lg font-semibold text-text-primary">Filters</Dialog.Title>
+            <div className="flex items-center gap-2.5">
+              <Dialog.Title className="text-lg font-semibold text-text-primary">Filters</Dialog.Title>
+              {activeCount > 0 && (
+                <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-accent-emphasis px-1.5 text-xs font-semibold text-text-primary">
+                  {activeCount}
+                </span>
+              )}
+            </div>
             <Dialog.Close asChild>
               <button
                 type="button"
                 aria-label="Close filters"
-                className="rounded-md p-1.5 text-text-secondary hover:bg-surface-subtle"
+                className="-mr-2 flex h-11 w-11 items-center justify-center rounded-md text-text-secondary hover:bg-surface-subtle"
               >
                 <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
                   <path d="M4 4l10 10M14 4 4 14" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />

@@ -29,23 +29,31 @@ export default async function FindPage({ searchParams }: FindPageProps) {
   const findUrl = buildFindHref(query, filters);
 
   return (
-    <div className="flex flex-1 flex-col gap-6">
+    <div className="flex flex-1 flex-col gap-6 sm:gap-8">
       <h1 className="sr-only">Find a Book</h1>
 
-      <SearchInput initialQuery={query} filters={filters} />
+      {/* Search controls as one visually distinct group, set apart from the results
+          below by the gap-6/8 on the outer column — an editorial-feeling separation
+          rather than a uniform, settings-panel-like stack of equal gaps. */}
+      <div className="flex flex-col gap-3 sm:gap-4">
+        <SearchInput initialQuery={query} filters={filters} />
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <CategoryQuickPills query={query} filters={filters} />
-        <FilterDialog query={query} filters={filters} />
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <CategoryQuickPills query={query} filters={filters} />
+          <FilterDialog query={query} filters={filters} />
+        </div>
+
+        <ActiveFilters query={query} filters={filters} />
       </div>
-
-      <ActiveFilters query={query} filters={filters} />
 
       {!hasIntent && <InitialFindState />}
       {hasIntent && results.length === 0 && <NoResultsState query={query} filters={filters} />}
       {hasIntent && results.length > 0 && (
         <div className="flex flex-col gap-4">
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-text-muted">Top matches</h2>
+          <div className="flex items-center gap-2">
+            <span aria-hidden="true" className="h-3 w-1 rounded-full bg-accent" />
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-text-muted">Top matches</h2>
+          </div>
           <ResultsList results={results} findUrl={findUrl} />
         </div>
       )}

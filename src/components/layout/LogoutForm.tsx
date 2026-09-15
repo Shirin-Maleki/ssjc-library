@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/Button";
 export function LogoutForm() {
   return (
     <form action={logout}>
-      <Button type="submit" variant="ghost" size="md" className="h-9 px-3 text-sm">
+      <Button type="submit" variant="ghost" size="md" className="h-11 px-3 text-sm">
         Log out
       </Button>
     </form>

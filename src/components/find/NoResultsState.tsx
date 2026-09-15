@@ -17,7 +17,7 @@ export function NoResultsState({ query, filters }: { query: string; filters: Fil
       {filtersActive && (
         <Link
           href={buildFindHref(query, {})}
-          className="text-sm font-medium text-brand-primary underline underline-offset-4 hover:text-brand-secondary"
+          className="inline-flex min-h-11 items-center text-sm font-medium text-brand-primary underline underline-offset-4 hover:text-brand-secondary"
         >
           Clear all filters
         </Link>

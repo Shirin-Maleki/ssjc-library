@@ -65,6 +65,36 @@ Each phase executes only after explicit approval of the previous one's report.
   Show-More-triggering browse result, and Book Detail.
 - Typecheck, lint, and production build all pass cleanly.
 
+## Phase 2 visual/mobile revision (2026-09-14)
+
+A follow-up design pass over the same Phase 2 scope — no new features, no search/domain code
+changes, no new phase started. Requested because the initial Phase 2 screenshots were judged
+substantially desktop-oriented and too close to black/white/cream for a school with a real
+four-color brand palette. Full detail in the phase report; summary:
+
+- Mobile-first pass across every Find a Book screen (320/390/430px), with real 44px-minimum
+  touch targets throughout, a horizontally-scrolling mobile category rail instead of multi-line
+  wrap, and a leaner mobile result row (tags and the second description line move to desktop
+  only; age/duration/visual-style/location — the facts the brief's own examples depend on —
+  stay visible at every width).
+- Three new semantic color tokens added to `globals.css` (`--color-accent-emphasis` /coral,
+  `--color-highlight` /yellow, `--color-accent-warm` /orange), joining the existing
+  `--color-accent` /teal, each given one deliberate, restrained role — see docs/BRANDING.md.
+  Every new checkbox/age/category "selected" state now uses the teal accent instead of brand
+  black, for one consistent selection language across the app.
+- Logo scale increased in both the header (28→42px) and the Welcome screen (64→112px, with a
+  restrained two-tone accent halo behind it) — still the same unmodified logo file.
+- `BookCover.tsx` redesigned from three thin-rule-only layouts to four full-tint editorial
+  compositions (teal/coral/yellow+orange/neutral, cycling deterministically) — still fully
+  typographic, still swappable for real cover photography behind the same component.
+- Home screen no longer vertically centers its content (which produced a large, unintentional
+  void on tall/wide viewports) and its two primary tiles now carry a teal (Find) / warm-orange
+  (Add) icon accent.
+- Screenshots re-captured at 320/390 (mobile) and 1440×900 (desktop); all 87 unit tests and all
+  56 E2E tests still pass unmodified — the E2E suite's existing selectors and assertions
+  (`li:has(h3)`, "Real photography", "Under 5 minutes", the Filters dialog flows) needed no
+  changes, since none of the above touched the DOM structure or text those tests depend on.
+
 ## In-progress work
 
 None.

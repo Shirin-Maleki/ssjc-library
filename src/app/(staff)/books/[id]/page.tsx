@@ -45,14 +45,14 @@ export default async function BookDetailPage({ params, searchParams }: BookDetai
     <div className="flex flex-1 flex-col gap-6 py-4">
       <Link
         href={backHref}
-        className="inline-flex w-fit items-center gap-1.5 text-sm font-medium text-text-secondary hover:text-text-primary"
+        className="-ml-2 inline-flex min-h-11 w-fit items-center gap-1.5 px-2 text-sm font-medium text-text-secondary hover:text-text-primary"
       >
         <span aria-hidden="true">←</span> Back to results
       </Link>
 
       <div className="flex flex-col gap-6 sm:flex-row sm:gap-10">
         <div className="flex justify-center sm:block">
-          <BookCover book={book} size="md" className="w-32 sm:w-48" />
+          <BookCover book={book} size="md" className="w-36 sm:w-48" />
         </div>
 
         <div className="flex min-w-0 flex-1 flex-col gap-4">

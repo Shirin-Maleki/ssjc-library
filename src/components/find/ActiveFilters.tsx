@@ -117,7 +117,7 @@ export function ActiveFilters({ query, filters }: { query: string; filters: Filt
         <Link
           key={chip.key}
           href={chip.href}
-          className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface-subtle px-3 py-1 text-sm text-text-primary hover:border-border-strong"
+          className="inline-flex min-h-11 items-center gap-1.5 rounded-full border border-border bg-surface-subtle px-3.5 text-sm text-text-primary hover:border-border-strong"
         >
           {chip.label}
           <span aria-hidden="true" className="text-text-muted">
@@ -127,7 +127,10 @@ export function ActiveFilters({ query, filters }: { query: string; filters: Filt
         </Link>
       ))}
       {chips.length > 1 && (
-        <Link href={buildFindHref(query, {})} className="text-sm font-medium text-text-secondary underline underline-offset-4 hover:text-text-primary">
+        <Link
+          href={buildFindHref(query, {})}
+          className="inline-flex min-h-11 items-center text-sm font-medium text-text-secondary underline underline-offset-4 hover:text-text-primary"
+        >
           Clear all
         </Link>
       )}

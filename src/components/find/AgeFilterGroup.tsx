@@ -24,10 +24,10 @@ export function AgeFilterGroup({ selected, onChange }: AgeFilterGroupProps) {
               aria-pressed={checked}
               onClick={() => onChange(checked ? undefined : years)}
               className={cn(
-                "h-9 min-w-9 rounded-md border px-2 text-sm transition-colors",
+                "h-11 min-w-11 rounded-md border px-2 text-sm font-medium transition-colors",
                 checked
-                  ? "border-brand-primary bg-brand-primary text-text-on-brand"
-                  : "border-border bg-surface text-text-secondary hover:bg-surface-subtle"
+                  ? "border-accent bg-accent/25 text-text-primary"
+                  : "border-border bg-surface font-normal text-text-secondary hover:bg-surface-subtle"
               )}
             >
               {years}

@@ -12,29 +12,49 @@ interface BookCoverProps {
  * src/lib/catalog/fixtures.ts for why: no licensed/public-domain covers are bundled,
  * and hotlinking copyrighted cover images was explicitly ruled out for Phase 2.
  *
- * Variety comes from layout (three restrained rule placements), not color — the
- * brand's four accent hues are reserved for the one place they carry real meaning in
- * this UI (the physical-category badge), not spent on cover decoration. When Phase 6+
+ * Four controlled compositions, cycling deterministically by `book.cover.variant` —
+ * three carry one restrained brand-color field each (teal, coral, yellow+orange), one
+ * stays fully neutral, so a shelf of results reads as "intentionally varied," never as
+ * a rainbow (the brief's explicit "use color sparingly" direction — see
+ * docs/BRANDING.md). Color is a full light tint field here, not just a thin rule,
+ * specifically to move these off "wireframe" without implying real cover artwork —
+ * every composition still leads with the same typographic title/author block, so
+ * scanning a results list stays about the words, not the color. When Phase 6+
  * connects real cover images, only this component needs to change; every caller just
  * passes a `book`.
  */
+interface CoverComposition {
+  fieldBg: string;
+  rulePosition: "top" | "left" | "bottom";
+  ruleBg: string;
+}
+
+const COMPOSITIONS: CoverComposition[] = [
+  { fieldBg: "bg-accent/12", rulePosition: "top", ruleBg: "bg-accent" },
+  { fieldBg: "bg-accent-emphasis/10", rulePosition: "left", ruleBg: "bg-accent-emphasis" },
+  { fieldBg: "bg-highlight/30", rulePosition: "bottom", ruleBg: "bg-accent-warm" },
+  { fieldBg: "bg-surface-subtle", rulePosition: "top", ruleBg: "bg-brand-primary" },
+];
+
 export function BookCover({ book, size = "md", className }: BookCoverProps) {
-  const layout = book.cover.variant % 3;
+  const composition = COMPOSITIONS[book.cover.variant % COMPOSITIONS.length];
   const author = book.authors[0];
+  const isLeftRule = composition.rulePosition === "left";
 
   return (
     <div
       className={cn(
-        "relative flex aspect-[2/3] shrink-0 flex-col overflow-hidden rounded-md border border-border bg-surface-subtle",
+        "relative flex aspect-[2/3] shrink-0 flex-col overflow-hidden rounded-md border border-border",
+        composition.fieldBg,
         size === "sm" ? "w-16" : "w-24 sm:w-28",
         className
       )}
       role="img"
       aria-label={`Cover of ${book.title}`}
     >
-      {layout === 0 && <div className="h-1.5 w-full bg-brand-primary" />}
-      {layout === 1 && <div className="absolute inset-y-0 left-0 w-1.5 bg-brand-primary" />}
-      <div className={cn("flex flex-1 flex-col justify-center gap-1 px-2.5 py-2", layout === 1 && "pl-3.5")}>
+      {composition.rulePosition === "top" && <div className={cn("h-1.5 w-full", composition.ruleBg)} />}
+      {isLeftRule && <div className={cn("absolute inset-y-0 left-0 w-1.5", composition.ruleBg)} />}
+      <div className={cn("flex flex-1 flex-col justify-center gap-1 px-2.5 py-2", isLeftRule && "pl-3.5")}>
         <p
           className={cn(
             "font-semibold text-text-primary",
@@ -47,7 +67,7 @@ export function BookCover({ book, size = "md", className }: BookCoverProps) {
           <p className="line-clamp-2 text-[10px] leading-snug text-text-muted">{author}</p>
         )}
       </div>
-      {layout === 2 && <div className="h-1.5 w-full bg-brand-primary" />}
+      {composition.rulePosition === "bottom" && <div className={cn("h-1.5 w-full", composition.ruleBg)} />}
     </div>
   );
 }

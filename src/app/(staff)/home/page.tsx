@@ -4,9 +4,11 @@ import { SearchBookIcon, AddBookIcon } from "@/components/home/icons";
 
 const primaryIcons = [SearchBookIcon, AddBookIcon];
 
+const primaryAccents: Array<"teal" | "warm"> = ["teal", "warm"];
+
 export default function HomePage() {
   return (
-    <div className="flex flex-1 flex-col justify-center gap-10 sm:gap-12">
+    <div className="flex flex-1 flex-col gap-10 sm:gap-12">
       {/* Visually hidden: sighted users get the two dominant tiles below with no extra
           header clutter, per design direction — but the page still needs exactly one h1
           for correct heading hierarchy for screen-reader navigation. */}
@@ -14,7 +16,16 @@ export default function HomePage() {
       <div className="grid gap-4 sm:grid-cols-2 sm:gap-6">
         {primaryNav.map((item, index) => {
           const Icon = primaryIcons[index];
-          return <NavTile key={item.href} item={item} variant="primary" icon={Icon ? <Icon /> : undefined} />;
+          return (
+            <NavTile
+              key={item.href}
+              item={item}
+              variant="primary"
+              icon={Icon ? <Icon /> : undefined}
+              accent={primaryAccents[index]}
+              dominant={index === 0}
+            />
+          );
         })}
       </div>
       <nav

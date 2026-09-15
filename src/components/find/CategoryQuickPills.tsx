@@ -24,7 +24,11 @@ export function CategoryQuickPills({ query, filters }: CategoryQuickPillsProps) 
   const selected = filters.categories ?? [];
 
   return (
-    <div className="flex flex-wrap gap-2" role="group" aria-label="Quick category filters">
+    <div
+      className="scrollbar-none -mx-4 flex gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0 sm:pb-0"
+      role="group"
+      aria-label="Quick category filters"
+    >
       {facets.categories.map((category) => {
         const isSelected = selected.includes(category.value);
         const nextCategories = isSelected
@@ -38,9 +42,9 @@ export function CategoryQuickPills({ query, filters }: CategoryQuickPillsProps) 
             href={href}
             aria-pressed={isSelected}
             className={cn(
-              "rounded-full border px-3 py-1.5 text-sm transition-colors",
+              "inline-flex min-h-11 shrink-0 items-center rounded-full border px-3.5 text-sm transition-colors",
               isSelected
-                ? "border-accent bg-accent/15 text-text-primary"
+                ? "border-accent bg-accent/20 text-text-primary"
                 : "border-border bg-surface text-text-secondary hover:bg-surface-subtle"
             )}
           >
