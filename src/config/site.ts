@@ -5,8 +5,7 @@
  */
 
 export const siteConfig = {
-  /** Placeholder — not a final decision. See docs/PRODUCT_SPEC.md. */
-  appName: "Scandinavian School Library",
+  appName: "SSJC Library",
   organizationName: "Scandinavian School of Jersey City",
   /** Shown under the app name on the welcome screen. Keep it short. */
   tagline: "Staff access",

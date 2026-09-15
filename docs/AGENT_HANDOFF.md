@@ -70,9 +70,11 @@ finish it in one pass.
 
 Phase 0 (architecture) and Phase 1 (foundation, design system, staff/admin auth) are both
 complete. A real Next.js app runs, with Welcome/Home/placeholder screens and full
-shared-password authentication — no database, Google, or AI integration yet. See
-`docs/IMPLEMENTATION_STATUS.md` for the authoritative, continuously updated detail — this
-file only orients you to the process, not the current state, since state changes every phase
+shared-password authentication — no database, Google, or AI integration yet. The app name,
+color palette, and typography are now **real** (provided 2026-09-14, applied to the existing
+token system — see `docs/BRANDING.md`); only the logo mark graphic itself remains a
+placeholder. See `docs/IMPLEMENTATION_STATUS.md` for the authoritative, continuously updated
+detail — this file only orients you to the process, not the current state, since state changes every phase
 and duplicating it here would drift.
 
 ## Practical lessons from Phase 1 (worth knowing before touching auth or styling code)

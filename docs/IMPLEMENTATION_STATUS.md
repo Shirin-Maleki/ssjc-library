@@ -1,14 +1,24 @@
 # Implementation Status
 
-Last updated: 2026-09-13 (end of Phase 1). This document is continuity insurance — it should
-always let another coding agent open this repository cold and know exactly where things
-stand. Keep it current at the end of every phase.
+Last updated: 2026-09-14 (Phase 1 complete 2026-09-13; real branding applied 2026-09-14,
+still within the Phase 1 review checkpoint — Phase 2 has not begun). This document is
+continuity insurance — it should always let another coding agent open this repository cold
+and know exactly where things stand. Keep it current at the end of every phase.
 
 ## Current phase
 
 **Phase 1 — Foundation + Design System + Access: complete, awaiting review.** A real
 application exists and runs. Phase 2 has not started and must not start until Phase 1 is
 explicitly approved.
+
+**2026-09-14 addendum (still Phase 1, not a new phase):** the school provided the real app
+name ("SSJC Library"), color palette, and typography system. Applied to the existing
+centralized token system exactly as designed for this — see `docs/BRANDING.md` for the full
+mapping and `docs/DECISIONS.md` for the reasoning behind every color-token choice (including
+two brand colors that needed darkening for text-contrast safety, and two that were
+deliberately *not* used for buttons/focus despite being official brand colors). Note below
+("Completed work (Phase 1)") describes the *original* Phase 1 build with placeholder
+branding; this addendum is what changed since.
 
 ## Full phase plan (for reference — do not execute ahead of approval)
 
@@ -79,9 +89,11 @@ Everything in Phases 2–13, by design.
 
 ## Pending user inputs
 
-Unchanged from Phase 0 — none block Phase 2:
+**Resolved 2026-09-14:** application name ("SSJC Library"), color palette, and typography
+system — see `docs/BRANDING.md`. None of these block Phase 2:
 
-- Final application name, school logo, color palette.
+- School logo **file** (colors/type/name are real now; the logo mark itself is still a
+  placeholder graphic).
 - Google Drive folder URL(s), Google Sheet.
 - Which AI provider(s) you hold API/billing access to.
 - Supabase project credentials.

@@ -53,12 +53,14 @@ formula (a small script, not a visual guess) before this phase was considered do
 
 | Pair | Ratio | Result |
 |---|---|---|
-| `text-primary` on `background` | 14.61:1 | Passes AAA |
+| `text-primary` (`#000000`) on `background` | 19.81:1 | Passes AAA |
 | `text-secondary` on `background` | 7.21:1 | Passes AAA |
 | `text-muted` on `background` | 3.42:1 → **fixed to 5.31:1** | Was failing AA (4.5:1 required for normal text) — the token was darkened from `#8a867d` to `#6b675f` |
-| `danger` text on `danger-bg` | 5.66:1 | Passes AA |
+| `danger` (`#be3345`, a darkened shade of the school's official coral) on `danger-bg` | 4.93:1 | Passes AA — see `docs/BRANDING.md` for why the literal brand swatch (4.28:1) needed darkening for text use |
+| `warning` (`#b44b1f`, a darkened shade of the school's official orange) on `warning-bg` | 4.78:1 | Passes AA — same reasoning as `danger` |
 | default `border` on `surface` | 1.34:1 | Acceptable — decorative/structural only (card outlines, dividers), not relied on alone to convey an interactive boundary |
-| new `border-input` on `surface` | 3.01:1 | Passes WCAG 1.4.11's 3:1 non-text contrast minimum for form-control boundaries |
+| `border-input` on `surface` | 3.01:1 | Passes WCAG 1.4.11's 3:1 non-text contrast minimum for form-control boundaries |
+| `focus` (brand black) on `background`/`surface` | 19.81:1 / 21.00:1 | Passes at maximum contrast — the school's official teal was considered here and measured only 2.02–2.14:1, well under the 3:1 minimum for a UI indicator; see `docs/BRANDING.md` |
 
 The second finding (`border`) is why `PasswordInput` now uses a dedicated `border-input`
 token instead of the general-purpose `border` token: an input field's boundary is the only

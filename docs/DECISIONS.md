@@ -785,3 +785,60 @@ actually needed) also relies solely on its border for boundary perception, it sh
 
 **Relevant files:** `src/app/globals.css`; `src/components/ui/PasswordInput.tsx`;
 `docs/ACCESSIBILITY.md`.
+
+---
+
+## Real brand system applied: app name, palette, typography (logo mark still pending)
+
+**Date:** 2026-09-14 · **Status:** Locked (app name, typography, color mapping); logo mark
+remains a placeholder pending a real asset.
+
+**Problem:** The school provided the real app name ("SSJC Library"), its official typography
+system (Campton for print, Poppins for digital), and its official color palette (teal, coral,
+yellow, orange, black) with exact hex/RGB/CMYK values. Needed to apply these faithfully
+without contradicting either (a) the school's own instruction that color be used "sparingly...
+as a complement to whitespace," or (b) the product's calm/restrained/non-childish visual
+direction, and without shipping any text/UI-indicator color that fails WCAG contrast just
+because it's an official brand swatch.
+
+**Options considered:** (a) map the palette to semantic tokens with real contrast
+verification, darkening any color used for text/indicators that fails AA on its own, and
+reserving the four accent hues for sparing decorative use rather than backgrounds/large fills
+or buttons; (b) use the literal brand swatches everywhere regardless of measured contrast;
+(c) apply the palette much more visibly right now (recolor buttons, icons, etc.) to make the
+update feel more dramatic.
+
+**Chosen approach:** (a).
+
+**Why:** (b) would have shipped at least two real accessibility failures (the official orange
+measures 3.60:1 on white, the official coral 4.28:1 — both under the 4.5:1 AA minimum for
+text) in the name of brand fidelity that the school's own guidelines don't actually demand —
+nothing in their system says "use these exact hex values even where illegible." (c) would
+mean inventing new decorative UI structure in a phase whose explicit brief wanted restraint,
+just to visibly "use" the color sooner — the school's own "used sparingly" instruction
+argues against forcing it. Confirmed by real measurement (see `docs/BRANDING.md` and
+`docs/ACCESSIBILITY.md`) which pairings needed adjustment and which didn't:
+- `text-primary`/`brand-primary` → literal brand black (`#000000`), maximum contrast, no
+  adjustment needed.
+- `focus` → also brand black — the official teal measured only 2.02–2.14:1, under the 3:1
+  minimum for a UI indicator.
+- `accent` → literal brand teal (`#6dbec6`), reserved for future sparing decorative use
+  (tags/badges in Phase 2+); not yet applied anywhere in Phase 1's current screens, since
+  there's no tasteful spot for it without inventing new UI.
+- `warning`/`danger` → darkened shades of the official orange/coral specifically for
+  text-bearing use, with the literal swatches remaining correct for non-text/large/
+  dark-background contexts.
+- `success` → not from the official palette at all (the school has no green); a standalone
+  functional addition, flagged transparently rather than silently invented.
+
+**Consequences:** Two tokens (`warning`, `danger`) are now a derived shade rather than a
+verbatim brand swatch — documented clearly in `docs/BRANDING.md` so this isn't mistaken for
+an arbitrary deviation. The four accent hues remain largely unapplied in the visible UI until
+Phase 2+ gives them a real, tasteful use case (tags, filter chips, category badges).
+
+**How to change later:** If the school explicitly wants the literal, undarkened orange/coral
+used regardless of contrast (e.g., for a specific brand-compliance reason), that's a one-line
+token change — but it should be a deliberate, informed tradeoff against measured
+accessibility loss, not a silent swap.
+
+**Relevant files:** `docs/BRANDING.md`; `src/app/globals.css`; `src/config/{site,brand}.ts`.

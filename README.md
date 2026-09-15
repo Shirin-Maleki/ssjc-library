@@ -1,6 +1,7 @@
-# Scandinavian School of Jersey City — Library App
+# SSJC Library
 
-*(Working name — not final. See [`docs/PRODUCT_SPEC.md`](docs/PRODUCT_SPEC.md) for naming status.)*
+The staff library application for the Scandinavian School of Jersey City. App name, color
+palette, and typography confirmed 2026-09-14 — see [`docs/BRANDING.md`](docs/BRANDING.md).
 
 A staff-facing web application that becomes the practical operating system for the school's
 physical children's-book library: finding books, discovering books by teaching need,
@@ -85,8 +86,8 @@ begins. The full phase plan is recorded in [`docs/IMPLEMENTATION_STATUS.md`](doc
 
 ## Branding status
 
-Pending. The school logo and color palette have not yet been provided. The application is
-architected with a centralized branding/token system (see `docs/ARCHITECTURE.md`) so real
-assets can be dropped in later without redesigning anything. Do not treat any color or
-identity element that appears in early UI as final — it will be a neutral placeholder,
-clearly marked as such.
+App name, color palette, and typography are real, provided by the school 2026-09-14 — see
+`docs/BRANDING.md` for the full mapping and the accessibility verification behind it. Only
+the **logo mark itself** remains a placeholder (an abstract open-book glyph); when the real
+logo file arrives, it drops into the same centralized token system with no component changes
+needed.

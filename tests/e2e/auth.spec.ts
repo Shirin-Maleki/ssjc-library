@@ -12,7 +12,7 @@ async function loginAsStaff(page: Page) {
 test.describe("Welcome and staff login", () => {
   test("renders the welcome screen without exposing the password field up front", async ({ page }) => {
     await page.goto("/");
-    await expect(page.getByRole("heading", { name: "Scandinavian School Library" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "SSJC Library" })).toBeVisible();
     await expect(page.getByText("Staff access")).toBeVisible();
     await expect(page.getByRole("button", { name: "Tap to Enter" })).toBeVisible();
     await expect(page.getByLabel("Staff password", { exact: true })).toHaveCount(0);

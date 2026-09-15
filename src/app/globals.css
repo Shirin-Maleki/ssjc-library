@@ -1,28 +1,33 @@
 @import "tailwindcss";
 
 /*
- * Design tokens — Phase 1 branding status: PENDING.
- *
- * These are deliberately restrained, neutral placeholder values, not an invented
- * Scandinavian School identity. See docs/BRANDING.md before changing any value here.
- * When the real logo/palette are provided, only this block (plus public/brand/*) should
- * need to change — components must never reference raw colors, only these tokens.
+ * Design tokens — real SSJC brand system (palette, typography, app name provided
+ * 2026-09-14). See docs/BRANDING.md for the full mapping, the contrast verification
+ * behind every choice below, and how the four accent colors are meant to be used
+ * ("sparingly... as a complement to whitespace," per the school's own guidance).
+ * Components must never reference raw colors, only these semantic tokens.
  */
 :root {
   --color-background: #faf8f5;
   --color-surface: #ffffff;
   --color-surface-subtle: #f2efe9;
 
-  --color-text-primary: #262420;
+  /* Official brand black (#000000) is text-primary and brand-primary alike — see
+     docs/BRANDING.md for why these two tokens are intentionally the same value. */
+  --color-text-primary: #000000;
   --color-text-secondary: #57534c;
-  /* 5.31:1 against --color-background — the original #8a867d measured 3.42:1 and
-     failed WCAG AA for normal text; verified with docs/ACCESSIBILITY.md's method. */
   --color-text-muted: #6b675f;
   --color-text-on-brand: #faf8f5;
 
-  --color-brand-primary: #2b2a27;
-  --color-brand-secondary: #6b6862;
-  --color-accent: #a8724f;
+  --color-brand-primary: #000000;
+  /* A tint of brand black used for hover states on brand-primary-filled buttons — the
+     official brand teal was considered here but fails text contrast when paired with
+     light button text (2.14:1); see docs/BRANDING.md. */
+  --color-brand-secondary: #2a2a2a;
+  /* Official brand teal (#6dbec6), reserved for sparing decorative use (tags, badges,
+     small highlights in later phases) — it measures under 3:1 against both white and
+     this background, so it is never used for text or as a focus indicator. */
+  --color-accent: #6dbec6;
 
   /* Decorative/structural borders (card outlines, dividers) — not relied on alone to
      convey an interactive boundary, so WCAG 1.4.11's 3:1 non-text contrast minimum
@@ -33,14 +38,22 @@
      border IS the only cue to an input's boundary and clickable/typeable area — this
      one is held to the 3:1 minimum (measures 3.01:1 against --color-surface). */
   --color-border-input: #9c9484;
-  --color-focus: #2563eb;
+  /* Brand black — the official teal failed the same 3:1 minimum here, so it was not
+     used for focus indication; see docs/BRANDING.md. */
+  --color-focus: #000000;
 
   --color-success: #2f6f4e;
   --color-success-bg: #eaf3ed;
-  --color-warning: #92621b;
-  --color-warning-bg: #faf1e2;
-  --color-danger: #b3261e;
-  --color-danger-bg: #fbebea;
+  /* A WCAG-AA-adjusted (darkened) shade of the official brand orange (#e15e27), which
+     itself measures only 3.60:1 on white — too low for normal text. The literal brand
+     swatch remains correct for large/non-text decorative use. 4.78:1 verified here. */
+  --color-warning: #b44b1f;
+  --color-warning-bg: #fdf1ea;
+  /* Same treatment as warning: a darkened shade of the official brand red/coral
+     (#df3c51, which measures 4.28:1 on white — just under the 4.5:1 AA minimum for
+     normal text). 4.93:1 verified here against --color-danger-bg. */
+  --color-danger: #be3345;
+  --color-danger-bg: #fcedef;
 
   --radius-sm: 0.375rem;
   --radius-md: 0.625rem;
