@@ -1,8 +1,8 @@
 # Branding
 
-Status: **app name, color palette, and typography are real**, provided by the school on
-2026-09-14. The **logo mark** is still a placeholder — colors, type, and the name arrived
-first, not a logo file.
+Status: **app name, color palette, typography, and the logo are all real**, provided by the
+school (name/palette/type on 2026-09-14; the logo artwork itself a day later). Nothing left
+in this system is a placeholder.
 
 ## What's real vs. placeholder right now
 
@@ -11,7 +11,7 @@ first, not a logo file.
 | App name ("SSJC Library") | **Real**, confirmed by the school |
 | Typeface (Poppins for digital use) | **Real** — the school's own design system specifies this exact typeface for web/digital use |
 | Color palette | **Real** — the school's official primary colors, mapped to semantic tokens below |
-| Logo mark | Placeholder — an abstract open-book glyph, `src/components/ui/Logo.tsx` |
+| Logo mark | **Real** — `public/brand/logo.png`, a transparent PNG, used as-is via `LogoMark` (`src/components/ui/Logo.tsx`) |
 
 ## Typography
 
@@ -124,15 +124,39 @@ for a use case as clearly justified as this one.
 
 ## Logo
 
-`src/components/ui/Logo.tsx` renders `LogoMark`: a simple open-book motif in a rounded-square
-outline, colored via `currentColor` from `text-brand-primary` (now literal brand black).
-Deliberately abstract, not an attempt at the school's real crest.
+`public/brand/logo.png` is the real school logo — a hand-drawn, transparent-background PNG
+(1000×950px). `LogoMark` (`src/components/ui/Logo.tsx`) renders it via `next/image`,
+preserving its natural proportions (height computed from the caller's `size` using the
+artwork's own 950:1000 ratio, never forced square) rather than the earlier placeholder SVG.
+Used as-is, unmodified and unrecolored, per the standing instruction to never redraw or
+alter the real logo without explicit direction.
 
-**To replace it with the real logo:** swap `LogoMark`'s internal SVG markup for an `<img>` (or
-`next/image`) referencing an asset placed in `public/brand/` — every call site only passes a
-`size` prop, so no page or component needs to change. Preserve the real logo's proportions;
-do not redraw or recolor it. Update `brandConfig.logoAltText` in `src/config/brand.ts` and set
-`brandConfig.logoIsPlaceholder` to `false`.
+### A real discrepancy worth knowing about: the logo's colors don't exactly match the official swatches
+
+Measured directly from the pixel data (not eyeballed) via a small Python/Pillow script, the
+logo's actual dominant colors are:
+
+| In the logo artwork | Official palette swatch | Difference |
+|---|---|---|
+| `#83bcc3` (teal) | `#6dbec6` | Noticeably lighter/grayer |
+| `#ebd64e` (yellow) | `#efd51f` | Less saturated, more muted |
+| `#ce4b56` (coral) | `#df3c51` | Darker, more muted |
+| `#000000` (black) | `#000000` | Exact match |
+| `#d38d98` (dusty pink, on the antennae) | *(not in the 5-swatch official list at all)* | Appears to be a lighter tint of the coral, used for a highlight/accent within the artwork itself |
+
+This is common and not a problem to "fix": hand-drawn or hand-painted artwork frequently
+doesn't use perfectly flat, pre-defined hex values the way a vector-based brand guide
+document does — blending, layering, and the drawing tool's own defaults all introduce natural
+variation. **This project's semantic color tokens (`--color-accent`, etc., in
+`globals.css`) intentionally continue to match the officially documented hex values from the
+brand guide, not the logo file's actual pixel colors** — so the category badge, for instance,
+uses precise `#6dbec6`, not the logo's softer `#83bcc3`. The logo renders with its own
+original colors, exactly as provided; nothing about it was color-corrected or altered.
+
+If the school would prefer the app's token palette to instead match the logo's actual
+softer/more muted colors (rather than the brand guide's stated hex values), that's a
+one-block edit to `globals.css` — flagging it here as a genuine open question, not assuming
+an answer either way.
 
 ## App name
 

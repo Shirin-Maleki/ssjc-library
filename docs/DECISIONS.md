@@ -988,3 +988,46 @@ additionally carry a scroll anchor; not needed yet.
 
 **Relevant files:** `docs/SEARCH.md`; `src/app/(staff)/books/[id]/page.tsx`;
 `src/components/find/BookResultRow.tsx`.
+
+---
+
+## Real logo integrated; design tokens keep the documented hex values, not the logo's actual pixels
+
+**Date:** 2026-09-14 · **Status:** Locked (logo integration); the color-matching question is
+flagged open, not silently decided.
+
+**Problem:** The school's real logo artwork arrived as a hand-drawn, transparent PNG. Measuring
+its actual pixel colors (not eyeballing) showed every color is noticeably softer/more muted
+than the hex values documented in the brand guide (`docs/BRANDING.md` has the exact
+measurements) — e.g. the logo's teal is `#83bcc3`, the documented official teal is `#6dbec6`.
+Needed to decide what the app's design tokens should actually match.
+
+**Options considered:** (a) keep every semantic token matching the brand guide's documented
+hex values exactly (already implemented and contrast-verified in Phase 1), treating the
+logo's slightly different pixel colors as an accepted property of hand-drawn artwork, not
+something to reconcile; (b) re-sample the tokens from the logo's actual colors instead, so the
+UI's accent color visually matches the logo precisely; (c) color-correct the logo file itself
+to match the documented hex values.
+
+**Chosen approach:** (a), with the discrepancy explicitly documented rather than silently
+absorbed either direction.
+
+**Why:** (c) is ruled out outright — the standing instruction is to never redraw or recolor
+the real logo. Between (a) and (b): the brand guide's hex/RGB/CMYK values are specified with
+enough precision (including CMYK, meant for print reproduction) that they read as the
+intended canonical reference, with the logo artwork as their inspiration rather than their
+exact source — "most of these colors originate from the logo illustration" (the guide's own
+words) describes a relationship, not a claim of pixel-identical values. Guessing which is
+"more correct" isn't a call to make silently either way, so it's surfaced as an open question
+rather than resolved by assumption.
+
+**Consequences:** The logo (rendered with its own true colors) and the rest of the UI (using
+the brand guide's precise hex values) are very close but not pixel-identical in hue — a subtle
+difference, unlikely to be noticed without deliberately comparing them side by side, but real.
+
+**How to change later:** If the school confirms the logo's actual colors should be the
+reference instead, updating `globals.css`'s five color definitions is a single, contained
+edit — nothing else in the token system would need to change.
+
+**Relevant files:** `docs/BRANDING.md`; `public/brand/logo.png`; `src/components/ui/Logo.tsx`;
+`src/config/brand.ts`.

@@ -83,10 +83,20 @@ development data — see `docs/PRODUCT_SPEC.md` and `src/lib/catalog/categories.
 
 ## Pending user inputs
 
-Unchanged from Phase 1 — none block Phase 3:
+**Resolved 2026-09-14:** the school logo file arrived (`public/brand/logo.png`, real artwork,
+wired into `LogoMark`) — see `docs/BRANDING.md` for a measured (not eyeballed) color
+discrepancy between the logo's actual pixels and the documented official palette, flagged as
+a genuine open question (which should be the "true" reference) rather than resolved by
+assumption. Branding is now fully real end to end — nothing placeholder remains.
 
-- School logo **file**.
-- Google Drive folder URL(s), Google Sheet.
+None of these block Phase 3:
+
+- **Google Drive folder — link received 2026-09-14** (three sub-folders of scanned book
+  covers). Not yet inspected: the Google Drive connector isn't authorized in-session yet, and
+  per the approved roadmap this isn't needed until Phase 6 regardless. The actual link is
+  intentionally not recorded in this repo (Phase 0 treats private Drive identifiers like
+  credentials) — it's tracked outside the repo for when Phase 6 begins.
+- Google Sheet for the teacher catalog projection (Phase 9).
 - Which AI provider(s) you hold API/billing access to.
 - Supabase project credentials.
 - Eventually: feedback on whether the 8 provisional physical categories used for Phase 2
