@@ -109,6 +109,21 @@ away first, it was confirmed to be a CSS `:hover` artifact from the Playwright c
 just opened the dialog landing at the same screen coordinates as the new pill underneath —
 not an application bug — and required no code change.
 
+### A real bug found outside any test suite: bcrypt hashes silently mangled by `.env` loading
+
+Setting up real local credentials for the first time surfaced a bug no automated test had
+caught, because the E2E suite's own env-injection path (`playwright.config.ts`) turned out to
+have the exact same latent bug — it just hadn't been triggered yet, since it only manifests
+once a `.env.local` file exists anywhere in the project. Full root-cause in `docs/SECURITY.md`
+and `docs/DECISIONS.md`; fixed in both `scripts/hash-password.mjs` and
+`playwright.config.ts`, with a new regression test
+(`tests/unit/scripts/hashPassword.test.ts`) that reimplements the exact expansion behavior
+that caused it and asserts the escaped form survives while an unescaped one doesn't. Worth
+noting as a testing-process lesson: this bug was invisible to the existing E2E suite precisely
+*because* that suite's own fixture generation had the same flaw — a bug and its test coverage
+sharing the same blind spot is a real risk whenever the test harness and the thing it's
+testing both touch the same non-obvious platform behavior.
+
 ## Manual verification performed
 
 - Visually inspected real Playwright screenshots (not just automated assertions) of every

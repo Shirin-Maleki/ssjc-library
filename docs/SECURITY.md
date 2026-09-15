@@ -61,6 +61,39 @@ class of bug would have silently broken the app for actual iPhone Safari users o
 non-HTTPS environment (e.g., an early staging deployment before a custom domain was
 configured).
 
+## A real bug found live: bcrypt hashes and `.env.local` (or ANY `.env` file's mere presence)
+
+Setting up real local credentials for the first time (2026-09-14), a correct staff password
+kept failing with "That password didn't work" even though the stored hash verified correctly
+against the password in isolation (confirmed directly with `bcrypt.compareSync`). Root-caused
+by adding temporary logging to the Server Action and comparing the hash it actually received
+against what was written to `.env.local`: **the hash was missing its `$2b$12$...` prefix.**
+
+The cause: a bcrypt hash always contains literal `$` characters (`$2b$12$<salt><hash>`).
+Next.js's environment-variable loader runs a `dotenv-expand`-style pass that treats `$word`
+as a reference to another environment variable to substitute in — `$2b`, `$12`, and the
+leading word-characters of the salt each looked like an (undefined) variable name and were
+silently replaced with nothing. This is not limited to values that come from a `.env` file:
+**verified directly against a real server that as soon as *any* `.env.local` file exists
+anywhere in the project — even with unrelated content — Next.js's expansion pass runs against
+the *entire* process environment, including values injected directly by a parent process
+(e.g. Playwright's `webServer.env`, or a CI job's env block).** With no `.env.local` present
+at all, the same unescaped hash passed via the shell worked correctly; the moment a
+`.env.local` file existed, it broke — confirmed by toggling the file's presence and re-testing
+each way, not inferred from documentation alone.
+
+**Fix, in two places both needed:**
+- `scripts/hash-password.mjs` now prints the hash pre-escaped (`$` → `\$`), so pasting its
+  output directly into `.env.local` survives intact. The escaped form is what the script
+  documents as correct — don't "clean up" the backslashes.
+- `playwright.config.ts`'s `webServer.env` escapes its own generated hashes the same way,
+  since the E2E suite is just as exposed to this once a developer's own `.env.local` happens
+  to exist in the working directory during a local test run.
+
+Anyone manually typing or pasting a bcrypt hash into any `.env*` file — for this project or
+any other Next.js project — should escape every `$` as `\$` first. This is worth knowing
+generally, not just for this codebase.
+
 ## What's explicitly out of scope for Phase 1
 
 - No database, so no `login_attempts` table yet (see above).

@@ -36,8 +36,18 @@ export default defineConfig({
     reuseExistingServer: !process.env.CI,
     timeout: 180_000,
     env: {
-      STAFF_PASSWORD_HASH: bcrypt.hashSync(E2E_STAFF_PASSWORD, 10),
-      ADMIN_PASSWORD_HASH: bcrypt.hashSync(E2E_ADMIN_PASSWORD, 10),
+      // Escaped ("$" -> "\$") for the same reason scripts/hash-password.mjs escapes
+      // its output: whenever a .env.local file exists anywhere in the project (even
+      // one with unrelated content, e.g. a developer's own local credentials), Next.js
+      // runs its dotenv-expand pass over the *entire* process environment — not just
+      // values it read from a file — treating "$word" as a variable reference to
+      // expand. An unescaped bcrypt hash passed here gets silently mangled the exact
+      // same way an unescaped one pasted into .env.local does. Verified directly
+      // against a real server: this suite passes with .env.local absent and an
+      // unescaped hash, and fails the same way with .env.local present — escaping
+      // fixes both. See docs/SECURITY.md.
+      STAFF_PASSWORD_HASH: bcrypt.hashSync(E2E_STAFF_PASSWORD, 10).replaceAll("$", "\\$"),
+      ADMIN_PASSWORD_HASH: bcrypt.hashSync(E2E_ADMIN_PASSWORD, 10).replaceAll("$", "\\$"),
       SESSION_SECRET: "playwright-e2e-fixture-session-secret-not-a-real-secret",
       // This suite runs over plain HTTP — see the comment on sessionCookieOptions().
       SESSION_COOKIE_SECURE: "false",

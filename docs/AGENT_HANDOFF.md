@@ -77,6 +77,19 @@ See `docs/IMPLEMENTATION_STATUS.md` for the authoritative, continuously updated 
 file only orients you to the process, not the current state, since state changes every phase
 and duplicating it here would drift.
 
+## A cross-cutting lesson: bcrypt hashes and `.env` files
+
+**Never put a raw, unescaped bcrypt hash into any `.env*` file or into `webServer.env`-style
+config.** Every `$` in it must be escaped as `\$` first — `scripts/hash-password.mjs` and
+`playwright.config.ts` already do this correctly; if you ever generate a hash somewhere else
+(a future admin tool, a new script), escape it there too, or it will be silently corrupted the
+moment any `.env.local` file exists in the project (yes, even one with unrelated content —
+Next.js's env-expansion pass runs against the whole process environment once triggered, not
+just values sourced from a file). Full story in `docs/SECURITY.md` and `docs/DECISIONS.md`.
+This bug was invisible to the E2E suite for a while because the suite's own fixture-hash
+generation had the identical flaw — don't assume "the tests pass" rules this class of bug out
+if the test harness touches the same platform behavior the app does.
+
 ## Practical lessons from Phase 2 (worth knowing before touching search code)
 
 - **Read `docs/SEARCH.md` before changing anything in `src/lib/search/` or
