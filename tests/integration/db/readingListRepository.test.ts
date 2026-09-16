@@ -1,7 +1,10 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { DrizzleReadingListRepository } from "@/db/repositories/readingListRepository";
 import { DrizzleBookRepository } from "@/db/repositories/bookRepository";
+import { BookNotFoundError, InvalidIdError, ReadingListNotFoundError } from "@/lib/reading-lists/errors";
 import { requireTestDatabaseUrl, createTestDb } from "./testDb";
+
+const NONEXISTENT_UUID = "00000000-0000-0000-0000-000000000000";
 
 const hasTestDb = (() => {
   try {
@@ -88,9 +91,78 @@ describe.skipIf(!hasTestDb)("DrizzleReadingListRepository (against a real Postgr
     expect((await repository.getById(listB.id))?.items).toHaveLength(1);
   });
 
-  it("addBook against a missing list throws rather than silently succeeding", async () => {
+  it("addBook against a missing list throws a typed domain error, not a raw database exception", async () => {
     const [book] = await bookRepository.listBooks();
-    await expect(repository.addBook("00000000-0000-0000-0000-000000000000", book.id)).rejects.toThrow();
+    await expect(repository.addBook(NONEXISTENT_UUID, book.id)).rejects.toThrow(ReadingListNotFoundError);
+  });
+
+  it("addBook against a nonexistent book throws a typed domain error, never a raw foreign-key-violation exception (Phase 4 correction pass)", async () => {
+    const list = await trackedCreate({ name: "Dino Books 2" });
+    await expect(repository.addBook(list.id, NONEXISTENT_UUID)).rejects.toThrow(BookNotFoundError);
+  });
+
+  it("rename/removeBook against a missing list also throw ReadingListNotFoundError, not a generic error", async () => {
+    const [book] = await bookRepository.listBooks();
+    await expect(repository.rename(NONEXISTENT_UUID, "New Name")).rejects.toThrow(ReadingListNotFoundError);
+    await expect(repository.removeBook(NONEXISTENT_UUID, book.id)).rejects.toThrow(ReadingListNotFoundError);
+  });
+
+  it("a malformed (non-UUID) id is rejected as InvalidIdError before ever reaching Postgres", async () => {
+    const [book] = await bookRepository.listBooks();
+    await expect(repository.addBook("not-a-uuid", book.id)).rejects.toThrow(InvalidIdError);
+    await expect(repository.addBook(book.id /* wrong kind, but valid uuid shape */, "also-not-a-uuid")).rejects.toThrow(
+      InvalidIdError
+    );
+    await expect(repository.rename("not-a-uuid", "New Name")).rejects.toThrow(InvalidIdError);
+    await expect(repository.removeBook("not-a-uuid", book.id)).rejects.toThrow(InvalidIdError);
+    await expect(repository.createWithBook({ name: "X" }, "not-a-uuid")).rejects.toThrow(InvalidIdError);
+  });
+
+  it("getById and delete treat a malformed id as a safe no-result/no-op, not a database error", async () => {
+    expect(await repository.getById("not-a-uuid")).toBeNull();
+    await expect(repository.delete("not-a-uuid")).resolves.toBeUndefined();
+  });
+
+  describe("createWithBook (one atomic operation, Phase 4 correction pass)", () => {
+    it("returns the new list already containing the book", async () => {
+      const [book] = await bookRepository.listBooks();
+      const created = await repository.createWithBook({ name: "Atomic Create" }, book.id);
+      createdListIds.push(created.id);
+      expect(created.items.map((i) => i.bookId)).toEqual([book.id]);
+    });
+
+    it("both the list row and the item row genuinely persist — verified by re-fetching from scratch", async () => {
+      const [book] = await bookRepository.listBooks();
+      const created = await repository.createWithBook({ name: "Atomic Create Persisted" }, book.id);
+      createdListIds.push(created.id);
+
+      const refetched = await repository.getById(created.id);
+      expect(refetched).not.toBeNull();
+      expect(refetched!.name).toBe("Atomic Create Persisted");
+      expect(refetched!.items.map((i) => i.bookId)).toEqual([book.id]);
+    });
+
+    it("a nonexistent book makes the entire operation fail, leaving no orphan/empty list behind", async () => {
+      const before = await repository.getAll();
+      const beforeCount = before.length;
+
+      await expect(repository.createWithBook({ name: "Should Never Exist" }, NONEXISTENT_UUID)).rejects.toThrow(
+        BookNotFoundError
+      );
+
+      const after = await repository.getAll();
+      expect(after.length).toBe(beforeCount);
+      expect(after.some((list) => list.name === "Should Never Exist")).toBe(false);
+    });
+
+    it("duplicate-membership constraints still apply normally afterward — adding the same book again is idempotent", async () => {
+      const [book] = await bookRepository.listBooks();
+      const created = await repository.createWithBook({ name: "Atomic Then Idempotent" }, book.id);
+      createdListIds.push(created.id);
+
+      const addedAgain = await repository.addBook(created.id, book.id);
+      expect(addedAgain.items).toHaveLength(1);
+    });
   });
 
   it("data persists through a brand-new repository/connection instance", async () => {

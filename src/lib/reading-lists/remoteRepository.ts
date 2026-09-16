@@ -3,6 +3,7 @@ import type { CreateReadingListInput, ReadingList } from "./types";
 import {
   addBookToReadingListAction,
   createReadingListAction,
+  createReadingListWithBookAction,
   deleteReadingListAction,
   getAllReadingListsAction,
   getReadingListByIdAction,
@@ -46,5 +47,9 @@ export class RemoteReadingListRepository implements ReadingListRepository {
 
   removeBook(listId: string, bookId: string): Promise<ReadingList> {
     return removeBookFromReadingListAction(listId, bookId);
+  }
+
+  createWithBook(input: CreateReadingListInput, bookId: string): Promise<ReadingList> {
+    return createReadingListWithBookAction(input, bookId);
   }
 }

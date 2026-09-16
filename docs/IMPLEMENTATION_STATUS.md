@@ -174,6 +174,49 @@ four-color brand palette. Full detail in the phase report; summary:
   98 E2E tests, all passing, the E2E suite re-run three consecutive times with no flakes.
 - Typecheck, lint, and production build all pass cleanly.
 
+## Completed work (Phase 4 correction pass, 2026-09-16)
+
+A focused acceptance-gap pass over the reviewed Phase 4 work — no redesign, no Phase 5 work.
+See `docs/CHANGELOG.md` for the condensed version and `docs/DECISIONS.md` for full reasoning.
+
+- **Multilingual data access actually works now.** `DrizzleBookRepository` batch-loads and
+  projects `book_languages` as `Book.additionalLanguageCodes`; the language registry
+  (`src/lib/catalog/languages.ts`) is a genuine ~150-code ISO 639-1 map, not a six-code stub;
+  language filtering and facets recognize a book's additional languages, not just its primary.
+- **The metadata field-key registry `docs/DATA_MODEL.md` §6 always described now exists**
+  (`src/lib/metadata/fieldRegistry.ts`) — it didn't, until this pass.
+- **Book Detail hardened against a malformed id** — validated as real UUID shape before
+  reaching Postgres; both a malformed and a valid-but-nonexistent id render the same calm
+  "Book not found" state.
+- **A calm database-error boundary for Find and Book Detail** (`find/error.tsx`,
+  `books/[id]/error.tsx`, a shared `CatalogErrorFallback` component) — never a raw SQL/
+  connection/driver detail, always a retry action.
+- **"Create & add" is now one atomic database transaction**
+  (`ReadingListRepository.createWithBook`) — the previous two-call sequence left a real
+  partial-success window (an orphan empty list if the second call failed).
+- **Typed domain errors replace raw database exceptions** for Reading List mutations
+  (`ReadingListNotFoundError`, `BookNotFoundError`, `InvalidIdError`) — a nonexistent list/book
+  or a malformed id is now a deliberate, safe outcome at both the repository and Server Action
+  boundary, not something that happened to be caught by a generic try/catch.
+- **The actual two-independent-browser-context Playwright acceptance test** for shared Reading
+  Lists now exists, alongside the pre-existing two-database-connection integration test.
+- Two documentation path/description inaccuracies inherited from the Phase 0 design docs
+  corrected (the language registry's real path; Supabase's actual multiple connection types,
+  not one "default connection"), and `docs/CHANGELOG.md` created.
+- 22 new unit tests (156 → 178), 9 new/extended integration tests (25 → 34), and 3 new E2E
+  test definitions — 2 Book Detail hardening cases in `find.spec.ts` (run on both projects, so
+  4 additional test instances) and the two-browser acceptance test in `readingLists.spec.ts`
+  (desktop-only, 1 additional instance) — bringing the E2E total from 98 to 103. A real bug was
+  caught and fixed by this work's own new integration test before it ever shipped (see "Known
+  bugs" below).
+- Typecheck, lint, `db:check`, unit, integration, build, and E2E all re-run and passing — see
+  the correction-pass report for exact counts. The E2E suite was also the subject of a genuine
+  environmental investigation: several runs showed non-deterministic, code-unrelated failures
+  (different spec files each time) caused by chrome-headless-shell processes orphaned from a
+  much earlier, unrelated session (running over a day, consuming ~1.5GB of swap) — once
+  identified and cleaned up, the suite ran in 35 seconds instead of 15–35 minutes and passed
+  103/103 three consecutive times.
+
 ## In-progress work
 
 None.
@@ -239,6 +282,12 @@ None open. Phase 4 found and fixed three real issues during its own testing — 
 Phase 3's three previously-fixed bugs (native `required` blocking custom validation, the
 Add-to-list dialog's empty-state shortcut, and a `set-state-in-effect` lint violation) remain
 fixed and are unaffected by Phase 4.
+
+The Phase 4 correction pass found and fixed one more, caught by its own new test before it ever
+shipped: the initial `createWithBook`/`addBook` domain-error work only pre-checked that the
+referenced *book* existed, not the *list* — a nonexistent list still hit a raw
+foreign-key-violation exception on the `reading_list_items` → `reading_lists` constraint. Fixed
+by checking both referenced rows before writing. Full writeup in `docs/TESTING.md`.
 
 ## Environment variables
 

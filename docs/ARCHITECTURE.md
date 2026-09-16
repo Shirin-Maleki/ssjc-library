@@ -108,8 +108,9 @@ changed and why (full detail in the data model doc):
   provider / AI-inferred / human-corrected / human-verified) — see `docs/DATA_MODEL.md` §6.
   The set of tracked fields (`field_key`) is deliberately **not** a database enum — it's
   validated against a centralized, extensible registry in application code
-  (`lib/metadata/field-registry.ts`), so adding a new tracked metadata attribute is a code
-  change, not a schema migration.
+  (`src/lib/metadata/fieldRegistry.ts` — implemented in the Phase 4 correction pass; this
+  document previously and incorrectly said `lib/metadata/field-registry.ts`), so adding a new
+  tracked metadata attribute is a code change, not a schema migration.
 - **Language** is no longer a reference table — it's a plain validated text column backed by
   one shared application constant, removed on review as a table that existed for reference
   completeness rather than a real admin-management need (unlike `physical_categories`, which
@@ -435,6 +436,21 @@ Old `localStorage` data was deliberately **not** migrated — it was always disp
 development data. Full reasoning: `docs/DECISIONS.md`, "Reading Lists: from localStorage to
 Postgres."
 
+**Phase 4 correction pass:** the Add-to-Reading-List dialog's "Create new list" step is one
+atomic operation (`ReadingListRepository.createWithBook`), not `create()` followed by a
+separate `addBook()` — the two-call version left a real partial-success window (an empty
+orphan list committed if the second call failed). `DrizzleReadingListRepository` implements it
+as a single `db.transaction()`: if the target book doesn't exist, the whole transaction rolls
+back, so no list is ever created. Every id-taking repository method (`rename`, `delete`,
+`addBook`, `removeBook`, `createWithBook`, `getById`) now validates UUID shape first and checks
+referenced rows exist before writing, throwing typed domain errors
+(`ReadingListNotFoundError`, `BookNotFoundError`, `InvalidIdError` —
+`src/lib/reading-lists/errors.ts`) instead of ever letting a raw
+foreign-key-violation/invalid-UUID-syntax Postgres exception become the de facto contract. The
+Server Action boundary (`actions.ts`) validates the same way, independently, since a Server
+Action is directly invokable regardless of the calling UI. The teacher-facing UI is unaffected —
+every dialog already caught any exception generically and showed one calm message.
+
 ## 21. Privacy & security architecture
 
 Unchanged from the first draft (no child PII anywhere in the schema; voice transcript never
@@ -442,6 +458,15 @@ persisted; search queries never logged by default; secrets exclusively in enviro
 variables; sessions are HTTP-only/Secure/SameSite cookies; uploads validated by type/size;
 Drizzle produces only parameterized queries). The explicit session/auth mechanism is now
 fully specified in §14 rather than summarized.
+
+**Phase 4 correction pass — a server-render error boundary for the catalog pages:** `find/
+error.tsx` and `books/[id]/error.tsx` (both rendering a shared `CatalogErrorFallback`
+component) catch a thrown server-side data-fetch error (a genuinely reachable failure mode now
+that Find/Book Detail read real Postgres data) and show one calm, generic message with a retry
+action — never the underlying error's own message, which could otherwise carry a SQL
+fragment, a connection string, or a driver-specific detail. This is distinct from Reading
+Lists' existing `loadError` handling (`ReadingListsProvider`), which is a client-side fetch
+failure, not a server-render exception, and already followed the same no-raw-error-detail rule.
 
 ## 22. Deployment architecture
 
@@ -537,7 +562,7 @@ src/
       google-books/
       open-library/
     metadata/
-      field-registry.ts      centralized book_field_provenance field_key vocabulary (Zod)
+      fieldRegistry.ts       centralized book_field_provenance field_key vocabulary (Zod)
     search/                  layered retrieval, ranking, autocomplete
     taxonomy/                category suggestion, health
     ingestion/                shared pipeline: single-add + bulk import worker both call this

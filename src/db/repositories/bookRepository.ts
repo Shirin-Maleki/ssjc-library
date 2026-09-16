@@ -12,6 +12,7 @@ import {
   bookContributors,
   bookCopies,
   books,
+  bookLanguages,
   bookTags,
   contributors,
   physicalCategories,
@@ -81,7 +82,7 @@ export class DrizzleBookRepository implements BookRepository {
     const publisherIds = [...new Set(rows.map((row) => row.publisherId).filter((id): id is string => id != null))];
     const categoryIds = [...new Set(rows.map((row) => row.physicalCategoryId).filter((id): id is string => id != null))];
 
-    const [contributorRows, tagRows, copyRows, publisherRows, categoryRows] = await Promise.all([
+    const [contributorRows, tagRows, copyRows, languageRows, publisherRows, categoryRows] = await Promise.all([
       this.db
         .select({
           bookId: bookContributors.bookId,
@@ -101,6 +102,10 @@ export class DrizzleBookRepository implements BookRepository {
         .select({ bookId: bookCopies.bookId })
         .from(bookCopies)
         .where(inArray(bookCopies.bookId, bookIds)),
+      this.db
+        .select({ bookId: bookLanguages.bookId, languageCode: bookLanguages.languageCode })
+        .from(bookLanguages)
+        .where(inArray(bookLanguages.bookId, bookIds)),
       publisherIds.length > 0
         ? this.db.select().from(publishers).where(inArray(publishers.id, publisherIds))
         : Promise.resolve([]),
@@ -134,11 +139,19 @@ export class DrizzleBookRepository implements BookRepository {
       copyCountByBook.set(row.bookId, (copyCountByBook.get(row.bookId) ?? 0) + 1);
     }
 
+    const additionalLanguagesByBook = new Map<string, string[]>();
+    for (const row of languageRows) {
+      const list = additionalLanguagesByBook.get(row.bookId) ?? [];
+      list.push(row.languageCode);
+      additionalLanguagesByBook.set(row.bookId, list);
+    }
+
     return rows.map((row) => this.projectOne(row, {
       authors: authorsByBook.get(row.id) ?? [],
       illustrators: illustratorsByBook.get(row.id),
       tags: tagsByBook.get(row.id) ?? [],
       copyCount: copyCountByBook.get(row.id) ?? 0,
+      additionalLanguageCodes: additionalLanguagesByBook.get(row.id),
       publisherName: row.publisherId ? publisherNameById.get(row.publisherId) : undefined,
       categorySlug: row.physicalCategoryId ? categorySlugById.get(row.physicalCategoryId) : undefined,
     }));
@@ -151,6 +164,7 @@ export class DrizzleBookRepository implements BookRepository {
       illustrators: string[] | undefined;
       tags: string[];
       copyCount: number;
+      additionalLanguageCodes: string[] | undefined;
       publisherName: string | undefined;
       categorySlug: string | undefined;
     }
@@ -165,6 +179,10 @@ export class DrizzleBookRepository implements BookRepository {
       publisher: related.publisherName ?? "",
       imprint: row.imprint ?? undefined,
       languageCode: row.languageCode as LanguageCode,
+      additionalLanguageCodes:
+        related.additionalLanguageCodes && related.additionalLanguageCodes.length > 0
+          ? (related.additionalLanguageCodes as LanguageCode[])
+          : undefined,
       description: row.shortDescription ?? "",
       ageMinMonths: row.ageMinMonths ?? undefined,
       ageMaxMonths: row.ageMaxMonths ?? undefined,

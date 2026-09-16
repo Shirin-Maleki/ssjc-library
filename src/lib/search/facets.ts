@@ -17,7 +17,12 @@ export interface FacetOption {
  * old hard-coded `PHYSICAL_CATEGORIES` constant itself, so it has no way to silently
  * fall back to a second taxonomy source. */
 export function buildFacets(books: Book[], categories: { slug: string; label: string }[]) {
-  const languageCodes = Array.from(new Set(books.map((b) => b.languageCode)));
+  // Include additional languages (multilingual editions), the same "OR within the
+  // group" semantics filters.ts applies — a Swedish-additional-language book must
+  // make "Swedish" a real facet option, not just its primary language.
+  const languageCodes = Array.from(
+    new Set(books.flatMap((b) => [b.languageCode, ...(b.additionalLanguageCodes ?? [])]))
+  );
   const formats = Array.from(new Set(books.map((b) => b.format)));
   const illustrationStyles = Array.from(new Set(books.flatMap((b) => b.illustrationStyles)));
   const visualRealism = Array.from(new Set(books.map((b) => b.visualRealism)));

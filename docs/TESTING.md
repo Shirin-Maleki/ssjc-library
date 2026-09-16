@@ -34,7 +34,12 @@ against an actual Postgres instance, never a mocked Drizzle client.
 | `catalog/duration.test.ts` | `getReadDurationBand` boundaries (exactly 5 and exactly 10 minutes), `parseDurationBandFromText` phrasings, including that an explicit minute count is resolved through the same banding function as real durations |
 | `search/normalize.test.ts` | Text normalization, diacritic stripping (including the ø/æ fix), stop-word removal |
 | `search/rank.test.ts` | Exact-title-over-tag-only scoring, zero score for no/generic-word-only matches, author-match credit, age/realism intent bonuses only applying when genuinely satisfied |
-| `search/filters.test.ts` | AND-across-groups / OR-within-a-group semantics, age/duration/illustration-style filter matching |
+| `search/filters.test.ts` | AND-across-groups / OR-within-a-group semantics, age/duration/illustration-style filter matching, and (Phase 4 correction pass) a multilingual book matching a filter on either its primary or an additional language |
+| `search/facets.test.ts` (Phase 4 correction pass) | A multilingual book's additional languages appear as real facet options, never duplicated, alongside primary-language-only books unaffected |
+| `catalog/languages.test.ts` (Phase 4 correction pass) | The centralized ISO 639-1 registry recognizes the six original fixture languages plus a real code outside them (e.g. "de"/German), rejects a non-code, and the Zod boundary schema matches the same way |
+| `metadata/fieldRegistry.test.ts` (Phase 4 correction pass) | The `book_field_provenance.field_key` registry validates every currently-tracked key (including the `age_range` example `docs/DATA_MODEL.md` §4 names), rejects an untracked key, and every key maps to one of the documented identity/category/age/visual/metadata concepts |
+| `utils/uuid.test.ts` (Phase 4 correction pass) | `isUuid`/`uuidSchema` accept real UUIDs case-insensitively and reject malformed values |
+| `components/CatalogErrorFallback.test.tsx` (Phase 4 correction pass) | The Find/Book Detail error boundary shows only the calm generic message — never the underlying error's own text, even when that text looks SQL/driver-shaped — and its retry button calls `reset` |
 | `search/autocomplete.test.ts` | Minimum-length gating, catalog-derived suggestions, category-vs-topic type labelling, prefix-over-substring ranking, deduplication, result cap |
 | `search/urlParams.test.ts` | Query/filter round-trip through URL search params |
 | `search/searchBooks.test.ts` | Every deterministic scenario the brief names by example — see below |
@@ -62,8 +67,8 @@ result; every assertion is a real round-trip to a real running Postgres instance
 | File | Covers |
 |---|---|
 | `db/migrations.test.ts` | The committed migrations actually produce all 23 tables; a handful of specific columns/constraints/indexes exist as designed (the `books_isbn13_unique` partial index, the age check constraints, the `book_field_provenance` current-row partial unique index) |
-| `db/bookRepository.test.ts` | `DrizzleBookRepository` against real seeded data: correct book count, contributor ordering via `array_agg(... order by sort_order)`, multi-value `visual_media_type` arrays round-tripping correctly, `copyCount` matching a real `count(*)` on `book_copies`, multilingual books' `book_languages` rows |
-| `db/readingListRepository.test.ts` | Full CRUD, idempotent `addBook` via the composite primary key, and the mandated **two-independent-connection acceptance test**: a list created and populated through one `DrizzleReadingListRepository` instance (its own separate Postgres connection) is immediately visible, with the same data, through a second, completely independent instance/connection — the actual proof that Reading Lists are genuinely shared, not just that one repository method returns the right object |
+| `db/bookRepository.test.ts` | `DrizzleBookRepository` against real seeded data: correct book count, contributor ordering via `array_agg(... order by sort_order)`, multi-value `visual_media_type` arrays round-tripping correctly, `copyCount` matching a real `count(*)` on `book_copies`; (Phase 4 correction pass) the multilingual seed book's `additionalLanguageCodes` projected by the repository itself — not merely visible via a raw `book_languages` query — including "de" (outside the original six fixture languages), and a single-language book's `additionalLanguageCodes` staying `undefined` |
+| `db/readingListRepository.test.ts` | Full CRUD, idempotent `addBook` via the composite primary key, and the mandated **two-independent-connection acceptance test**: a list created and populated through one `DrizzleReadingListRepository` instance (its own separate Postgres connection) is immediately visible, with the same data, through a second, completely independent instance/connection — the actual proof that Reading Lists are genuinely shared, not just that one repository method returns the right object; (Phase 4 correction pass) `createWithBook` as one atomic transaction (the new list already contains the book; both rows persist; a nonexistent book fails the *entire* operation and leaves no orphan list), typed domain errors (`ReadingListNotFoundError`/`BookNotFoundError`/`InvalidIdError`) instead of raw foreign-key/UUID-syntax exceptions, and malformed ids treated as a safe no-result for `getById`/`delete` |
 
 ## E2E tests (Playwright) — `tests/e2e/`
 
@@ -77,12 +82,18 @@ used heavily on phones, so testing only against Chromium would have missed a rea
 | `navigation.spec.ts` | Every remaining placeholder Home destination (Add, Lists, Guide, Teacher Catalog) reaches its "coming later" state and can navigate back; the two primary tiles are meaningfully larger than secondary nav items |
 | `find.spec.ts` | The ten numbered flows the brief requires — see below |
 | `voice.spec.ts` | A scripted fake `SpeechRecognition` (installed via `page.addInitScript()`, never a real microphone) exercising the real production UI: Home → Find → voice → mocked transcript → normal results; existing filters survive a voice search; no-speech, permission-denied, cancel, and an unsupported-browser fallback |
-| `readingLists.spec.ts` (Phase 4: desktop project only, serial order — see the comment at the top of the file) | Empty/populated overview, the Add-to-list dialog's no-lists-yet state, create (required name, optional/whitespace/trimmed creator), a list surviving reload, rename, delete with confirmation (and cancelling it), an empty list's guidance, add-to-list from both Search Results and Book Detail (including that it never accidentally navigates to Book Detail), duplicate-add idempotency and "Already added" messaging scoped to the test's own list, remove (without touching the catalog), Book Detail↔list-detail return navigation, a malformed/external `from=` value falling back safely, a nonexistent list id's not-found state, and a full keyboard-only create flow |
+| `readingLists.spec.ts` (Phase 4: desktop project only, serial order — see the comment at the top of the file) | Empty/populated overview, the Add-to-list dialog's no-lists-yet state, create (required name, optional/whitespace/trimmed creator), a list surviving reload, rename, delete with confirmation (and cancelling it), an empty list's guidance, add-to-list from both Search Results and Book Detail (including that it never accidentally navigates to Book Detail), duplicate-add idempotency and "Already added" messaging scoped to the test's own list, remove (without touching the catalog), Book Detail↔list-detail return navigation, a malformed/external `from=` value falling back safely, a nonexistent list id's not-found state, a full keyboard-only create flow, and (Phase 4 correction pass) the **actual two-independent-browser-context acceptance test**: two separate `browser.newContext()`s, each with its own login/cookies, proving a list Context A creates — and a book Context A adds to it — is visible to Context B without Context B doing anything itself |
 | `guide.spec.ts` | The real Guide renders with one `<h1>` and the expected section headings; the physical-category-vs-tags example matches real fixture data; the alphabetical-return rule is stated; Add a Book/Review Later are described in the future tense with no fake button; links to Find a Book and Reading Lists work; the shared-across-staff nature of Reading Lists is disclosed (Phase 4: no longer "device-local") |
 
-**98 tests, 0 failures** (Phase 4) — `readingLists.spec.ts` now runs on the desktop project
-only (17 tests, serial), everything else still runs on both mobile/WebKit and desktop/Chromium.
-Re-run three consecutive times end to end with no flakes before being considered done.
+Phase 4 correction pass also added two `find.spec.ts` cases (run on both projects, like the
+rest of that file): a malformed Book Detail id (`/books/not-a-uuid`) and a valid-but-nonexistent
+UUID both render the calm "Book not found" state, never a database error.
+
+**103 tests, 0 failures** (Phase 4 correction pass) — `readingLists.spec.ts` runs on the desktop
+project only (18 tests, serial, including the new two-browser acceptance test), everything else
+still runs on both mobile/WebKit and desktop/Chromium. Re-run three consecutive times end to end
+with no flakes before being
+considered done.
 
 ### Find a Book flow coverage (`find.spec.ts`)
 
@@ -219,6 +230,33 @@ reliable on both engines.
    added the same first-search-result book to their own lists — so the dialog legitimately
    shows "Already added" next to multiple list rows, not just this test's own. Fixed by scoping
    the check to the specific list row matching this test's own unique name.
+
+### Real bugs this suite caught — Phase 4 correction pass
+
+1. **`addBook`'s new "nonexistent reference throws a typed domain error, not a raw database
+   exception" work initially only pre-checked that the *book* existed, not the list.** A new
+   integration test (`addBook against a missing list throws a typed domain error`) caught this
+   immediately: `reading_list_items` has a foreign key to *both* `reading_lists` and `books`, so
+   a nonexistent `listId` still hit a raw `PostgresError` (`23503`,
+   `reading_list_items_list_id_reading_lists_id_fk`) on the insert, before the code ever reached
+   its own "list not found" check. Fixed by checking both referenced rows exist, in that order,
+   before the insert — a direct demonstration of why "add a test proving the domain error" isn't
+   redundant with "the fix looks obviously correct": the first implementation looked correct and
+   wasn't.
+
+### An environmental issue, not a code bug: orphaned browser processes degrading E2E runs
+
+Re-running the E2E suite after the changes above initially showed non-deterministic failures —
+a different, unrelated spec file each time (voice, auth, guide, find), always a navigation/page-
+load timeout, never anything this correction pass actually touched. Root cause, found by
+checking system load and swap rather than re-reading test code that hadn't changed:
+`chrome-headless-shell` processes left over from an earlier, unrelated session — running for
+over a day, consuming roughly 1.5GB of swap — were degrading every subsequent Playwright run's
+page-load timing unpredictably. `ps aux | grep ms-playwright` found them; killing them dropped a
+full run from 15–35 minutes to 35 seconds, after which the suite passed 103/103 three
+consecutive times. Worth knowing before assuming a flaky E2E run means a real regression: check
+for leftover browser processes from a previous session first, especially after a long working
+session with many backgrounded/interrupted test runs.
 
 ## Manual verification performed
 

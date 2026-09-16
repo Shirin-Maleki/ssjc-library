@@ -131,6 +131,19 @@ test.describe("Find a Book", () => {
     await expect(page.getByText("No matches in the development catalog yet.")).toBeVisible();
     await expect(page.locator("li:has(h3)")).toHaveCount(0);
   });
+
+  // Phase 4 correction pass: books.id is a real Postgres uuid column — an
+  // invalid-shaped id must never reach the database as a raw query.
+  test("Book Detail: a malformed id renders the calm not-found state, not a database error", async ({ page }) => {
+    await page.goto("/books/not-a-uuid");
+    await expect(page.getByRole("heading", { name: "Book not found" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Back to Find a Book" })).toBeVisible();
+  });
+
+  test("Book Detail: a valid but nonexistent UUID renders the same not-found state", async ({ page }) => {
+    await page.goto("/books/00000000-0000-0000-0000-000000000000");
+    await expect(page.getByRole("heading", { name: "Book not found" })).toBeVisible();
+  });
 });
 
 test.describe("Find a Book — mobile filter drawer", () => {

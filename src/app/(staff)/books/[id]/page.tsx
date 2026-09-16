@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { bookRepository, categoryRepository } from "@/db/repositories";
+import { isUuid } from "@/lib/utils/uuid";
 import { formatAgeRange } from "@/lib/catalog/age";
 import { DURATION_BAND_LABELS, getReadDurationBand } from "@/lib/catalog/duration";
 import { FICTION_TYPE_LABELS, FORMAT_LABELS, ILLUSTRATION_STYLE_LABELS, VISUAL_REALISM_LABELS } from "@/lib/catalog/labels";
@@ -31,7 +32,14 @@ function backLinkLabel(backHref: string): string {
 export default async function BookDetailPage({ params, searchParams }: BookDetailPageProps) {
   const { id } = await params;
   const { from } = await searchParams;
-  const [book, categories] = await Promise.all([bookRepository.getBookById(id), categoryRepository.listCategories()]);
+  // A malformed id (not real UUID shape) is treated the same as "not found" rather
+  // than reaching Postgres — books.id is a real uuid column, and an invalid-shaped
+  // value would otherwise surface as a raw database error, not a calm empty state
+  // (Phase 4 correction pass).
+  const [book, categories] = await Promise.all([
+    isUuid(id) ? bookRepository.getBookById(id) : Promise.resolve(undefined),
+    categoryRepository.listCategories(),
+  ]);
   const backHref = resolveBackHref(from);
 
   if (!book) {

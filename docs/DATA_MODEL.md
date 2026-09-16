@@ -132,13 +132,15 @@ is lost by deferring it.
 **Change in this revision:** the `languages` reference table from the first draft is removed
 (§12). `books.language_code` and `book_languages.language_code` are plain `text` columns
 holding an ISO 639-1 code, validated at the application layer against a single shared
-constant (`lib/constants/languages.ts`, a `code → display name` map covering the standard ISO
-639-1 list, exposed as a Zod enum for validation everywhere it's used — search filters,
-autocomplete, Quick Edit, admin edit). This was a reference table with no admin-CRUD need
-(unlike `physical_categories`, which genuinely must be admin-editable data) — a single
-application constant is simpler, requires no join for the common single-language case, and is
-just as centralized/non-hard-coded as a table would be, since it still lives in exactly one
-place.
+constant (`src/lib/catalog/languages.ts` — the actual path; this document previously and
+incorrectly said `lib/constants/languages.ts`, corrected in the Phase 4 correction pass), a
+`code → display name` map covering the standard ISO 639-1 list (~150 codes, not just the
+handful the development fixture catalog happens to use), exposed as a Zod-validated type for
+validation everywhere it's used — search filters, autocomplete, facets, Quick Edit, admin edit.
+This was a reference table with no admin-CRUD need (unlike `physical_categories`, which
+genuinely must be admin-editable data) — a single application constant is simpler, requires no
+join for the common single-language case, and is just as centralized/non-hard-coded as a table
+would be, since it still lives in exactly one place.
 
 `book_languages (book_id, language_code)` — composite PK — still exists for multilingual
 editions, so a bilingual book matches a filter on either language while
@@ -222,7 +224,7 @@ value.
 |---|---|---|
 | `id` | uuid PK | |
 | `book_id` | uuid, FK → `books.id`, not null | |
-| `field_key` | text, not null | validated against a centralized registry (`lib/metadata/field-registry.ts`, a Zod enum) — **not a database enum**, so adding a newly-tracked field is a code change, not a migration |
+| `field_key` | text, not null | validated against a centralized registry (`src/lib/metadata/fieldRegistry.ts`, implemented in the Phase 4 correction pass — a Zod-validated type, not a database enum), so adding a newly-tracked field is a code change, not a migration |
 | `source_type` | enum(`external_provider`,`ai_inferred`,`human_corrected`,`human_verified`), not null | see below |
 | `source_label` | text | nullable, e.g. "Google Books", "Claude vision v1" |
 | `confidence` | numeric(3,2) | nullable |
@@ -538,3 +540,19 @@ Every deviation from the design above, and why:
   `docs/ARCHITECTURE.md` §20. The rate limiter described in `docs/SECURITY.md` still keeps its
   Phase 1 in-memory implementation — wiring it to `login_attempts` for real persistence was
   deliberately left out of Phase 4's scope to avoid unrelated scope creep.
+
+**Correction pass (2026-09-16) — closing acceptance gaps in the schema's own promises, not new
+design:**
+
+- **`book_languages` is now actually read, not just written.** The schema and seed script were
+  always correct (§3); `DrizzleBookRepository` simply never batch-loaded the relation, so a
+  multilingual book's additional languages never reached the application layer. Fixed — see
+  §3's updated wording and `docs/DECISIONS.md`.
+- **The `src/lib/metadata/fieldRegistry.ts` module §6 describes now actually exists** (it did
+  not, until this pass) — this document's path claim was correct in intent, wrong in the actual
+  filename casing (`fieldRegistry.ts`, not `field-registry.ts`, matching this project's
+  camelCase file-naming convention elsewhere in `src/lib/`).
+- No schema/migration changes were needed for either fix — both were purely an
+  application-code/repository-layer gap, exactly the kind of thing this schema's own design
+  (a plain `text` `field_key`, a real relational `book_languages` table) was already built to
+  support without a migration.

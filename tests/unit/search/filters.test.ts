@@ -71,6 +71,19 @@ describe("matchesFilters", () => {
     expect(matchesFilters(book, { illustrationStyles: ["ink"] })).toBe(true);
     expect(matchesFilters(book, { illustrationStyles: ["photography"] })).toBe(false);
   });
+
+  it("a multilingual book matches a filter on either its primary or an additional language (Phase 4 correction pass)", () => {
+    const bilingual = makeBook({ id: "a", languageCode: "en", additionalLanguageCodes: ["sv"] });
+    expect(matchesFilters(bilingual, { languages: ["en"] })).toBe(true);
+    expect(matchesFilters(bilingual, { languages: ["sv"] })).toBe(true);
+    expect(matchesFilters(bilingual, { languages: ["no"] })).toBe(false);
+  });
+
+  it("a single-language book (no additionalLanguageCodes) is unaffected by the multilingual matching path", () => {
+    const monolingual = makeBook({ id: "a", languageCode: "en" });
+    expect(matchesFilters(monolingual, { languages: ["en"] })).toBe(true);
+    expect(matchesFilters(monolingual, { languages: ["sv"] })).toBe(false);
+  });
 });
 
 describe("countActiveFilters", () => {

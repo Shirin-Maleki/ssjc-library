@@ -130,4 +130,23 @@ export class LocalStorageReadingListRepository implements ReadingListRepository 
     writeAll(all);
     return list;
   }
+
+  async createWithBook(input: CreateReadingListInput, bookId: string): Promise<ReadingList> {
+    const name = input.name.trim();
+    if (!name) throw new Error("A reading list needs a name.");
+    const createdBy = input.createdBy?.trim() || undefined;
+    const now = new Date().toISOString();
+    const list: ReadingList = {
+      id: generateId(),
+      name,
+      createdBy,
+      createdAt: now,
+      updatedAt: now,
+      items: [{ bookId, addedAt: now }],
+    };
+    const all = readAll();
+    all.push(list);
+    writeAll(all);
+    return list;
+  }
 }

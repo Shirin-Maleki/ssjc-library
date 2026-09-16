@@ -26,7 +26,7 @@ type Mode = "select" | "create";
  * book to the list it just created.
  */
 export function AddToReadingListDialog({ bookId, bookTitle, trigger, onAdded }: AddToReadingListDialogProps) {
-  const { lists, ready, addBook, createList } = useReadingLists();
+  const { lists, ready, addBook, createListWithBook } = useReadingLists();
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<Mode>("select");
   const [name, setName] = useState("");
@@ -65,8 +65,10 @@ export function AddToReadingListDialog({ bookId, bookTitle, trigger, onAdded }: 
     }
     setSubmitting(true);
     try {
-      const created = await createList({ name, createdBy: createdBy || undefined });
-      await addBook(created.id, bookId);
+      // One atomic server-side operation (Phase 4 correction pass) — never a
+      // separate create-then-add pair, which left a real partial-success window
+      // (a list could commit with no book if the second call failed).
+      const created = await createListWithBook({ name, createdBy: createdBy || undefined }, bookId);
       setOpen(false);
       onAdded(`Created "${created.name}" and added.`);
     } catch {

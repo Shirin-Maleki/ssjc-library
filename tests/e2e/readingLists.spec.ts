@@ -358,4 +358,64 @@ test.describe("Reading Lists", () => {
     await expect(page).toHaveURL(/\/lists\/.+/);
     await expect(page.getByRole("heading", { name })).toBeVisible();
   });
+
+  // Phase 4 correction pass: the real-database integration suite already proves two
+  // independent Drizzle connections see the same data (tests/integration/db/
+  // readingListRepository.test.ts) — this test proves the FULL stack a teacher
+  // actually experiences: two separate browsers, each with their own cookies/session,
+  // going through staff auth and the authenticated Server Action boundary, not two
+  // database connections standing in for that.
+  test("two independent browser contexts (separate sessions) see a genuinely shared Reading List", async ({
+    browser,
+  }) => {
+    const name = uniqueName("Cross Browser List");
+
+    const contextA = await browser.newContext();
+    const contextB = await browser.newContext();
+    try {
+      const pageA = await contextA.newPage();
+      const pageB = await contextB.newPage();
+
+      // Context A: authenticate independently and create the list.
+      await loginAsStaff(pageA);
+      await pageA.goto("/lists");
+      await openCreateListDialog(pageA);
+      const createDialog = pageA.getByRole("dialog");
+      await createDialog.getByLabel("List name").fill(name);
+      await createDialog.getByRole("button", { name: "Create list" }).click();
+      await expect(pageA).toHaveURL(/\/lists\/.+/);
+
+      // Context B: a completely separate session (its own login, its own cookies) —
+      // not a second tab sharing Context A's auth.
+      await loginAsStaff(pageB);
+      await pageB.goto("/lists");
+      await expect(pageB.getByRole("link", { name: new RegExp(name) })).toBeVisible();
+
+      // Add a real seeded book from Context A.
+      await pageA.goto("/find?q=dinosaurs");
+      const firstRow = pageA.locator("li:has(h3)").first();
+      const title = await firstRow.locator("h3").innerText();
+      await firstRow.getByRole("button", { name: /Add ".*" to a reading list/ }).click();
+      const addDialog = pageA.getByRole("dialog");
+      await addDialog.getByRole("button", { name: new RegExp(name) }).click();
+      await expect(addDialog).toBeHidden();
+
+      // Context B sees the book without ever having done anything itself — proof
+      // this is genuinely server-mediated shared state, not something Context A's
+      // browser is merely remembering locally.
+      await pageB.goto("/lists");
+      await pageB.getByRole("link", { name: new RegExp(name) }).click();
+      await expect(pageB.getByRole("heading", { level: 3, name: title })).toBeVisible();
+
+      // Clean up the list this test created.
+      await pageA.goto("/lists");
+      await pageA.getByRole("link", { name: new RegExp(name) }).click();
+      await pageA.getByRole("button", { name: "Delete" }).click();
+      await pageA.getByRole("dialog").getByRole("button", { name: "Delete list" }).click();
+      await expect(pageA).toHaveURL("/lists");
+    } finally {
+      await contextA.close();
+      await contextB.close();
+    }
+  });
 });

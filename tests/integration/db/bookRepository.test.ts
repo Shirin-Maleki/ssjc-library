@@ -54,15 +54,25 @@ describe.skipIf(!hasTestDb)("DrizzleBookRepository (against a real, seeded Postg
     expect(singleCopy!.copyCount).toBe(1);
   });
 
-  it("projects the deliberate multilingual seed example via a real book_languages relation", async () => {
-    // The book itself still reports its primary language via languageCode; the
-    // additional-language relation is a real, queryable row (docs/DATA_MODEL.md §3).
-    const { bookLanguages } = await import("@/db/schema");
+  it("projects the deliberate multilingual seed example's additional languages itself — not merely visible via a raw book_languages query (Phase 4 correction pass)", async () => {
+    // The whole point of this test is that DrizzleBookRepository's own projection
+    // carries additionalLanguageCodes — a raw query against book_languages would
+    // prove the row exists in the database but nothing about whether the repository
+    // that Find/Book Detail actually use surfaces it.
     const all = await repository.listBooks();
     const guessHowMuch = all.find((b) => b.title === "Guess How Much I Love You")!;
+    // Primary language is untouched by the multilingual projection.
     expect(guessHowMuch.languageCode).toBe("en");
-    const [row] = await db.select().from(bookLanguages).where(eq(bookLanguages.bookId, guessHowMuch.id));
-    expect(row.languageCode).toBe("sv");
+    // Both additional languages seeded for this book — "sv" (one of the original six
+    // fixture languages) and "de" (deliberately not one of them, proving the
+    // centralized ISO 639-1 registry governs real records, not a hard-coded list).
+    expect(guessHowMuch.additionalLanguageCodes?.sort()).toEqual(["de", "sv"]);
+  });
+
+  it("a single-language book's additionalLanguageCodes is undefined, not an empty array with a stray row", async () => {
+    const all = await repository.listBooks();
+    const caterpillar = all.find((b) => b.title === "The Very Hungry Caterpillar");
+    expect(caterpillar!.additionalLanguageCodes).toBeUndefined();
   });
 
   it("getBookById fetches a single book by its real UUID", async () => {

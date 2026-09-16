@@ -38,7 +38,10 @@ export function matchesFilters(book: Book, filters: Filters): boolean {
   if (typeof filters.ageYears === "number" && !bookMatchesAgeYears(book, filters.ageYears)) {
     return false;
   }
-  if (!orMatch(filters.languages, book.languageCode)) return false;
+  // A multilingual book (a primary language plus one or more `additionalLanguageCodes`)
+  // must be discoverable by a teacher filtering on any one of them, not just the
+  // primary — same OR-within-a-group semantics as illustrationStyles below.
+  if (!orMatchAny(filters.languages, [book.languageCode, ...(book.additionalLanguageCodes ?? [])])) return false;
   if (!orMatch(filters.fictionTypes, book.fictionType)) return false;
   if (!orMatch(filters.categories, book.physicalCategory)) return false;
   if (!orMatch(filters.formats, book.format)) return false;

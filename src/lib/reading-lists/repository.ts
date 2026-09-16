@@ -16,4 +16,11 @@ export interface ReadingListRepository {
   delete(id: string): Promise<void>;
   addBook(listId: string, bookId: string): Promise<ReadingList>;
   removeBook(listId: string, bookId: string): Promise<ReadingList>;
+  /** The Add-to-Reading-List dialog's "Create new list" step (product brief §16/17) —
+   * one atomic operation, not `create()` followed by a separate `addBook()`. Phase 4
+   * correction pass: the previous two-call sequence left a real partial-success
+   * window (a list could commit with no book if the second call failed), which the
+   * `DrizzleReadingListRepository` implementation closes with a single database
+   * transaction — if the book can't be added, the list is never created either. */
+  createWithBook(input: CreateReadingListInput, bookId: string): Promise<ReadingList>;
 }

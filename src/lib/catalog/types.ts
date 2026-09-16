@@ -6,6 +6,13 @@
  * source changed from `fixtures.ts` to Postgres.
  */
 
+// Imported (and re-exported below) from languages.ts, the actual centralized ISO
+// 639-1 registry, so every existing `import type { LanguageCode } from
+// "@/lib/catalog/types"` keeps working — see that file for the real definition and
+// why it isn't declared here.
+import type { LanguageCode } from "./languages";
+export type { LanguageCode };
+
 export type FictionType = "fiction" | "nonfiction";
 
 export type Format =
@@ -38,8 +45,6 @@ export type VisualRealism =
 
 export type DurationBand = "under_5" | "five_to_ten" | "ten_plus";
 
-export type LanguageCode = "en" | "sv" | "no" | "da" | "es" | "fr";
-
 /** A tag is just a normalized string from a controlled vocabulary — see tags.ts. */
 export type Tag = string;
 
@@ -61,7 +66,19 @@ export interface Book {
   illustrators?: string[];
   publisher: string;
   imprint?: string;
+  /** The primary/display language — see docs/DATA_MODEL.md §3. Never removed or
+   * repurposed in favor of `additionalLanguageCodes` below; a book always has exactly
+   * one primary language, plus zero or more additional ones for multilingual
+   * editions. */
   languageCode: LanguageCode;
+  /** Additional languages for a multilingual edition (`book_languages` rows),
+   * distinct from `languageCode` — a book with `languageCode: "en"` and
+   * `additionalLanguageCodes: ["sv"]` must be discoverable by a teacher filtering on
+   * either English or Swedish (docs/DATA_MODEL.md §3). Optional, not `[]`, because
+   * the fixture source (`fixtures.ts`) has no `book_languages` table to derive it
+   * from — always present (possibly empty) when projected by `DrizzleBookRepository`.
+   * Every consumer treats `undefined` the same as `[]`. */
+  additionalLanguageCodes?: LanguageCode[];
   description: string;
   /** Canonical unit is whole months — see docs/DATA_MODEL.md §4. Independently
    * nullable in either direction (both unknown, open-ended lower/upper bound, or

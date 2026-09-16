@@ -1,5 +1,5 @@
 import type { DurationBand, IllustrationStyle, LanguageCode, VisualRealism } from "@/lib/catalog/types";
-import { findLanguageByName, LANGUAGE_NAMES } from "@/lib/catalog/languages";
+import { findLanguageByName, ISO_639_1_LANGUAGE_NAMES } from "@/lib/catalog/languages";
 import { parseAgeYearsFromText } from "@/lib/catalog/age";
 import { parseDurationBandFromText } from "@/lib/catalog/duration";
 import { ILLUSTRATION_STYLE_LABELS } from "@/lib/catalog/labels";
@@ -25,10 +25,10 @@ function parseVisualRealismIntent(normalizedQuery: string): VisualRealism[] | un
 }
 
 function parseLanguageIntent(normalizedQuery: string): LanguageCode | undefined {
-  for (const code of Object.keys(LANGUAGE_NAMES) as LanguageCode[]) {
-    const name = LANGUAGE_NAMES[code].toLowerCase();
+  for (const code of Object.keys(ISO_639_1_LANGUAGE_NAMES) as LanguageCode[]) {
+    const name = ISO_639_1_LANGUAGE_NAMES[code].toLowerCase();
     if (new RegExp(`\\b${name}\\b`).test(normalizedQuery)) {
-      return findLanguageByName(LANGUAGE_NAMES[code]);
+      return findLanguageByName(ISO_639_1_LANGUAGE_NAMES[code]);
     }
   }
   return undefined;

@@ -1293,3 +1293,125 @@ corrections.
 
 **Relevant files:** `src/db/schema/{enums,books}.ts`; `src/db/repositories/bookRepository.ts`;
 `docs/DATA_MODEL.md` §2/§16; `docs/SEARCH.md`.
+
+---
+
+## Multilingual data access: completing the language registry (Phase 4 correction pass)
+
+**Date:** 2026-09-16 · **Status:** Locked.
+
+**Problem:** The reviewed schema always had `books.language_code` (primary language) plus
+`book_languages` (additional languages for multilingual editions) — `docs/DATA_MODEL.md` §3.
+Phase 4's implementation created the table and seeded two real multilingual examples, but two
+gaps meant the feature wasn't actually usable: `DrizzleBookRepository` never batch-loaded
+`book_languages` at all (so `additionalLanguageCodes` didn't exist on the projected `Book`), and
+`LanguageCode`/`LANGUAGE_NAMES` was a six-entry stub matching only the fixture catalog's
+languages, not the "standard ISO 639-1 list" `docs/DATA_MODEL.md` §3 always said it would be.
+
+**Options considered:** (a) fix both gaps directly — batch-load `book_languages` alongside the
+repository's other relations, and replace the six-code stub with a genuine ISO 639-1 registry;
+(b) leave the registry narrow and only widen it if/when a real record needs a seventh language;
+(c) add a database `languages` enum/table now that a real gap surfaced.
+
+**Chosen approach:** (a).
+
+**Why:** (b) would mean the *next* real multilingual book outside the original six silently
+fails to display a proper language name (falling back to the raw code) or, worse, gets rejected
+by validation that was never actually exercised — deferring a fix for a gap that's already
+identified isn't the same judgment call as not building something speculative yet. (c) is
+exactly the schema-complexity regression the Phase 0 review already rejected (`docs/DATA_MODEL.md`
+§12) — the whole point of the registry-not-a-table decision was that this doesn't need
+database-level normalization; the bug was in the application code not living up to that design,
+not evidence the design was wrong.
+
+**Consequences:** `Book.additionalLanguageCodes` is now a real, populated field (optional,
+`undefined` meaning "no additional languages," matching the existing `copyCount?` precedent —
+see `src/lib/catalog/types.ts`). `filters.ts` and `facets.ts` treat a book's primary and
+additional languages identically for matching/faceting (the same OR-within-a-group semantics
+`illustrationStyles` already used) — search **ranking** (`rank.ts`'s free-text language-mention
+bonus) was deliberately left untouched, since this correction pass's scope is filtering/facets,
+not ranking behavior. The seed data now includes "de" (German) as a second additional language
+on one book specifically to prove a real record isn't limited to the original six fixture
+languages.
+
+**How to change later:** Add a new code to `ISO_639_1_LANGUAGE_NAMES` in
+`src/lib/catalog/languages.ts` — nothing else needs to change; the type (`keyof typeof`) and
+every consumer widen automatically.
+
+**Relevant files:** `src/lib/catalog/{languages,types}.ts`; `src/db/repositories/
+bookRepository.ts`; `src/lib/search/{filters,facets}.ts`; `src/db/seed.ts`; `docs/DATA_MODEL.md`
+§3/§16.
+
+---
+
+## Reading List failures: typed domain errors and an atomic create-and-add (Phase 4 correction pass)
+
+**Date:** 2026-09-16 · **Status:** Locked.
+
+**Problem:** Two related gaps surfaced in review of the Phase 4 Reading Lists implementation.
+First, the Add-to-Reading-List dialog's "Create new list" step called `create()` then a
+separate `addBook()` — two independent database round-trips, so a failure in the second call
+left a real, persisted, empty "orphan" list with no book on it. Second, no repository method
+distinguished "the referenced list/book doesn't exist" from any other failure — a nonexistent
+book passed to `addBook`, for example, would surface as a raw Postgres foreign-key-violation
+exception, and a malformed (non-UUID) id would surface as a raw "invalid input syntax for type
+uuid" exception. Neither is a safe contract for a Server Action boundary that's directly,
+independently invokable.
+
+**Chosen approach:** A new `ReadingListRepository.createWithBook(input, bookId)` method,
+implemented as one `db.transaction()` — insert the list, insert the item, both or neither.
+Three typed domain error classes (`ReadingListNotFoundError`, `BookNotFoundError`,
+`InvalidIdError` — `src/lib/reading-lists/errors.ts`); every id-taking repository method
+validates UUID shape first (`src/lib/utils/uuid.ts`) and checks the referenced row(s) exist
+*before* attempting a write, so a nonexistent reference is always a deliberate, typed throw,
+never a caught-after-the-fact database exception. The Server Action boundary
+(`src/lib/reading-lists/actions.ts`) validates the same way, independently of the repository —
+a Server Action doesn't know or trust which UI called it.
+
+**Why not just catch the Postgres error code (23503) after the fact?** Checking existence
+first, before writing, is no more code than a catch-and-translate approach, and it composes
+correctly with the atomic `createWithBook` transaction (the existence check has to happen
+*inside* the transaction anyway, before the list insert, for the rollback-on-failure guarantee
+to hold) — a catch-after-write approach would have needed the same pre-check restructuring to
+get atomicity right in the first place.
+
+**Consequences:** The teacher-facing UI is completely unaffected — `AddToReadingListDialog` and
+every other mutation dialog already caught any exception generically and showed one calm
+message; these changes are entirely about the server-side contract being deliberate rather than
+accidental. A real bug was caught by this work's own new integration test before it ever
+shipped: the initial `addBook` implementation only pre-checked that the *book* existed, not the
+list, so a nonexistent list still hit a raw foreign-key violation on the `reading_list_items` →
+`reading_lists` constraint — fixed by checking both sides before the insert.
+
+**Relevant files:** `src/db/repositories/readingListRepository.ts`; `src/lib/reading-lists/
+{errors,actions,repository,remoteRepository,localStorageRepository}.ts`; `src/lib/utils/
+uuid.ts`; `src/components/reading-lists/AddToReadingListDialog.tsx`; `tests/integration/db/
+readingListRepository.test.ts`; `docs/ARCHITECTURE.md` §20.
+
+---
+
+## Metadata field registry: implementing what the schema doc always described
+
+**Date:** 2026-09-16 · **Status:** Locked.
+
+**Problem:** `docs/DATA_MODEL.md` §6 always specified that `book_field_provenance.field_key` is
+validated against a centralized application registry, not a database enum — but that registry
+module never actually existed until this correction pass, and the path the documentation named
+(`lib/metadata/field-registry.ts`) didn't match this project's actual camelCase file-naming
+convention elsewhere in `src/lib/`.
+
+**Chosen approach:** `src/lib/metadata/fieldRegistry.ts` — a plain object mapping a focused,
+non-speculative set of currently-tracked field keys (grouped by the identity/category/age/
+visual/general-metadata concepts the enrichment pipeline in `docs/ARCHITECTURE.md` §11 already
+describes) to a Zod-validated type, matching this project's existing validation convention
+(`src/lib/validation/auth.ts`, `src/lib/catalog/languages.ts`).
+
+**Why not enumerate every plausible future field now?** The brief for this correction pass was
+explicit: don't invent dozens of speculative keys. The whole point of this being an application
+registry instead of a database enum is that adding a field later (Phase 7/8, when the
+enrichment pipeline is real) is a one-line change here — there's no benefit to guessing the
+full future list today, and doing so would misrepresent design decisions (which fields Phase
+7/8 actually tracks) as already made.
+
+**Relevant files:** `src/lib/metadata/fieldRegistry.ts`; `docs/DATA_MODEL.md` §6/§16;
+`docs/ARCHITECTURE.md` (repository structure listing).

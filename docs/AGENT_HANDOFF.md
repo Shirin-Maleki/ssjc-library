@@ -70,11 +70,12 @@ finish it in one pass.
 
 Phase 0 (architecture), Phase 1 (foundation, design system, staff/admin auth), Phase 2 (mock
 catalog + Find a Book, plus a visual/mobile revision), Phase 3 (voice search, Reading Lists,
-Library Guide), and Phase 4 (the real database) are all complete. A real Next.js app runs a
-fully deterministic search/browse/filter experience against a real Postgres database (Drizzle
-ORM, committed migrations, the full 23-table schema) instead of an in-memory fixture array;
-Reading Lists are genuinely shared across every staff member/device via authenticated Server
-Actions, not `localStorage`; the Library Guide is real content. Still no Google or AI
+Library Guide), and Phase 4 (the real database, plus a focused correction pass closing a handful
+of acceptance gaps — see the "Additional lessons" note below) are all complete. A real Next.js
+app runs a fully deterministic search/browse/filter experience against a real Postgres database
+(Drizzle ORM, committed migrations, the full 23-table schema) instead of an in-memory fixture
+array; Reading Lists are genuinely shared across every staff member/device via authenticated
+Server Actions, not `localStorage`; the Library Guide is real content. Still no Google or AI
 integration, and no semantic search (Phase 5 — deliberately deferred, no `embedding` column,
 no pgvector). The full brand system (name, palette, typography, logo) is real — nothing
 placeholder remains there. See `docs/IMPLEMENTATION_STATUS.md` for the authoritative,
@@ -127,6 +128,35 @@ if the test harness touches the same platform behavior the app does.
   before file-based logging directly inside the Server Actions proved the actual `addBook` call
   was never even reached for the failing runs. Add logging at the actual layer boundary you
   suspect, not just at the symptom.
+
+### Additional lessons from the Phase 4 correction pass
+
+- **"Looks correct" isn't the same as "tested" for multi-row FK checks.** Adding a pre-check for
+  "does the referenced book exist" to `addBook`/`createWithBook` looked complete — it wasn't:
+  `reading_list_items` has a foreign key to *both* `reading_lists` and `books`, and only the
+  book side was checked, so a nonexistent list still hit a raw FK violation. The fix was obvious
+  once a real integration test targeted exactly that case; it would not have been caught by
+  reading the code again. When a table has more than one FK, write a failing-reference test for
+  *each* one, not just the one the task description happened to mention first.
+- **A schema/architecture doc's own claims (a promised module, a described registry) are a real
+  gap if the module doesn't exist yet** — `docs/DATA_MODEL.md` had described both the language
+  registry and the metadata field-key registry as already-centralized application concerns since
+  Phase 0, but the language registry was an under-scoped stub and the field registry didn't
+  exist at all. When a doc says "validated against X," verify X is actually there and actually
+  does what the doc claims, rather than trusting the doc's own confidence.
+- **Check UUID-shaped columns for the "malformed input reaches a raw database error" gap
+  everywhere an id crosses a trust boundary, not just once.** The same fix (validate shape,
+  return/throw a safe domain outcome before querying) was needed independently at three layers
+  for Reading Lists (the repository, the Server Action boundary) and separately for Book Detail
+  — there's no single place that protects all of them; each externally-reachable id parameter
+  needs its own check.
+- **A flaky-looking E2E run after a long session may be leftover browser processes, not a code
+  regression.** Non-deterministic timeouts across completely unrelated spec files (never the
+  ones actually changed) turned out to be `chrome-headless-shell` processes orphaned from an
+  earlier session, over a day old, eating ~1.5GB of swap. `ps aux | grep ms-playwright` (or
+  `pgrep -f chrome-headless-shell`) and killing anything with an implausibly long `ELAPSED` time
+  is the first thing to check before assuming a real regression — it took a full run from
+  15–35 minutes down to 35 seconds. Full account in `docs/TESTING.md`.
 
 ## Practical lessons from Phase 3 (worth knowing before touching voice or Reading Lists code)
 
@@ -256,10 +286,13 @@ data, entirely behind a `ReadingListRepository` interface**
 (`src/lib/reading-lists/repository.ts`) — components call `useReadingLists()` (the
 `ReadingListsProvider` context, mounted once in the staff layout), never Drizzle/Postgres or a
 Server Action directly. The real chain is `ReadingListsProvider → RemoteReadingListRepository
-(client-safe) → 7 authenticated Server Actions → DrizzleReadingListRepository → Postgres` — the
+(client-safe) → 8 authenticated Server Actions → DrizzleReadingListRepository → Postgres` — the
 old `LocalStorageReadingListRepository` is retained only as reference/example code, no longer
 used in production. No component, dialog, or page above the repository boundary changed when
-this swap happened, confirming the Phase 3 seam worked as designed. Voice search (also Phase 3)
-is the browser's own Web Speech API only — no server-side speech key, no AI interpretation of
-the transcript; it becomes a query through the exact same `buildFindHref()`/`searchBooks()`
-path typed search already uses. See `docs/DECISIONS.md` for the full reasoning behind both.
+this swap happened, confirming the Phase 3 seam worked as designed. The Add-to-list dialog's
+"Create new list" step (`createWithBook`, added in the Phase 4 correction pass) is one atomic
+transaction, not create-then-add — see the correction-pass lessons above before changing any
+Reading List mutation method. Voice search (also Phase 3) is the browser's own Web Speech API
+only — no server-side speech key, no AI interpretation of the transcript; it becomes a query
+through the exact same `buildFindHref()`/`searchBooks()` path typed search already uses. See
+`docs/DECISIONS.md` for the full reasoning behind both.

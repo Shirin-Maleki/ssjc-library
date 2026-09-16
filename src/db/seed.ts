@@ -77,12 +77,16 @@ const BOOK_ID_BY_SLUG: Record<string, string> = {
 };
 
 /** A small number of explicit, deliberate development-only additions (Phase 4 brief
- * §28) — the 48 fixture books are each single-language; these two rows exercise the
+ * §28) — the 48 fixture books are each single-language; these rows exercise the
  * genuinely relational `book_languages` multilingual case without fabricating new
- * books. Not implying the school actually owns a Swedish "Guess How Much I Love You";
- * this is seed/test data. */
+ * books. Not implying the school actually owns a Swedish/German "Guess How Much I
+ * Love You" or a French "The Rainbow Fish"; this is seed/test data. "de" (German) is
+ * deliberately included alongside the original six fixture languages — proof that
+ * `src/lib/catalog/languages.ts`'s centralized ISO 639-1 registry, not a hard-coded
+ * six-language list, is what actually governs a real database record (Phase 4
+ * correction pass, docs/DECISIONS.md). */
 const ADDITIONAL_LANGUAGES: Record<string, string[]> = {
-  "guess-how-much-i-love-you": ["sv"],
+  "guess-how-much-i-love-you": ["sv", "de"],
   "the-rainbow-fish": ["fr"],
 };
 

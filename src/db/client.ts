@@ -24,9 +24,11 @@ if (!connectionString) {
 }
 
 const queryClient = postgres(connectionString, {
-  // Supabase's pooled connection (the expected DATABASE_URL in production) does not
-  // support prepared statements — disabling them here is correct for both that case
-  // and a plain local/direct Postgres connection.
+  // Supabase's transaction-pooler connection (the intended DATABASE_URL for a real,
+  // serverless deployment — see docs/DATABASE_SETUP.md) does not support prepared
+  // statements. Unconditional, not environment-specific: also correct and harmless
+  // against a direct/session connection or a plain local Postgres instance. Do not
+  // remove this if DATABASE_URL is ever pointed at a transaction pooler.
   prepare: false,
 });
 

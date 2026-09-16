@@ -21,6 +21,10 @@ interface ReadingListsContextValue {
   loadError: string | null;
   getById: (id: string) => ReadingList | undefined;
   createList: (input: CreateReadingListInput) => Promise<ReadingList>;
+  /** The Add-to-Reading-List dialog's "Create new list" step — one atomic server
+   * operation (Phase 4 correction pass), not a separate `createList` + `addBook`
+   * pair, which left a real partial-success window. */
+  createListWithBook: (input: CreateReadingListInput, bookId: string) => Promise<ReadingList>;
   renameList: (id: string, name: string) => Promise<ReadingList>;
   deleteList: (id: string) => Promise<void>;
   addBook: (listId: string, bookId: string) => Promise<ReadingList>;
@@ -84,6 +88,15 @@ export function ReadingListsProvider({ children }: { children: ReactNode }) {
     [repository, refresh]
   );
 
+  const createListWithBook = useCallback(
+    async (input: CreateReadingListInput, bookId: string) => {
+      const created = await repository.createWithBook(input, bookId);
+      await refresh();
+      return created;
+    },
+    [repository, refresh]
+  );
+
   const renameList = useCallback(
     async (id: string, name: string) => {
       const renamed = await repository.rename(id, name);
@@ -120,8 +133,8 @@ export function ReadingListsProvider({ children }: { children: ReactNode }) {
   );
 
   const value = useMemo<ReadingListsContextValue>(
-    () => ({ lists, ready, loadError, getById, createList, renameList, deleteList, addBook, removeBook }),
-    [lists, ready, loadError, getById, createList, renameList, deleteList, addBook, removeBook]
+    () => ({ lists, ready, loadError, getById, createList, createListWithBook, renameList, deleteList, addBook, removeBook }),
+    [lists, ready, loadError, getById, createList, createListWithBook, renameList, deleteList, addBook, removeBook]
   );
 
   return <ReadingListsContext.Provider value={value}>{children}</ReadingListsContext.Provider>;
