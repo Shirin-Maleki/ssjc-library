@@ -8,7 +8,13 @@ import { BookResultRow } from "./BookResultRow";
 const INITIAL_VISIBLE = 5;
 const SHOW_MORE_BATCH = 10;
 
-export function ResultsList({ results, findUrl }: { results: SearchResult[]; findUrl: string }) {
+interface ResultsListProps {
+  results: SearchResult[];
+  findUrl: string;
+  categoryLabelBySlug: Record<string, string>;
+}
+
+export function ResultsList({ results, findUrl, categoryLabelBySlug }: ResultsListProps) {
   const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE);
   const visible = results.slice(0, visibleCount);
   const remaining = results.length - visible.length;
@@ -20,7 +26,12 @@ export function ResultsList({ results, findUrl }: { results: SearchResult[]; fin
       </p>
       <ul className="flex flex-col">
         {visible.map((result) => (
-          <BookResultRow key={result.book.id} result={result} findUrl={findUrl} />
+          <BookResultRow
+            key={result.book.id}
+            result={result}
+            findUrl={findUrl}
+            categoryLabel={categoryLabelBySlug[result.book.physicalCategory] ?? result.book.physicalCategory}
+          />
         ))}
       </ul>
       {remaining > 0 && (

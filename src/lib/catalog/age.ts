@@ -4,9 +4,18 @@
  * about years directly.
  */
 
-export function formatAgeRange(minMonths: number, maxMonths: number): string {
-  const minYears = Math.floor(minMonths / 12);
-  const maxYears = maxMonths % 12 === 0 ? maxMonths / 12 : Math.ceil(maxMonths / 12);
+/** Every branch here is a real, reachable case now that a database record can
+ * legitimately have an unknown or open-ended age (docs/DATA_MODEL.md §4; Phase 4
+ * brief §17) — never assume both bounds are present. */
+export function formatAgeRange(minMonths: number | undefined, maxMonths: number | undefined): string {
+  if (minMonths == null && maxMonths == null) return "Age not specified";
+  if (minMonths != null && maxMonths == null) return `${Math.floor(minMonths / 12)}+ years`;
+  if (minMonths == null && maxMonths != null) {
+    const years = maxMonths % 12 === 0 ? maxMonths / 12 : Math.ceil(maxMonths / 12);
+    return `Up to ${years} years`;
+  }
+  const minYears = Math.floor(minMonths! / 12);
+  const maxYears = maxMonths! % 12 === 0 ? maxMonths! / 12 : Math.ceil(maxMonths! / 12);
   if (minYears === maxYears) return `${minYears} years`;
   return `${minYears}–${maxYears} years`;
 }
@@ -18,12 +27,19 @@ export function ageYearsToRepresentativeMonths(years: number): number {
   return years * 12 + 6;
 }
 
+/** A book with both bounds unknown can never confidently satisfy a specific age
+ * filter — excluded, not assumed suitable (matches the "flagged missing_metadata"
+ * treatment in docs/DATA_MODEL.md §4). An open-ended bound (one side only) is
+ * treated as unbounded on that side. */
 export function bookMatchesAgeYears(
-  book: { ageMinMonths: number; ageMaxMonths: number },
+  book: { ageMinMonths?: number; ageMaxMonths?: number },
   years: number
 ): boolean {
+  if (book.ageMinMonths == null && book.ageMaxMonths == null) return false;
   const point = ageYearsToRepresentativeMonths(years);
-  return book.ageMinMonths <= point && point <= book.ageMaxMonths;
+  const min = book.ageMinMonths ?? -Infinity;
+  const max = book.ageMaxMonths ?? Infinity;
+  return min <= point && point <= max;
 }
 
 const WORD_NUMBERS: Record<string, number> = {

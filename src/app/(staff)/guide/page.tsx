@@ -103,8 +103,7 @@ export default function GuidePage() {
           for planning and discovery only; they never change a book&rsquo;s physical shelf location.
         </p>
         <p className="text-sm text-text-muted">
-          In this current version, a list is saved only in the browser that created it — not yet shared across
-          devices. <Link href="/lists" className="font-medium text-text-secondary underline underline-offset-4 hover:text-text-primary">Open Reading Lists</Link>.
+          <Link href="/lists" className="font-medium text-text-secondary underline underline-offset-4 hover:text-text-primary">Open Reading Lists</Link>.
         </p>
       </Section>
 

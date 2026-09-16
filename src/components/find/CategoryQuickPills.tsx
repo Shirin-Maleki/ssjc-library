@@ -1,8 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { books } from "@/lib/catalog/fixtures";
-import { buildFacets } from "@/lib/search/facets";
+import type { FacetOption } from "@/lib/search/facets";
 import type { Filters } from "@/lib/search/filters";
 import { buildFindHref } from "@/lib/search/urlParams";
 import { cn } from "@/lib/utils/cn";
@@ -10,6 +9,9 @@ import { cn } from "@/lib/utils/cn";
 interface CategoryQuickPillsProps {
   query: string;
   filters: Filters;
+  /** Precomputed server-side (Phase 4 brief §31) — this component never imports the
+   * catalog or computes facets itself. */
+  categories: FacetOption[];
 }
 
 /**
@@ -19,8 +21,7 @@ interface CategoryQuickPillsProps {
  * on the browse state. Plain links (not buttons + router.push), so each toggle is a
  * real, shareable URL and works without JavaScript.
  */
-export function CategoryQuickPills({ query, filters }: CategoryQuickPillsProps) {
-  const facets = buildFacets(books);
+export function CategoryQuickPills({ query, filters, categories }: CategoryQuickPillsProps) {
   const selected = filters.categories ?? [];
 
   return (
@@ -29,7 +30,7 @@ export function CategoryQuickPills({ query, filters }: CategoryQuickPillsProps) 
       role="group"
       aria-label="Quick category filters"
     >
-      {facets.categories.map((category) => {
+      {categories.map((category) => {
         const isSelected = selected.includes(category.value);
         const nextCategories = isSelected
           ? selected.filter((c) => c !== category.value)

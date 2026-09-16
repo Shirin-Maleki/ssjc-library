@@ -1,9 +1,17 @@
 /**
  * PROVISIONAL development physical taxonomy — NOT the school's final shelving system.
- * Phase 0/8 will design the real, admin-managed physical_categories table; this exists
- * only to validate the Find UX (one category per book, visually distinct from tags).
- * See docs/PRODUCT_SPEC.md for why the legacy taxonomy's subject/genre/format mixing
- * is deliberately not reproduced here.
+ *
+ * As of Phase 4, this array is **seed source material only** (`src/db/seed.ts`) — the
+ * canonical, production source of category data is the database-managed
+ * `physical_categories` table (`src/db/repositories/categoryRepository.ts`), per
+ * docs/DATA_MODEL.md §15 and the Phase 4 brief §15. No production application code
+ * should import this constant; if you're reaching for `getCategoryLabel`, you want a
+ * `categoryLabelBySlug` map built from `categoryRepository.listCategories()` instead
+ * (see `src/app/(staff)/find/page.tsx` for the pattern).
+ *
+ * Phase 0/8 will design the real, admin-managed taxonomy-editing UI; this list exists
+ * only to seed the Find UX's development data. See docs/PRODUCT_SPEC.md for why the
+ * legacy taxonomy's subject/genre/format mixing is deliberately not reproduced here.
  */
 export interface PhysicalCategory {
   id: string;
@@ -20,9 +28,3 @@ export const PHYSICAL_CATEGORIES: PhysicalCategory[] = [
   { id: "everyday-life-play", label: "Everyday Life & Play" },
   { id: "stories-imagination", label: "Stories & Imagination" },
 ];
-
-const byId = new Map(PHYSICAL_CATEGORIES.map((c) => [c.id, c]));
-
-export function getCategoryLabel(id: string): string {
-  return byId.get(id)?.label ?? id;
-}

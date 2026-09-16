@@ -1,5 +1,4 @@
 import type { Book } from "@/lib/catalog/types";
-import { getCategoryLabel, PHYSICAL_CATEGORIES } from "@/lib/catalog/categories";
 import { getLanguageName } from "@/lib/catalog/languages";
 import { DURATION_BAND_LABELS, getReadDurationBand } from "@/lib/catalog/duration";
 import { FICTION_TYPE_LABELS, FORMAT_LABELS, ILLUSTRATION_STYLE_LABELS, VISUAL_REALISM_LABELS } from "@/lib/catalog/labels";
@@ -11,8 +10,13 @@ export interface FacetOption {
 
 /** Every filter option list is derived from the books actually present, the same
  * "no second hidden list" rule autocomplete follows — a format or language with zero
- * fixture books simply doesn't appear as a choice. */
-export function buildFacets(books: Book[]) {
+ * fixture books simply doesn't appear as a choice.
+ *
+ * `categories` is real category data (slug + label) fetched server-side from
+ * `physical_categories` (Phase 4 brief §15/§31) — this function no longer imports the
+ * old hard-coded `PHYSICAL_CATEGORIES` constant itself, so it has no way to silently
+ * fall back to a second taxonomy source. */
+export function buildFacets(books: Book[], categories: { slug: string; label: string }[]) {
   const languageCodes = Array.from(new Set(books.map((b) => b.languageCode)));
   const formats = Array.from(new Set(books.map((b) => b.format)));
   const illustrationStyles = Array.from(new Set(books.flatMap((b) => b.illustrationStyles)));
@@ -24,10 +28,9 @@ export function buildFacets(books: Book[]) {
   const categoriesInUse = new Set(books.map((b) => b.physicalCategory));
 
   return {
-    categories: PHYSICAL_CATEGORIES.filter((c) => categoriesInUse.has(c.id)).map((c) => ({
-      value: c.id,
-      label: c.label,
-    })) satisfies FacetOption[],
+    categories: categories
+      .filter((c) => categoriesInUse.has(c.slug))
+      .map((c) => ({ value: c.slug, label: c.label })) satisfies FacetOption[],
     languages: languageCodes
       .map((code) => ({ value: code, label: getLanguageName(code) }))
       .sort((a, b) => a.label.localeCompare(b.label)),
@@ -49,5 +52,3 @@ export function buildFacets(books: Book[]) {
     publishers: publishers.map((p) => ({ value: p, label: p })),
   };
 }
-
-export { getCategoryLabel };

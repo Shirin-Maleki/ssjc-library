@@ -1,9 +1,10 @@
 # Data Model
 
-Status: Phase 0 — revised after first architecture review (2026-09-13). Proposed schema
-design, not yet implemented as migrations. Column types are indicative of intent, not final
-SQL syntax. See the changelog at the bottom of this document for exactly what changed in
-this revision.
+Status: Phase 0 design (revised after first architecture review, 2026-09-13), **implemented
+as real, committed Drizzle migrations in Phase 4** (2026-09-16). This document now describes
+the schema as actually built, not just as designed — §16 documents every point where
+implementation diverged from this Phase 0 design, and why. Everywhere else in this document
+that isn't called out in §16 was implemented exactly as designed here.
 
 Conventions: `snake_case`, plural table names, singular `_id` foreign keys, every table has
 `id uuid primary key default gen_random_uuid()` unless noted, and `created_at timestamptz`
@@ -65,8 +66,8 @@ regardless of how many physical copies exist.
 | `read_duration_band` | enum(`under_5`,`five_to_ten`,`ten_plus`) | |
 | `format` | enum(`board_book`,`picture_book`,`early_reader`,`chapter_book`,`informational_reference`,`activity_book`,`other`) | bibliographic format |
 | `physical_size_exception` | enum(`regular`,`board_small`,`oversized_big`), not null default `regular` | shelving accommodation only — human-set, never inferred from a photo |
-| `visual_media_type` | enum(`photography`,`watercolor`,`collage`,`digital_illustration`,`pencil`,`ink`,`painted`,`mixed_media`,`graphic_vector`,`other`,`unknown`) | |
-| `visual_realism` | enum(`real_photography`,`realistic_illustration`,`stylized`,`cartoon`,`abstract`,`mixed`,`unknown`) | |
+| `visual_media_type` | enum(`photography`,`watercolor`,`collage`,`digital_illustration`,`pencil`,`ink`,`painted`,`mixed_media`,`graphic_vector`,`other`,`unknown`)`[]` | **array**, not scalar — see §16 |
+| `visual_realism` | enum(`real_photography`,`realistic_illustration`,`stylized_illustration`,`cartoon`,`abstract`,`mixed`,`unknown`) | value renamed from `stylized` — see §16 |
 | `publisher_id` | uuid, FK → `publishers.id` | nullable |
 | `imprint` | text | nullable |
 | `publication_year` | smallint | nullable |
@@ -78,9 +79,10 @@ regardless of how many physical copies exist.
 | `display_cover_url` | text | the **display cover** actually rendered in the app — see §5 |
 | `display_cover_source` | enum(`derived_from_drive`,`external_provider_thumbnail`,`drive_proxy_fallback`) | which strategy produced `display_cover_url` |
 | `review_status` | enum(`pending_review`,`active`,`archived`), not null default `pending_review` | denormalized visibility gate, kept in sync by application code |
-| `embedding` | vector(N) | nullable; N is TBD pending embedding provider choice |
-| `embedding_source_hash` / `embedding_generated_at` | text / timestamptz | nullable |
 | `created_at` / `updated_at` / `verified_at` | timestamptz | |
+
+**Not implemented in Phase 4:** `embedding` / `embedding_source_hash` / `embedding_generated_at`
+— semantic search is entirely out of scope for this phase; see §16.
 
 **Removed from this table in this revision:** `copy_count`, `home_location`,
 `current_location`, `availability_status`, `work_group_id` — see below and §12.
@@ -346,9 +348,39 @@ books/copies split rather than pointing at two overlapping targets.
 
 ### `book_identity_candidates` / `metadata_provider_cache`
 
-Unchanged from the first draft — see the earlier design rationale: every provider candidate
-considered is retained for audit (`book_identity_candidates`), and provider responses are
-cached by normalized query (`metadata_provider_cache`) for cost/rate-limit control.
+Unchanged in *purpose* from the first draft — every provider candidate considered is retained
+for audit (`book_identity_candidates`), and provider responses are cached by normalized query
+(`metadata_provider_cache`) for cost/rate-limit control — but this document never actually
+specified their columns ("unchanged from the first draft" pointed at a draft that didn't list
+them either). Phase 4 fills them in, consistent with the stated purpose above and the rest of
+this schema's conventions:
+
+**`book_identity_candidates`**
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid PK | |
+| `ingestion_item_id` | uuid, FK → `ingestion_items.id`, not null | |
+| `provider` | text, not null | e.g. `"google_books"`, `"open_library"` |
+| `provider_identifier` | text | nullable, e.g. the provider's own volume/work ID |
+| `raw_response` | jsonb | nullable, the full provider payload for this candidate |
+| `match_confidence` | numeric(3,2) | nullable |
+| `was_selected` | boolean, not null default `false` | which single candidate the pipeline actually used |
+| `created_at` | timestamptz | |
+
+**`metadata_provider_cache`**
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid PK | |
+| `provider` | text, not null | |
+| `normalized_query` | text, not null | |
+| `response` | jsonb, not null | |
+| `created_at` | timestamptz | |
+| `expires_at` | timestamptz | nullable |
+
+Unique constraint on `(provider, normalized_query)` — one cached response per provider per
+normalized query, so a repeat lookup during bulk import is a cache read, not a re-fetch.
 
 ## 11. Sheets sync, audit & configuration
 
@@ -458,3 +490,51 @@ erDiagram
   as whole months (§4).
 - Both open questions from the first draft are resolved (age unit; field-key vocabulary) —
   no open questions remain in this revision.
+
+**2026-09-16 — Phase 4 implementation:**
+- All 23 tables implemented as committed Drizzle ORM migrations under `drizzle/` (generated via
+  `drizzle-kit generate`, applied via `npm run db:migrate` — never `drizzle-kit push`). See
+  `docs/DATABASE_SETUP.md`.
+- The 48-book fixture catalog (`src/lib/catalog/fixtures.ts`) became seed data (`src/db/seed.ts`) with
+  stable, hardcoded UUIDs — not the fixtures' string slugs, which remain URL-facing identifiers
+  only for `physical_categories.slug`, never a table primary key.
+
+## 16. Phase 4 as-built status
+
+Every deviation from the design above, and why:
+
+- **`books.visual_media_type` is a Postgres array of the enum, not a scalar column.** The
+  design table in §2 originally listed it as a single value, but Phase 0's own requirement
+  (carried into Phase 2's search) is that a book can match a multi-valued illustration-style
+  query like "real pictures of animals" — a single-valued column can't represent a book that's
+  genuinely both `photography` and `collage`, for example. Implemented as
+  `visualMediaTypeEnum("visual_media_type").array()` in `src/db/schema/books.ts`. This is the
+  smallest correction that makes the column able to represent what Phase 2's search already
+  needed — not a new requirement invented in Phase 4. See `docs/DECISIONS.md`.
+- **`visual_realism`'s `stylized` value is named `stylized_illustration`.** Purely a naming
+  clarification — `stylized` alone was ambiguous next to `realistic_illustration` and
+  `cartoon`; no meaning changed, no data lost. Also added a DB-only `unknown` value (matching
+  the pattern every other classification enum in this schema already uses for "not yet
+  determined") — no seed book uses it, and the repository layer's projection falls back to a
+  narrow constant if it's ever encountered, documented in `src/db/repositories/bookRepository.ts`.
+- **`embedding` / `embedding_source_hash` / `embedding_generated_at` were not added to `books`
+  at all.** Phase 4's brief explicitly scopes semantic search, embeddings, and pgvector out —
+  adding an unused `vector(N)` column with an invented placeholder dimension would misrepresent
+  a real decision (which embedding provider, and what dimension) as already made. Deferred
+  entirely; §13/pgvector remains an accurate description of Phase 5's future work, not
+  something partially started.
+- **`book_identity_candidates` and `metadata_provider_cache` now have real, specific columns**
+  (§10) — the Phase 0 draft never actually listed them ("unchanged from the first draft"
+  pointed at a first draft that also didn't specify them). Filled in during implementation,
+  consistent with each table's stated purpose.
+- **Everything else in this document — every other table, column, index, and constraint —
+  was implemented exactly as designed**, including the full provenance-history model (§6), the
+  books/copies split with copy count always a derived `count(*)` (§2), the circular
+  `book_copies` ↔ `ingestion_items` foreign key (§10, resolved with Drizzle's `AnyPgColumn`
+  lazy-reference form), and the age-representation rules (§4).
+- **Not built in Phase 4, and not part of this schema's job to solve:** Reading Lists moved
+  from `localStorage` to these same `reading_lists` / `reading_list_items` tables — see
+  `docs/DECISIONS.md`, "Reading Lists: from localStorage to Postgres," and
+  `docs/ARCHITECTURE.md` §20. The rate limiter described in `docs/SECURITY.md` still keeps its
+  Phase 1 in-memory implementation — wiring it to `login_attempts` for real persistence was
+  deliberately left out of Phase 4's scope to avoid unrelated scope creep.

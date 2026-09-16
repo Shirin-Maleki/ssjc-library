@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { getCategoryLabel } from "@/lib/catalog/categories";
 import { getLanguageName } from "@/lib/catalog/languages";
 import { DURATION_BAND_LABELS } from "@/lib/catalog/duration";
 import { FICTION_TYPE_LABELS, FORMAT_LABELS, ILLUSTRATION_STYLE_LABELS, VISUAL_REALISM_LABELS } from "@/lib/catalog/labels";
@@ -25,7 +24,7 @@ function withoutValue<K extends keyof Filters>(filters: Filters, key: K, value: 
   return { ...filters, [key]: list.filter((v) => v !== value) };
 }
 
-function buildChips(query: string, filters: Filters): Chip[] {
+function buildChips(query: string, filters: Filters, categoryLabelBySlug: Record<string, string>): Chip[] {
   const chips: Chip[] = [];
 
   if (typeof filters.ageYears === "number") {
@@ -39,7 +38,7 @@ function buildChips(query: string, filters: Filters): Chip[] {
   for (const value of filters.categories ?? []) {
     chips.push({
       key: `category:${value}`,
-      label: getCategoryLabel(value),
+      label: categoryLabelBySlug[value] ?? value,
       href: buildFindHref(query, withoutValue(filters, "categories", value)),
     });
   }
@@ -106,10 +105,16 @@ function buildChips(query: string, filters: Filters): Chip[] {
   return chips;
 }
 
-export function ActiveFilters({ query, filters }: { query: string; filters: Filters }) {
+interface ActiveFiltersProps {
+  query: string;
+  filters: Filters;
+  categoryLabelBySlug: Record<string, string>;
+}
+
+export function ActiveFilters({ query, filters, categoryLabelBySlug }: ActiveFiltersProps) {
   if (!hasActiveFilters(filters)) return null;
 
-  const chips = buildChips(query, filters);
+  const chips = buildChips(query, filters, categoryLabelBySlug);
 
   return (
     <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Active filters">

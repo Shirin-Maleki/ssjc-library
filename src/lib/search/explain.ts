@@ -1,4 +1,3 @@
-import { getCategoryLabel } from "@/lib/catalog/categories";
 import { getLanguageName } from "@/lib/catalog/languages";
 import { DURATION_BAND_LABELS } from "@/lib/catalog/duration";
 import {
@@ -31,7 +30,7 @@ const REASON_PRIORITY: MatchReasonType[] = [
   "description",
 ];
 
-function phraseFor(reason: MatchReason): string {
+function phraseFor(reason: MatchReason, categoryLabelBySlug: Map<string, string>): string {
   switch (reason.type) {
     case "title_exact":
     case "title_prefix":
@@ -44,7 +43,7 @@ function phraseFor(reason: MatchReason): string {
     case "publisher":
       return `publisher ${reason.value}`;
     case "category":
-      return `the ${getCategoryLabel(reason.value ?? "")} category`;
+      return `the ${categoryLabelBySlug.get(reason.value ?? "") ?? reason.value} category`;
     case "tag":
       return `the "${reason.value}" topic`;
     case "language":
@@ -80,7 +79,10 @@ function joinPhrases(phrases: string[]): string {
  * a free-form generated sentence, and never a reason for a signal that didn't match
  * (docs/SEARCH.md "match explanations must be deterministic and grounded").
  */
-export function buildMatchExplanation(reasons: MatchReason[]): string {
+export function buildMatchExplanation(
+  reasons: MatchReason[],
+  categoryLabelBySlug: Map<string, string> = new Map()
+): string {
   if (reasons.length === 0) return "";
 
   const seen = new Set<MatchReasonType>();
@@ -94,7 +96,7 @@ export function buildMatchExplanation(reasons: MatchReason[]): string {
   const phrases = ordered
     .map((type) => reasons.find((r) => r.type === type))
     .filter((r): r is MatchReason => Boolean(r))
-    .map(phraseFor)
+    .map((reason) => phraseFor(reason, categoryLabelBySlug))
     .filter(Boolean);
 
   return `Matches ${joinPhrases(phrases)}.`;

@@ -1,10 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useRouter } from "next/navigation";
-import { books } from "@/lib/catalog/fixtures";
-import { buildFacets } from "@/lib/search/facets";
+import type { buildFacets } from "@/lib/search/facets";
 import { countActiveFilters, EMPTY_FILTERS, type Filters } from "@/lib/search/filters";
 import { buildFindHref } from "@/lib/search/urlParams";
 import { Button } from "@/components/ui/Button";
@@ -14,6 +13,9 @@ import { CheckboxGroup } from "./CheckboxGroup";
 interface FilterDialogProps {
   query: string;
   filters: Filters;
+  /** Precomputed server-side (Phase 4 brief §31) — this component never imports the
+   * catalog or computes facets itself. */
+  facets: ReturnType<typeof buildFacets>;
 }
 
 /**
@@ -27,11 +29,10 @@ interface FilterDialogProps {
  * results" — applying every checkbox click immediately would spam browser history
  * with one entry per click.
  */
-export function FilterDialog({ query, filters }: FilterDialogProps) {
+export function FilterDialog({ query, filters, facets }: FilterDialogProps) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<Filters>(filters);
-  const facets = useMemo(() => buildFacets(books), []);
   const activeCount = countActiveFilters(filters);
 
   function handleOpenChange(next: boolean) {

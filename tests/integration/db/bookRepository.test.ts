@@ -1,0 +1,95 @@
+import { afterAll, describe, expect, it } from "vitest";
+import { eq } from "drizzle-orm";
+import { books } from "@/db/schema";
+import { DrizzleBookRepository } from "@/db/repositories/bookRepository";
+import { requireTestDatabaseUrl, createTestDb } from "./testDb";
+
+const hasTestDb = (() => {
+  try {
+    requireTestDatabaseUrl();
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
+describe.skipIf(!hasTestDb)("DrizzleBookRepository (against a real, seeded Postgres database)", () => {
+  const { db, client } = hasTestDb ? createTestDb() : ({} as ReturnType<typeof createTestDb>);
+  const repository = hasTestDb ? new DrizzleBookRepository(db) : (undefined as unknown as DrizzleBookRepository);
+
+  afterAll(async () => {
+    if (hasTestDb) await client.end();
+  });
+
+  it("lists every seeded development book", async () => {
+    const all = await repository.listBooks();
+    expect(all.length).toBe(48);
+  });
+
+  it("projects a book's full teacher-relevant shape", async () => {
+    const all = await repository.listBooks();
+    const caterpillar = all.find((b) => b.title === "The Very Hungry Caterpillar");
+    expect(caterpillar).toBeDefined();
+    expect(caterpillar!.authors).toEqual(["Eric Carle"]);
+    expect(caterpillar!.illustrators).toEqual(["Eric Carle"]);
+    expect(caterpillar!.publisher).toBe("Philomel Books");
+    expect(caterpillar!.physicalCategory).toBe("animals-nature");
+    expect(caterpillar!.tags).toEqual(expect.arrayContaining(["caterpillars", "insects", "life cycle"]));
+    expect(caterpillar!.illustrationStyles.sort()).toEqual(["collage", "painted"].sort());
+    expect(caterpillar!.visualRealism).toBe("stylized_illustration");
+  });
+
+  it("preserves multi-author-role contributor ordering", async () => {
+    const all = await repository.listBooks();
+    const gruffalo = all.find((b) => b.title === "The Gruffalo");
+    expect(gruffalo!.authors).toEqual(["Julia Donaldson"]);
+    expect(gruffalo!.illustrators).toEqual(["Axel Scheffler"]);
+  });
+
+  it("derives copy count from real book_copies rows — a two-copy book returns 2", async () => {
+    const all = await repository.listBooks();
+    const caterpillar = all.find((b) => b.title === "The Very Hungry Caterpillar");
+    const singleCopy = all.find((b) => b.title === "Brown Bear, Brown Bear, What Do You See?");
+    expect(caterpillar!.copyCount).toBe(2);
+    expect(singleCopy!.copyCount).toBe(1);
+  });
+
+  it("projects the deliberate multilingual seed example via a real book_languages relation", async () => {
+    // The book itself still reports its primary language via languageCode; the
+    // additional-language relation is a real, queryable row (docs/DATA_MODEL.md §3).
+    const { bookLanguages } = await import("@/db/schema");
+    const all = await repository.listBooks();
+    const guessHowMuch = all.find((b) => b.title === "Guess How Much I Love You")!;
+    expect(guessHowMuch.languageCode).toBe("en");
+    const [row] = await db.select().from(bookLanguages).where(eq(bookLanguages.bookId, guessHowMuch.id));
+    expect(row.languageCode).toBe("sv");
+  });
+
+  it("getBookById fetches a single book by its real UUID", async () => {
+    const all = await repository.listBooks();
+    const first = all[0];
+    const fetched = await repository.getBookById(first.id);
+    expect(fetched?.title).toBe(first.title);
+  });
+
+  it("getBookById returns undefined for a missing UUID, not an error", async () => {
+    const fetched = await repository.getBookById("00000000-0000-0000-0000-000000000000");
+    expect(fetched).toBeUndefined();
+  });
+
+  it("a book with an unknown age (both bounds null) projects safely, not as a crash", async () => {
+    const [row] = await db
+      .insert(books)
+      .values({
+        title: "Unreviewed Import With No Age",
+        normalizedTitle: "unreviewed import with no age",
+        sortTitle: "Unreviewed Import With No Age",
+        languageCode: "en",
+      })
+      .returning();
+    const projected = await repository.getBookById(row.id);
+    expect(projected?.ageMinMonths).toBeUndefined();
+    expect(projected?.ageMaxMonths).toBeUndefined();
+    await db.delete(books).where(eq(books.id, row.id));
+  });
+});

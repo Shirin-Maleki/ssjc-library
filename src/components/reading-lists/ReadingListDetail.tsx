@@ -6,7 +6,6 @@ import { useReadingLists } from "./ReadingListsProvider";
 import { RenameReadingListDialog } from "./RenameReadingListDialog";
 import { DeleteReadingListDialog } from "./DeleteReadingListDialog";
 import { formatBookCount, formatCreatedBy, formatListDate } from "@/lib/reading-lists/format";
-import { getBookById } from "@/lib/catalog/fixtures";
 import type { Book } from "@/lib/catalog/types";
 import { formatAgeRange } from "@/lib/catalog/age";
 import { BookCover } from "@/components/find/BookCover";
@@ -15,12 +14,20 @@ import { Button } from "@/components/ui/Button";
 
 interface ReadingListDetailProps {
   listId: string;
+  /** The full catalog and category list, fetched server-side by the page wrapper
+   * (`src/app/(staff)/lists/[id]/page.tsx`) via the same repositories Find uses — this
+   * component still can't reach Postgres itself (it's a Client Component, needed for
+   * the Rename/Delete dialogs and live list state), so its book/category data arrives
+   * as plain serializable props instead (Phase 4 brief §31/§34). */
+  catalog: Book[];
+  categories: { slug: string; label: string }[];
 }
 
-/** The real `/lists/[id]` destination (product brief §18). Client-rendered because
- * the data it reads only exists in this browser's localStorage — a Server Component
- * has no way to see it. */
-export function ReadingListDetail({ listId }: ReadingListDetailProps) {
+/** The real `/lists/[id]` destination (product brief §18). Reading Lists themselves
+ * are Postgres-backed as of Phase 4 (docs/DECISIONS.md) — `ready`/`getById` come from
+ * `ReadingListsProvider`, which now talks to the database via an authenticated Server
+ * Action, not `localStorage`. */
+export function ReadingListDetail({ listId, catalog, categories }: ReadingListDetailProps) {
   const { ready, getById, removeBook } = useReadingLists();
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
@@ -41,9 +48,7 @@ export function ReadingListDetail({ listId }: ReadingListDetailProps) {
       <div className="flex flex-1 flex-col items-start justify-center gap-4 py-16">
         <h1 className="text-2xl font-semibold text-text-primary">List not found</h1>
         <p className="max-w-md text-text-secondary">
-          This reading list doesn&rsquo;t exist in this browser. It may have been deleted, or lists created on a
-          different device aren&rsquo;t visible here yet — this prototype saves lists only in the browser that
-          created them.
+          This reading list doesn&rsquo;t exist — it may have been deleted, or the link is wrong.
         </p>
         <Link href="/lists" className="text-sm font-medium text-brand-primary underline underline-offset-4">
           Back to Reading Lists
@@ -53,13 +58,19 @@ export function ReadingListDetail({ listId }: ReadingListDetailProps) {
   }
 
   const backHref = `/lists/${list.id}`;
+  const catalogById = new Map(catalog.map((book) => [book.id, book]));
+  const categoryLabelBySlug = new Map(categories.map((c) => [c.slug, c.label]));
   const books = list.items
-    .map((item) => getBookById(item.bookId))
+    .map((item) => catalogById.get(item.bookId))
     .filter((book): book is Book => Boolean(book));
 
   async function handleRemove(book: Book) {
-    await removeBook(list!.id, book.id);
-    setStatusMessage(`Removed "${book.title}."`);
+    try {
+      await removeBook(list!.id, book.id);
+      setStatusMessage(`Removed "${book.title}."`);
+    } catch {
+      setStatusMessage(`Something went wrong removing "${book.title}." Please try again.`);
+    }
   }
 
   return (
@@ -131,7 +142,7 @@ export function ReadingListDetail({ listId }: ReadingListDetailProps) {
                   <p className="text-sm text-text-secondary">{book.authors.join(", ")}</p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <CategoryBadge categoryId={book.physicalCategory} />
+                  <CategoryBadge categoryLabel={categoryLabelBySlug.get(book.physicalCategory) ?? book.physicalCategory} />
                   <span className="text-xs text-text-muted">{formatAgeRange(book.ageMinMonths, book.ageMaxMonths)}</span>
                 </div>
               </div>

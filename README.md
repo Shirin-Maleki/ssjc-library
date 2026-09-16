@@ -16,14 +16,15 @@ exactly what exists right now versus what is planned.
 
 ## Project status
 
-**Current phase: Phase 3 — Voice + Reading Lists + Guide (complete, awaiting review).** On top
-of Phase 2's deterministic Find a Book experience: voice search (progressive enhancement over
-the browser's Web Speech API, reusing the exact same search pipeline typed queries use),
-shared local Reading Lists (create/rename/delete/add/remove, saved in this browser only until
-Phase 4's real database), and a real Library Guide. Staff/admin authentication (Phase 1) still
-gates everything. Still no database, Google, or AI integration. See
-`docs/IMPLEMENTATION_STATUS.md` for exactly what's built and `docs/SEARCH.md` for how the
-search engine works.
+**Current phase: Phase 4 — Real database (complete, awaiting review).** PostgreSQL (via
+Drizzle ORM) is now the canonical data store, behind committed SQL migrations — Find, Book
+Detail, and Reading Lists all read and write real database rows instead of an in-memory
+fixture array. Reading Lists moved from Phase 3's per-browser `localStorage` to genuinely
+shared persistence across every staff member/device, through authenticated Server Actions.
+Voice search (Phase 3) is unchanged. Staff/admin authentication (Phase 1) still gates
+everything. Semantic search/embeddings/pgvector remain entirely out of scope until Phase 5. See
+`docs/IMPLEMENTATION_STATUS.md` for exactly what's built, `docs/DATABASE_SETUP.md` for the
+database itself, and `docs/SEARCH.md` for how the search engine works.
 
 ## Local setup
 
@@ -33,20 +34,24 @@ npm run auth:hash-password -- "choose-a-staff-password"   # copy the printed has
 npm run auth:hash-password -- "choose-a-different-admin-password"
 ```
 
-Create `.env.local` (never committed) from `.env.example`, pasting in the two hashes above and
-a random `SESSION_SECRET` (`openssl rand -base64 32`). Then:
+Create `.env.local` (never committed) from `.env.example`, pasting in the two hashes above, a
+random `SESSION_SECRET` (`openssl rand -base64 32`), and a Postgres connection string (see
+[`docs/DATABASE_SETUP.md`](docs/DATABASE_SETUP.md) — a disposable local Postgres instance works
+fine for development). Then:
 
 ```
-npm run dev          # http://localhost:3000
-npm run build         # production build
+npm run db:reset          # migrate + seed the database DATABASE_URL points at
+npm run dev                # http://localhost:3000
+npm run build               # production build
 npm run typecheck
 npm run lint
-npm run test          # unit tests (Vitest)
-npm run test:e2e      # end-to-end tests (Playwright, builds its own fixture server)
+npm run test                # unit tests (Vitest), no database needed
+npm run test:integration    # real-database repository tests (needs TEST_DATABASE_URL)
+npm run test:e2e             # end-to-end tests (Playwright, builds its own fixture server + database)
 ```
 
-No database, Google, or AI credentials are needed for anything above — Phase 1 doesn't
-connect to any external service.
+No Google or AI credentials are needed for anything above — those integrations don't exist
+yet (Phases 6, 7, 9).
 
 ## How to read this repository
 
@@ -62,7 +67,8 @@ Start here, in order:
 Phase-specific detail, split out once a subject becomes operationally real (per the "don't
 create placeholder docs" rule): [`docs/SECURITY.md`](docs/SECURITY.md),
 [`docs/ACCESSIBILITY.md`](docs/ACCESSIBILITY.md), [`docs/BRANDING.md`](docs/BRANDING.md),
-[`docs/TESTING.md`](docs/TESTING.md), [`docs/SEARCH.md`](docs/SEARCH.md).
+[`docs/TESTING.md`](docs/TESTING.md), [`docs/SEARCH.md`](docs/SEARCH.md),
+[`docs/DATABASE_SETUP.md`](docs/DATABASE_SETUP.md).
 
 ## Non-negotiable product principles (short version)
 

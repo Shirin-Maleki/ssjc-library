@@ -1,9 +1,42 @@
 # Security
 
-Status: reflects what Phase 1 actually implements. High-level security architecture was
-proposed in `docs/ARCHITECTURE.md` §14/§21 during Phase 0; this document tracks the real,
+Status: reflects what's actually implemented through Phase 4. High-level security architecture
+was proposed in `docs/ARCHITECTURE.md` §14/§21 during Phase 0; this document tracks the real,
 built mechanism and is the first doc in the target structure to graduate out of
 `ARCHITECTURE.md`, per the plan to split docs out once their subject is operationally real.
+
+## Database credential handling (Phase 4)
+
+- **No database credentials ever reach the browser.** `DATABASE_URL`/`DATABASE_MIGRATION_URL`
+  are read only in `src/db/client.ts`, `src/db/migrate.ts`, and `src/db/seed.ts` — none of
+  which are reachable from client-side code, and none of which are prefixed `NEXT_PUBLIC_`.
+- **`import "server-only"` on the one live-connection module.** `src/db/client.ts` — the sole
+  place a Postgres connection is actually constructed — imports the `server-only` package,
+  which turns an accidental import from a Client Component into a **build-time error**, not
+  just a lint warning. Deliberately **not** added to the repository classes
+  (`src/db/repositories/*.ts`) — `server-only`'s resolution only recognizes Next.js's own
+  server-build condition and throws unconditionally under Vitest, which would make repositories
+  untestable by the real-database integration suite (`docs/DATABASE_SETUP.md`). A Client
+  Component still can never reach a live connection this way: the only path to one is importing
+  `client.ts`, which still throws unconditionally in a browser context.
+- **Reading Lists' write path is independently authenticated at every step.** Every one of the
+  seven Server Actions in `src/lib/reading-lists/actions.ts` calls `requireStaffSession()`
+  first, on its own — never relying on `/lists` sitting below the protected staff layout. A
+  Server Action is a real, directly-invokable endpoint regardless of which page rendered the
+  button that triggered it, so layout-level protection alone would be a false sense of
+  security.
+- **No client-side Drizzle/Postgres imports.** Verified by grepping every `"use client"` file
+  in `src/components/` and `src/app/` for a `@/db/*` or `drizzle-orm`/`postgres` import — none
+  exist. Server Components fetch via `src/db/repositories/*`; Client Components receive that
+  data as plain serializable props, or reach it through the authenticated Server Action
+  boundary above.
+- **No Supabase Auth, no Row Level Security as a real security mechanism.** Access to the
+  database is entirely server-mediated — every read and write goes through application code
+  that has already checked the session, not through database-level policies keyed to an
+  end-user identity (there are no individual end-user identities; see "no accounts" in
+  `docs/DECISIONS.md`). If this project ever moves to Supabase, any RLS policies configured
+  there would be a defense-in-depth addition, not the primary access control this app relies
+  on.
 
 ## Authentication mechanism
 
@@ -32,11 +65,15 @@ built mechanism and is the first doc in the target structure to graduate out of
 - **CSRF:** `SameSite=Lax` plus Next.js Server Actions' built-in `Origin`/`Host` validation.
   No hand-rolled CSRF token was introduced — unnecessary complexity for this threat model.
 - **Brute-force protection:** `lib/auth/rateLimit.ts` throttles repeated failed attempts per
-  hashed-IP-and-role within a rolling window (8 attempts / 15 minutes). **This is an in-memory,
-  Phase 1 interim implementation** — the real design (`docs/DATA_MODEL.md`'s `login_attempts`
-  table) lands in Phase 4. In-memory state resets on server restart and doesn't share state
-  across multiple server instances; acceptable for local development and this phase's scope,
-  not for a real multi-instance production deployment.
+  hashed-IP-and-role within a rolling window (8 attempts / 15 minutes). **This remains an
+  in-memory, Phase 1 interim implementation as of Phase 4.** The `login_attempts` table now
+  genuinely exists in the schema (`docs/DATA_MODEL.md` §11) — implemented as part of the full
+  23-table Phase 4 migration — but wiring the rate limiter to persist there instead of an
+  in-memory map was deliberately left out of Phase 4's scope to avoid unrelated scope creep in
+  an already-large phase (see `docs/DATA_MODEL.md` §16). In-memory state resets on server
+  restart and doesn't share state across multiple server instances; acceptable for local
+  development and this project's current scope, not for a real multi-instance production
+  deployment.
 - **No secrets in the client bundle:** `STAFF_PASSWORD_HASH`, `ADMIN_PASSWORD_HASH`,
   `SESSION_SECRET` are never prefixed `NEXT_PUBLIC_`, so Next.js structurally excludes them
   from anything shipped to the browser.
@@ -116,12 +153,14 @@ generally, not just for this codebase.
 - **No server-side speech key or endpoint.** Nothing in this app's environment variables,
   Server Actions, or Route Handlers is voice-related — see Environment Variables below.
 
-## What's explicitly out of scope for Phase 1
+## What's explicitly out of scope through Phase 4
 
-- No database, so no `login_attempts` table yet (see above).
+- The rate limiter is still in-memory, not backed by the now-real `login_attempts` table (see
+  above).
 - No file uploads yet, so upload validation (type/size allowlisting) isn't implemented —
   lands with the Add-a-Book flow in Phase 7.
 - No Google/AI credentials exist yet, so there's nothing to scope least-privilege for yet.
+- No pgvector/embeddings — nothing to secure there yet either (Phase 5).
 
 ## Verified, not assumed
 

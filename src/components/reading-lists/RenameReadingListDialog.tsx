@@ -39,6 +39,8 @@ export function RenameReadingListDialog({ listId, currentName, trigger }: Rename
     try {
       await renameList(listId, name);
       setOpen(false);
+    } catch {
+      setError("Something went wrong saving this name. Please try again.");
     } finally {
       setSubmitting(false);
     }

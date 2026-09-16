@@ -1,8 +1,9 @@
 /**
- * Phase 2 mock catalog domain model — see docs/SEARCH.md. This shape intentionally
- * mirrors the eventual database columns (docs/DATA_MODEL.md) closely enough that
- * swapping the data source in Phase 5 should not require rewriting the Find UI, only
- * the functions in this module and src/lib/search that currently read `fixtures.ts`.
+ * The catalog domain model — see docs/SEARCH.md. Originally a Phase 2 mock-catalog
+ * shape; as of Phase 4 this is exactly what `DrizzleBookRepository`
+ * (`src/db/repositories/bookRepository.ts`) projects real `books` rows into, so the
+ * search/ranking/Find UI code that consumes it is completely unaware the underlying
+ * source changed from `fixtures.ts` to Postgres.
  */
 
 export type FictionType = "fiction" | "nonfiction";
@@ -13,6 +14,7 @@ export type Format =
   | "early_reader"
   | "chapter_book"
   | "informational_reference"
+  | "activity_book"
   | "other";
 
 export type IllustrationStyle =
@@ -61,10 +63,12 @@ export interface Book {
   imprint?: string;
   languageCode: LanguageCode;
   description: string;
-  /** Canonical unit is whole months — see docs/DATA_MODEL.md §4. Never format or
-   * compare years directly; use age.ts. */
-  ageMinMonths: number;
-  ageMaxMonths: number;
+  /** Canonical unit is whole months — see docs/DATA_MODEL.md §4. Independently
+   * nullable in either direction (both unknown, open-ended lower/upper bound, or
+   * both set) — a real database record may legitimately have incomplete age data;
+   * never format or compare years directly, use age.ts. */
+  ageMinMonths?: number;
+  ageMaxMonths?: number;
   fictionType: FictionType;
   format: Format;
   /** Exactly one — the physical shelf location. See categories.ts. Never treat this
@@ -76,4 +80,9 @@ export interface Book {
   readAloudMinutes: number;
   cover: BookCoverSpec;
   publicationYear?: number;
+  /** Derived from `book_copies` rows, never stored (docs/DATA_MODEL.md §2 — "Copies:
+   * N" must never be a manually maintained counter). Optional because the fixture
+   * source (tests, Storybook-style isolated UI dev) has no copies table to derive
+   * from — always present when projected by `DrizzleBookRepository`. */
+  copyCount?: number;
 }

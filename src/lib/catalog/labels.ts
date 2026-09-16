@@ -6,6 +6,7 @@ export const FORMAT_LABELS: Record<Format, string> = {
   early_reader: "Early reader",
   chapter_book: "Chapter book",
   informational_reference: "Informational / reference",
+  activity_book: "Activity book",
   other: "Other",
 };
 

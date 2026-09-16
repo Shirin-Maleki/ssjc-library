@@ -57,8 +57,9 @@ test.describe("Library Guide", () => {
     await expect(page).toHaveURL("/lists");
   });
 
-  test("discloses the current device-local Reading Lists limitation honestly", async ({ page }) => {
+  test("describes Reading Lists as a shared staff resource, not a personal/device-local one (Phase 4)", async ({ page }) => {
     await page.goto("/guide");
-    await expect(page.getByText(/saved only in the browser that created it/i)).toBeVisible();
+    await expect(page.getByText(/shared staff resource/i)).toBeVisible();
+    await expect(page.getByText(/saved only in the browser/i)).toHaveCount(0);
   });
 });

@@ -1180,3 +1180,116 @@ interface needs to change.
 **Relevant files:** `src/lib/reading-lists/{types,repository,localStorageRepository,
 format}.ts`; `src/components/reading-lists/ReadingListsProvider.tsx`; `docs/DATA_MODEL.md` §9;
 `docs/ARCHITECTURE.md` §20.
+
+---
+
+## Reading Lists: from localStorage to Postgres
+
+**Date:** 2026-09-16 (Phase 4) · **Status:** Locked — this is the real, shared implementation
+the product concept always described.
+
+**Problem:** Phase 3 shipped Reading Lists behind a `ReadingListRepository` interface
+specifically so this moment would be a repository swap, not a redesign (see the entry above).
+Phase 4 makes Postgres the canonical store; Reading Lists needed to become genuinely shared
+across every staff member/device, not just persistent in one browser.
+
+**Chosen approach:** A new `DrizzleReadingListRepository` (`src/db/repositories/
+readingListRepository.ts`) implements the exact same `ReadingListRepository` interface. It is
+never reachable from a Client Component directly — the full chain is: `ReadingListsProvider`
+(client, "use client") → `RemoteReadingListRepository` (client-safe, `src/lib/reading-lists/
+remoteRepository.ts`) → seven `"use server"` Server Actions (`src/lib/reading-lists/
+actions.ts`) → `DrizzleReadingListRepository` → Drizzle → Postgres. `ReadingListsProvider`
+changed exactly one line (which class it constructs) — no dialog, page, or the provider's
+public interface changed, confirming the Phase 3 seam worked as designed.
+
+**Why every Server Action re-checks the session:** `requireStaffSession()` is called first,
+independently, inside every one of the seven actions — never relying on `/lists` sitting below
+the protected staff layout. A Server Action is reachable directly (its endpoint isn't gated by
+which page happened to render the button that called it), so layout-level protection alone
+would be a false sense of security here.
+
+**Why composite-key `onConflictDoNothing()`, not an application-level existence check:**
+`reading_list_items`'s primary key is `(list_id, book_id)` — adding a book already on a list is
+therefore a database-level no-op via `.onConflictDoNothing()`, not a check-then-insert. This is
+strictly idempotent under concurrent requests (two staff members clicking "Add" on the same
+book at nearly the same moment can't produce a duplicate row or a race), which an app-level
+`SELECT` then `INSERT` could not guarantee.
+
+**Why `db.transaction()` for `addBook`/`removeBook` but not for reads:** each of those methods
+performs two writes that must succeed or fail together (the item row, and the list's
+`updated_at` bump) — a transaction is the only way "added the book but didn't bump the list's
+sort order" can't happen. Reads are plain queries; wrapping them in a transaction would add
+nothing.
+
+**What deliberately did NOT happen:** old `localStorage` Reading Lists data was **not**
+migrated into Postgres. It was always disposable, per-browser development data — every
+existing Phase 3 note on this said so — and migrating it would have meant writing a one-time,
+throwaway import script for data nobody was relying on. A fresh install starts with zero
+Reading Lists, same as any other new deployment.
+
+**A real bug this phase caught, purely in the test suite, not the app:** the very first E2E run
+against the new Postgres-backed Reading Lists showed newly-added books missing from a list
+immediately after creation — `getAllReadingListsAction()` genuinely returning the list without
+its item, moments after a direct database query proved the item was there. Exhaustive
+tracing (query-level logging, a forced single-connection pool, and finally a client-side event
+log) found the real cause: several tests called `page.goto()` to do a full page reload
+*immediately* after clicking "Create & add," without waiting for that dialog to actually close.
+Because `createList` and `addBook` are now genuine sequential network round-trips (Server
+Actions, not synchronous `localStorage` calls), a full reload could land *between* the two —
+tearing down the page while `addBook`'s request was still in flight and orphaning it. The list
+would exist (its own creation had already completed) but the book never got added. The fix:
+`await expect(dialog).toBeHidden()` before any navigation that follows an
+Add-to-Reading-List mutation — closing is proof the whole async chain resolved. See
+`docs/TESTING.md` for the full account; this is a testing-methodology finding (Phase 3's
+synchronous localStorage implementation made this race physically impossible to hit), not an
+application defect.
+
+**Relevant files:** `src/db/repositories/readingListRepository.ts`; `src/lib/reading-lists/
+{actions,remoteRepository}.ts`; `src/components/reading-lists/ReadingListsProvider.tsx`;
+`tests/integration/db/readingListRepository.test.ts`; `tests/e2e/readingLists.spec.ts`;
+`docs/DATA_MODEL.md` §9/§16; `docs/ARCHITECTURE.md` §20.
+
+---
+
+## Visual metadata: illustration style becomes an array column, not a singular field
+
+**Date:** 2026-09-16 (Phase 4) · **Status:** Locked.
+
+**Problem:** The Phase 0 `docs/DATA_MODEL.md` design listed `books.visual_media_type` as a
+single-valued enum column. But Phase 2's search already needed to answer queries like "real
+pictures of animals" against books whose illustration genuinely combines more than one
+technique (e.g., photography collaged with painted backgrounds) — a scalar column cannot
+represent "this book is both `photography` and `collage`" without picking one arbitrarily and
+silently losing the other, which would make that exact search capability quietly wrong the
+moment a multi-technique book appeared in real seed data.
+
+**Options considered:** (a) a Postgres array of the existing enum
+(`visualMediaTypeEnum(...).array()`); (b) a separate `book_visual_media_types` join table,
+mirroring the `book_tags` pattern; (c) leave it scalar and accept the loss of information for
+multi-technique books.
+
+**Chosen approach:** (a).
+
+**Why:** (b) is real normalization but is disproportionate for a small, closed, stable set of
+values that's never independently queried or admin-managed the way `tags` are — a join table
+buys referential integrity this enum doesn't need, at the cost of every read needing an extra
+join. (c) would have been the "casual simplification" the Phase 4 brief explicitly forbids —
+silently discarding a capability the product already advertised. A native array of an existing
+enum type is directly supported by Postgres and Drizzle, requires no additional table, and
+keeps every existing `visual_media_type`-based query (search, facets, badges) a single-column
+read.
+
+**Consequences:** `Book.visualMediaType` (application/TypeScript layer) and every consumer of
+it (search matching, facet counts) must treat it as a list, not a single value — already true
+of how Phase 2 designed the *search* semantics; only the *storage* column needed to catch up.
+Seed data reflects real multi-technique books (e.g., a book tagged
+`{collage, painted}`), verified directly against Postgres after seeding.
+
+**Also corrected in this same pass:** `visual_realism`'s `stylized` value was renamed
+`stylized_illustration` for clarity next to `realistic_illustration` and `cartoon` (no meaning
+or data changed), and a DB-only `unknown` value was added for consistency with every other
+classification enum in this schema — see `docs/DATA_MODEL.md` §16 for the full list of Phase 4
+corrections.
+
+**Relevant files:** `src/db/schema/{enums,books}.ts`; `src/db/repositories/bookRepository.ts`;
+`docs/DATA_MODEL.md` §2/§16; `docs/SEARCH.md`.

@@ -1,21 +1,26 @@
 # Testing
 
-Status: reflects what Phase 1 actually built and ran — every command below was executed
-against the real project, not just written.
+Status: reflects what's actually built and run through Phase 4 — every command below was
+executed against the real project, not just written.
 
 ## Running the suite
 
 ```
-npm run typecheck   # tsc --noEmit
-npm run lint        # eslint
-npm run test        # vitest run — unit tests
-npm run test:e2e    # playwright test — E2E, against a real production build
-npm run build       # next build
+npm run typecheck        # tsc --noEmit
+npm run lint             # eslint
+npm run test             # vitest run — unit tests, no database
+npm run test:integration # vitest run against a real Postgres database (see docs/DATABASE_SETUP.md)
+npm run test:e2e         # playwright test — E2E, against a real production build + real Postgres
+npm run build            # next build
 ```
 
 `npm run test:e2e` builds and starts the app itself (`playwright.config.ts`'s `webServer`)
 against fixture credentials computed at config-load time — nothing sensitive is ever written
-to disk. No real environment variables or `.env.local` are needed to run any of the above.
+to disk. No real environment variables or `.env.local` are needed for `test`/`test:e2e`/`build`
+(the E2E suite's `webServer` supplies its own fixture credentials and its own `DATABASE_URL`
+pointed at `E2E_DATABASE_URL`). `test:integration` requires `TEST_DATABASE_URL` to be set (see
+`docs/DATABASE_SETUP.md`) — Phase 4's brief is explicit that real database tests must run
+against an actual Postgres instance, never a mocked Drizzle client.
 
 ## Unit tests (Vitest) — `tests/unit/`
 
@@ -38,7 +43,8 @@ to disk. No real environment variables or `.env.local` are needed to run any of 
 | `voice/useVoiceSearch.test.ts` | The full status machine against a scripted fake `SpeechRecognition`: idle→listening→processing, no-speech (both an empty final transcript and the browser ending with no result at all), permission-denied, generic error, cancel→idle, and a dedicated assertion that `localStorage.setItem` is never called during a listening session |
 | `components/SearchInput.voice.test.tsx` | Component-level: a final transcript navigates through the exact same `buildFindHref()` URL typed Enter produces, with existing filters preserved; cancel restores the pre-voice query without navigating; no-speech/permission-denied/unsupported all render the right calm copy |
 | `reading-lists/format.test.ts` | `formatCreatedBy` (Anonymous fallback for undefined/whitespace), `formatBookCount` pluralization, `formatListDate` (including an unparseable-date fallback), `isBookInList` |
-| `reading-lists/localStorageRepository.test.ts` | Every repository method against real `localStorage` (jsdom): required-name rejection, trimming, Anonymous normalization, survives a simulated reload, rename preserves `createdAt`, idempotent `addBook`, a book in multiple lists, corrupted/malformed stored JSON treated as empty, most-recently-updated-first ordering |
+| `reading-lists/localStorageRepository.test.ts` | Every repository method against real `localStorage` (jsdom) — this class is no longer used in production (see Phase 4 below) but stays covered as reference/example code |
+| `components/ReadingListsProvider.test.tsx` (Phase 4) | The client-side load-failure path: a rejected `getAll()` surfaces the calm "couldn't be loaded" message, distinct from a genuinely empty list; a successful empty load shows the real empty state, not an error. This replaces E2E coverage of the old "corrupted localStorage" scenario, whose premise no longer applies now that Reading Lists aren't stored in the browser at all — see below |
 
 Environment note: tests run with `environment: "node"`, not `jsdom` — an early attempt to use
 `jsdom` caused `jose`'s WebCrypto key handling to see cross-realm `Uint8Array` instances and
@@ -46,6 +52,18 @@ fail with a cryptic key-type error. Since Phase 1's unit tests are pure logic wi
 dependency, `node` is both correct and faster; `jsdom` remains available per-file via a
 `// @vitest-environment jsdom` pragma whenever a later phase adds component tests that
 actually need a DOM.
+
+## Integration tests (Vitest, against a real Postgres) — `tests/integration/`
+
+Run with `npm run test:integration`, against `TEST_DATABASE_URL` — migrated and seeded exactly
+once per run via a Vitest `globalSetup`. Nothing here mocks Drizzle, the schema, or a query
+result; every assertion is a real round-trip to a real running Postgres instance.
+
+| File | Covers |
+|---|---|
+| `db/migrations.test.ts` | The committed migrations actually produce all 23 tables; a handful of specific columns/constraints/indexes exist as designed (the `books_isbn13_unique` partial index, the age check constraints, the `book_field_provenance` current-row partial unique index) |
+| `db/bookRepository.test.ts` | `DrizzleBookRepository` against real seeded data: correct book count, contributor ordering via `array_agg(... order by sort_order)`, multi-value `visual_media_type` arrays round-tripping correctly, `copyCount` matching a real `count(*)` on `book_copies`, multilingual books' `book_languages` rows |
+| `db/readingListRepository.test.ts` | Full CRUD, idempotent `addBook` via the composite primary key, and the mandated **two-independent-connection acceptance test**: a list created and populated through one `DrizzleReadingListRepository` instance (its own separate Postgres connection) is immediately visible, with the same data, through a second, completely independent instance/connection — the actual proof that Reading Lists are genuinely shared, not just that one repository method returns the right object |
 
 ## E2E tests (Playwright) — `tests/e2e/`
 
@@ -59,10 +77,12 @@ used heavily on phones, so testing only against Chromium would have missed a rea
 | `navigation.spec.ts` | Every remaining placeholder Home destination (Add, Lists, Guide, Teacher Catalog) reaches its "coming later" state and can navigate back; the two primary tiles are meaningfully larger than secondary nav items |
 | `find.spec.ts` | The ten numbered flows the brief requires — see below |
 | `voice.spec.ts` | A scripted fake `SpeechRecognition` (installed via `page.addInitScript()`, never a real microphone) exercising the real production UI: Home → Find → voice → mocked transcript → normal results; existing filters survive a voice search; no-speech, permission-denied, cancel, and an unsupported-browser fallback |
-| `readingLists.spec.ts` | Empty/populated overview, create (required name, optional/whitespace/trimmed creator), a list surviving reload, rename, delete with confirmation (and cancelling it), an empty list's guidance, add-to-list from both Search Results and Book Detail (including that it never accidentally navigates to Book Detail), duplicate-add idempotency and "Already added" messaging, remove (without touching the catalog), Book Detail↔list-detail return navigation, a malformed/external `from=` value falling back safely, corrupted localStorage recovering gracefully, a nonexistent list id's not-found state, and a full keyboard-only create flow |
-| `guide.spec.ts` | The real Guide renders with one `<h1>` and the expected section headings; the physical-category-vs-tags example matches real fixture data; the alphabetical-return rule is stated; Add a Book/Review Later are described in the future tense with no fake button; links to Find a Book and Reading Lists work; the device-local limitation is disclosed |
+| `readingLists.spec.ts` (Phase 4: desktop project only, serial order — see the comment at the top of the file) | Empty/populated overview, the Add-to-list dialog's no-lists-yet state, create (required name, optional/whitespace/trimmed creator), a list surviving reload, rename, delete with confirmation (and cancelling it), an empty list's guidance, add-to-list from both Search Results and Book Detail (including that it never accidentally navigates to Book Detail), duplicate-add idempotency and "Already added" messaging scoped to the test's own list, remove (without touching the catalog), Book Detail↔list-detail return navigation, a malformed/external `from=` value falling back safely, a nonexistent list id's not-found state, and a full keyboard-only create flow |
+| `guide.spec.ts` | The real Guide renders with one `<h1>` and the expected section headings; the physical-category-vs-tags example matches real fixture data; the alphabetical-return rule is stated; Add a Book/Review Later are described in the future tense with no fake button; links to Find a Book and Reading Lists work; the shared-across-staff nature of Reading Lists is disclosed (Phase 4: no longer "device-local") |
 
-**118 tests** (59 per browser project × mobile/WebKit + desktop/Chromium) — all passing.
+**98 tests, 0 failures** (Phase 4) — `readingLists.spec.ts` now runs on the desktop project
+only (17 tests, serial), everything else still runs on both mobile/WebKit and desktop/Chromium.
+Re-run three consecutive times end to end with no flakes before being considered done.
 
 ### Find a Book flow coverage (`find.spec.ts`)
 
@@ -166,6 +186,40 @@ desktop/Chromium and failed on mobile/WebKit. Rewritten to submit via Enter from
 last text field instead — both the more realistic keyboard interaction and the one that's
 reliable on both engines.
 
+### Real bugs this suite caught — Phase 4
+
+1. **`readingLists.spec.ts` broke almost entirely on the first Postgres-backed run (34 of 98
+   test instances failing)** — not an application bug, but a real, important discovery: the
+   whole file's tests had been written against Phase 3's implicit assumption that Reading Lists
+   reset per browser context (true for `localStorage`, false the moment they're genuinely
+   shared Postgres data). Fixed by giving every created list a collision-proof name
+   (`uniqueName()` in `tests/e2e/helpers.ts`), restricting the file to the desktop project in
+   serial order (eliminating cross-project/cross-worker races on the one shared database), and
+   rewriting the two assertions that legitimately depend on the list being *globally* empty (the
+   overview's CTA and the Add-dialog's zero-state message) to run first, before anything else
+   creates data — see the comment at the top of `tests/e2e/readingLists.spec.ts` and
+   `docs/DECISIONS.md`.
+2. **A genuine test-only race, found via deep tracing (not guessed at): several tests called
+   `page.goto()` immediately after clicking "Create & add," without waiting for that dialog to
+   actually close.** `createList` and `addBook` are now two sequential, genuinely asynchronous
+   Server Action round-trips — a full page reload landing between them tears the page down
+   while `addBook`'s request is still in flight, silently orphaning it. Diagnosed by adding
+   real instrumentation at every layer (a file-based log inside the Server Actions themselves,
+   proving `addBookToReadingListAction` was never even reached) rather than guessing from
+   symptoms alone. Fixed with `await expect(dialog).toBeHidden()` before any navigation that
+   follows an Add-to-Reading-List mutation. Full account in `docs/DECISIONS.md`, "Reading
+   Lists: from localStorage to Postgres." Two dead-end hypotheses chased and ruled out along the
+   way, for anyone debugging something that looks similar later: a React hydration warning seen
+   early in the same runs turned out to be unrelated noise, and forcing the Postgres connection
+   pool down to a single connection (`max: 1`) did not change the symptom, ruling out
+   connection-pool visibility as the cause.
+3. **A locator-ambiguity bug surfaced only after fixing #2**, once tests could reliably run to
+   completion: "adding the same book twice" checked for the text "Already added" anywhere in
+   the Add-to-list dialog, but by the time this test runs, several earlier tests have already
+   added the same first-search-result book to their own lists — so the dialog legitimately
+   shows "Already added" next to multiple list rows, not just this test's own. Fixed by scoping
+   the check to the specific list row matching this test's own unique name.
+
 ## Manual verification performed
 
 - Visually inspected real Playwright screenshots (not just automated assertions) of every
@@ -195,7 +249,11 @@ reliable on both engines.
 ## What's not tested yet (by design)
 
 Nothing in Add or the Admin dashboard beyond their placeholder states — there's no real
-functionality there yet to test. Database, Google, and AI integrations have no tests because
-nothing is connected yet (Phases 4, 6, 7, 9). Find a Book, voice search, Reading Lists, and the
-Library Guide are all now fully tested at the unit and E2E level for everything Phases 2–3
-actually built.
+functionality there yet to test. Google and AI integrations have no tests because nothing is
+connected yet (Phases 6, 7, 9). Semantic search/embeddings/pgvector have no tests because
+they're entirely out of scope for Phase 4 (see `docs/DATABASE_SETUP.md`, "The Phase 5
+replacement seam"). Find a Book, voice search, Reading Lists, and the Library Guide are all
+fully tested at the unit, integration, and E2E level for everything Phases 2–4 actually built —
+Phase 4 additionally adds real-database coverage (migrations, repositories, and the
+two-connection shared-persistence proof) that didn't exist, and couldn't have existed, before
+there was a real database to test against.

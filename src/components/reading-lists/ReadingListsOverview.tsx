@@ -8,9 +8,11 @@ import { Button } from "@/components/ui/Button";
 
 /** The real `/lists` destination (product brief §12) — a calm editorial list, not a
  * dashboard. `ready` gates every render so a real list never flashes an empty state
- * before the initial localStorage read completes (§11). */
+ * before the initial load attempt completes (§11); `loadError` is distinct from a
+ * genuinely empty list (Phase 4 brief §42) — a database problem is never shown as
+ * "No reading lists yet." */
 export function ReadingListsOverview() {
-  const { lists, ready } = useReadingLists();
+  const { lists, ready, loadError } = useReadingLists();
 
   return (
     <div className="flex flex-1 flex-col gap-6">
@@ -21,18 +23,24 @@ export function ReadingListsOverview() {
             Shared lists any staff member can build — for a classroom, a topic, a season, or a week.
           </p>
         </div>
-        {ready && lists.length > 0 && (
+        {ready && !loadError && lists.length > 0 && (
           <CreateReadingListDialog trigger={<Button variant="primary" size="md">New list</Button>} />
         )}
       </div>
 
       <p className="border-b border-border pb-4 text-xs text-text-muted">
-        Reading Lists are designed for staff to share. In this prototype, lists are saved only in this browser.
+        Reading Lists are shared with every staff member — anyone can create, edit, or add to a list.
       </p>
 
       {!ready && <p className="py-8 text-sm text-text-muted">Loading your reading lists…</p>}
 
-      {ready && lists.length === 0 && (
+      {ready && loadError && (
+        <div className="flex flex-col items-start gap-2 py-10">
+          <p className="text-base font-medium text-text-primary">{loadError}</p>
+        </div>
+      )}
+
+      {ready && !loadError && lists.length === 0 && (
         <div className="flex flex-col items-start gap-3 py-10">
           <p className="text-base font-medium text-text-primary">No reading lists yet</p>
           <p className="max-w-sm text-sm text-text-secondary">Create a list for a classroom, topic, season, or week.</p>

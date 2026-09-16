@@ -1,5 +1,4 @@
 import type { Book } from "@/lib/catalog/types";
-import { getCategoryLabel } from "@/lib/catalog/categories";
 import { getLanguageName } from "@/lib/catalog/languages";
 import { ILLUSTRATION_STYLE_LABELS } from "@/lib/catalog/labels";
 import { normalizeSearchText } from "./normalize";
@@ -43,6 +42,7 @@ export function getSuggestionTypeLabel(type: SuggestionType): string {
 export function deriveAutocompleteOptions(
   books: Book[],
   query: string,
+  categoryLabelBySlug: Map<string, string>,
   limit = 8
 ): AutocompleteSuggestion[] {
   const normalizedQuery = normalizeSearchText(query);
@@ -59,7 +59,8 @@ export function deriveAutocompleteOptions(
     for (const author of book.authors) add(author, "author");
     for (const illustrator of book.illustrators ?? []) add(illustrator, "illustrator");
     add(book.publisher, "publisher");
-    add(getCategoryLabel(book.physicalCategory), "category");
+    const categoryLabel = categoryLabelBySlug.get(book.physicalCategory);
+    if (categoryLabel) add(categoryLabel, "category");
     for (const tag of book.tags) add(tag, "topic");
     add(getLanguageName(book.languageCode), "language");
     for (const style of book.illustrationStyles) add(ILLUSTRATION_STYLE_LABELS[style], "illustration_style");

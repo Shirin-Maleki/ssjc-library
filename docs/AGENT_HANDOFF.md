@@ -69,12 +69,14 @@ finish it in one pass.
 ## Where things stand right now
 
 Phase 0 (architecture), Phase 1 (foundation, design system, staff/admin auth), Phase 2 (mock
-catalog + Find a Book, plus a visual/mobile revision), and Phase 3 (voice search, Reading
-Lists, Library Guide) are all complete. A real Next.js app runs a fully deterministic search/
-browse/filter experience against a 48-book development fixture catalog, now reachable by
-voice as well as typed/browsed search; shared Reading Lists persist locally (browser-only
-until Phase 4's real database); the Library Guide is real content. Still no database, Google,
-or AI integration. The full brand system (name, palette, typography, logo) is real — nothing
+catalog + Find a Book, plus a visual/mobile revision), Phase 3 (voice search, Reading Lists,
+Library Guide), and Phase 4 (the real database) are all complete. A real Next.js app runs a
+fully deterministic search/browse/filter experience against a real Postgres database (Drizzle
+ORM, committed migrations, the full 23-table schema) instead of an in-memory fixture array;
+Reading Lists are genuinely shared across every staff member/device via authenticated Server
+Actions, not `localStorage`; the Library Guide is real content. Still no Google or AI
+integration, and no semantic search (Phase 5 — deliberately deferred, no `embedding` column,
+no pgvector). The full brand system (name, palette, typography, logo) is real — nothing
 placeholder remains there. See `docs/IMPLEMENTATION_STATUS.md` for the authoritative,
 continuously updated detail — this file only orients you to the process, not the current
 state, since state changes every phase and duplicating it here would drift.
@@ -91,6 +93,40 @@ just values sourced from a file). Full story in `docs/SECURITY.md` and `docs/DEC
 This bug was invisible to the E2E suite for a while because the suite's own fixture-hash
 generation had the identical flaw — don't assume "the tests pass" rules this class of bug out
 if the test harness touches the same platform behavior the app does.
+
+## Practical lessons from Phase 4 (worth knowing before touching the database or Reading Lists code)
+
+- **`server-only` belongs on `src/db/client.ts` alone — never on a repository class.** The
+  `server-only` package's resolution mechanism only recognizes Next.js's own server-build
+  condition; under Vitest it throws unconditionally, which would make the real-database
+  integration suite unable to import `DrizzleBookRepository`/`DrizzleReadingListRepository` at
+  all. A Client Component still can't reach a live connection through a repository — the only
+  path to one is importing `client.ts`, which still throws unconditionally outside Next's own
+  server build. Don't "fix" this by adding `server-only` back to the repositories.
+- **A real, genuinely async mutation (a Server Action) is not equivalent to a synchronous
+  `localStorage` call for E2E test purposes, even though both satisfy the same
+  `ReadingListRepository` interface.** Several Phase 3 test patterns — click a button that
+  triggers an async create-then-add flow, then immediately `page.goto()` elsewhere — relied on
+  that flow completing before the next line ran, which was only ever true because Phase 3's
+  implementation was synchronous under the hood. Once it became real network round-trips, that
+  assumption broke silently (a full page reload can tear down the page mid-flight and orphan an
+  in-flight request). The fix, and the rule going forward: **always wait for an explicit
+  completion signal (a dialog closing, a URL changing) before navigating away from a page that
+  just triggered an async mutation** — never assume "the click handler returned" means "the
+  mutation finished." Full incident write-up in `docs/DECISIONS.md` and `docs/TESTING.md`.
+- **Shared, persistent E2E data needs collision-proof names and either isolation or scoped
+  locators — plan for this before writing the test, not after it flakes.** Any E2E suite
+  covering a genuinely shared datastore (this project's Reading Lists, or anything like it
+  later) cannot assume a fresh/empty starting state the way `localStorage`-per-context testing
+  could. `tests/e2e/helpers.ts`'s `uniqueName()` and the `mode: "serial"` + desktop-only
+  restriction on `tests/e2e/readingLists.spec.ts` are the pattern to reuse for any future
+  E2E suite touching shared server-side state.
+- **When a bug looks like it could be the database, the framework, or the test, trace don't
+  guess** — this phase's own "list appears empty right after adding a book" investigation ruled
+  out a React hydration warning and a connection-pooling issue (both real, both red herrings)
+  before file-based logging directly inside the Server Actions proved the actual `addBook` call
+  was never even reached for the failing runs. Add logging at the actual layer boundary you
+  suspect, not just at the symptom.
 
 ## Practical lessons from Phase 3 (worth knowing before touching voice or Reading Lists code)
 
@@ -177,11 +213,13 @@ if the test harness touches the same platform behavior the app does.
 
 ## Key architectural decisions already made (see `docs/DECISIONS.md` for full reasoning)
 
-Postgres via Supabase as canonical database; **Drizzle** (not Kysely, not an ORM like Prisma)
-for schema, migrations, and data access — revised from an initial Kysely choice during Phase
-0 review, before any code existed, specifically because a TypeScript-schema-as-source-of-
-truth tool suits a project built by AI coding agents and maintained by a designer better than
-a purer-but-more-manual query-builder-only approach. Next.js Server Actions/Route Handlers
+Postgres via Supabase as canonical database (implemented against a local disposable Postgres
+instance in this environment as of Phase 4 — see `docs/DATABASE_SETUP.md`; nothing in the
+schema/code is Supabase-specific); **Drizzle** (not Kysely, not an ORM like Prisma) for schema,
+migrations, and data access — revised from an initial Kysely choice during Phase 0 review,
+before any code existed, specifically because a TypeScript-schema-as-source-of-truth tool suits
+a project built by AI coding agents and maintained by a designer better than a
+purer-but-more-manual query-builder-only approach. Next.js Server Actions/Route Handlers
 with no separate backend service for the web app. Google Drive as the original-image source
 of truth with Google Sheets as a one-way generated projection; **original capture and display
 cover are explicitly distinct** — the display cover prefers a derived copy of our own
@@ -213,12 +251,15 @@ further.
 AI provider, embedding model, and exact Google auth mechanism remain genuinely open pending
 real credentials and the requester's input — don't lock these in silently.
 
-**Reading Lists (Phase 3) persist to `localStorage` only, entirely behind a
-`ReadingListRepository` interface** (`src/lib/reading-lists/repository.ts`) — components call
-`useReadingLists()` (the `ReadingListsProvider` context, mounted once in the staff layout),
-never `localStorage` directly. Phase 4 replaces `LocalStorageReadingListRepository` with a
-real database-backed implementation of the same interface; no component, dialog, or page
-should need to change. Voice search (also Phase 3) is the browser's own Web Speech API only —
-no server-side speech key, no AI interpretation of the transcript; it becomes a query through
-the exact same `buildFindHref()`/`searchBooks()` path typed search already uses. See
-`docs/DECISIONS.md` for the full reasoning behind both.
+**Reading Lists (Phase 3 design, Phase 4 real implementation) are genuinely shared Postgres
+data, entirely behind a `ReadingListRepository` interface**
+(`src/lib/reading-lists/repository.ts`) — components call `useReadingLists()` (the
+`ReadingListsProvider` context, mounted once in the staff layout), never Drizzle/Postgres or a
+Server Action directly. The real chain is `ReadingListsProvider → RemoteReadingListRepository
+(client-safe) → 7 authenticated Server Actions → DrizzleReadingListRepository → Postgres` — the
+old `LocalStorageReadingListRepository` is retained only as reference/example code, no longer
+used in production. No component, dialog, or page above the repository boundary changed when
+this swap happened, confirming the Phase 3 seam worked as designed. Voice search (also Phase 3)
+is the browser's own Web Speech API only — no server-side speech key, no AI interpretation of
+the transcript; it becomes a query through the exact same `buildFindHref()`/`searchBooks()`
+path typed search already uses. See `docs/DECISIONS.md` for the full reasoning behind both.

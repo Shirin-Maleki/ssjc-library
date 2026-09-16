@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { getBookById } from "@/lib/catalog/fixtures";
+import { bookRepository, categoryRepository } from "@/db/repositories";
 import { formatAgeRange } from "@/lib/catalog/age";
 import { DURATION_BAND_LABELS, getReadDurationBand } from "@/lib/catalog/duration";
 import { FICTION_TYPE_LABELS, FORMAT_LABELS, ILLUSTRATION_STYLE_LABELS, VISUAL_REALISM_LABELS } from "@/lib/catalog/labels";
@@ -31,7 +31,7 @@ function backLinkLabel(backHref: string): string {
 export default async function BookDetailPage({ params, searchParams }: BookDetailPageProps) {
   const { id } = await params;
   const { from } = await searchParams;
-  const book = getBookById(id);
+  const [book, categories] = await Promise.all([bookRepository.getBookById(id), categoryRepository.listCategories()]);
   const backHref = resolveBackHref(from);
 
   if (!book) {
@@ -47,6 +47,8 @@ export default async function BookDetailPage({ params, searchParams }: BookDetai
       </div>
     );
   }
+
+  const categoryLabel = categories.find((c) => c.slug === book.physicalCategory)?.label ?? book.physicalCategory;
 
   return (
     <div className="flex flex-1 flex-col gap-6 py-4">
@@ -75,7 +77,7 @@ export default async function BookDetailPage({ params, searchParams }: BookDetai
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            <CategoryBadge categoryId={book.physicalCategory} className="w-fit" />
+            <CategoryBadge categoryLabel={categoryLabel} className="w-fit" />
             <AddToListButton bookId={book.id} bookTitle={book.title} variant="button" />
           </div>
 
@@ -119,6 +121,12 @@ export default async function BookDetailPage({ params, searchParams }: BookDetai
                 {book.imprint ? ` (${book.imprint})` : ""}
               </dd>
             </div>
+            {typeof book.copyCount === "number" && (
+              <div>
+                <dt className="text-text-muted">Copies</dt>
+                <dd className="text-text-primary">{book.copyCount}</dd>
+              </div>
+            )}
           </dl>
 
           {book.tags.length > 0 && (

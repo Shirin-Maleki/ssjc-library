@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { books } from "@/lib/catalog/fixtures";
+import type { Book } from "@/lib/catalog/types";
 import { deriveAutocompleteOptions, getSuggestionTypeLabel } from "@/lib/search/autocomplete";
 import type { Filters } from "@/lib/search/filters";
 import { buildFindHref } from "@/lib/search/urlParams";
@@ -19,13 +19,17 @@ import { VoiceSearchButton } from "./VoiceSearchButton";
 interface SearchInputProps {
   initialQuery: string;
   filters: Filters;
+  /** Precomputed server-side (Phase 4 brief §31) — this component never imports the
+   * catalog directly. */
+  books: Book[];
+  categoryLabelBySlug: Record<string, string>;
 }
 
 /** How long the transcript stays visible, alone, before the search actually runs —
  * long enough to read what was heard, short enough that voice still feels instant. */
 const VOICE_SEARCH_DELAY_MS = 350;
 
-export function SearchInput({ initialQuery, filters }: SearchInputProps) {
+export function SearchInput({ initialQuery, filters, books, categoryLabelBySlug }: SearchInputProps) {
   const router = useRouter();
   const [value, setValue] = useState(initialQuery);
   const [open, setOpen] = useState(false);
@@ -34,6 +38,7 @@ export function SearchInput({ initialQuery, filters }: SearchInputProps) {
   const inputId = useId();
   const containerRef = useRef<HTMLDivElement>(null);
   const preVoiceQueryRef = useRef("");
+  const categoryLabelBySlugMap = useMemo(() => new Map(Object.entries(categoryLabelBySlug)), [categoryLabelBySlug]);
 
   const {
     status: voiceStatus,
@@ -45,7 +50,10 @@ export function SearchInput({ initialQuery, filters }: SearchInputProps) {
     reset: resetVoice,
   } = useVoiceSearch();
 
-  const suggestions = useMemo(() => (open ? deriveAutocompleteOptions(books, value) : []), [open, value]);
+  const suggestions = useMemo(
+    () => (open ? deriveAutocompleteOptions(books, value, categoryLabelBySlugMap) : []),
+    [open, value, books, categoryLabelBySlugMap]
+  );
 
   const navigate = useCallback(
     (query: string) => {

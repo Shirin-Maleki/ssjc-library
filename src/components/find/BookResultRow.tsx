@@ -11,7 +11,13 @@ import { Tag } from "./Tag";
 
 const VISIBLE_TAG_LIMIT = 3;
 
-export function BookResultRow({ result, findUrl }: { result: SearchResult; findUrl: string }) {
+interface BookResultRowProps {
+  result: SearchResult;
+  findUrl: string;
+  categoryLabel: string;
+}
+
+export function BookResultRow({ result, findUrl, categoryLabel }: BookResultRowProps) {
   const { book } = result;
   const visibleTags = book.tags.slice(0, VISIBLE_TAG_LIMIT);
   const remainingTagCount = book.tags.length - visibleTags.length;
@@ -49,7 +55,7 @@ export function BookResultRow({ result, findUrl }: { result: SearchResult; findU
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5">
-          <CategoryBadge categoryId={book.physicalCategory} />
+          <CategoryBadge categoryLabel={categoryLabel} />
           <AddToListButton bookId={book.id} bookTitle={book.title} className="-mr-2" />
         </div>
 

@@ -1,4 +1,5 @@
-import { books } from "@/lib/catalog/fixtures";
+import { bookRepository, categoryRepository } from "@/db/repositories";
+import { buildFacets } from "@/lib/search/facets";
 import { hasActiveFilters } from "@/lib/search/filters";
 import { searchBooks } from "@/lib/search/searchBooks";
 import { buildFindHref, parseSearchParams } from "@/lib/search/urlParams";
@@ -16,16 +17,28 @@ interface FindPageProps {
 
 /**
  * A Server Component reading `searchParams` directly — search state lives in the URL
- * (docs/SEARCH.md), so this page never needs client-side global state to know what to
- * render. SearchInput/FilterDialog/CategoryQuickPills are the only client components,
- * responsible only for navigating to a new URL, never for holding the "current
- * results" themselves.
+ * (docs/SEARCH.md). As of Phase 4, the catalog itself comes from
+ * `bookRepository.listBooks()` (Postgres), not `fixtures.ts` — this is the interim
+ * `Postgres → Book[] → existing searchBooks()` architecture the Phase 4 brief
+ * explicitly accepts for this catalog size (docs/DECISIONS.md); Phase 5 moves
+ * filtering/ranking into the database itself without changing this page's shape.
+ * SearchInput/FilterDialog/CategoryQuickPills are the only client components, and now
+ * receive the catalog/facets/category labels as plain serializable props rather than
+ * importing the catalog themselves (Phase 4 brief §31) — no browser-side database
+ * access anywhere.
  */
 export default async function FindPage({ searchParams }: FindPageProps) {
   const resolvedParams = await searchParams;
   const { query, filters } = parseSearchParams(resolvedParams);
   const hasIntent = query.trim().length > 0 || hasActiveFilters(filters);
-  const results = hasIntent ? searchBooks({ books, query, filters }) : [];
+
+  const [books, categories] = await Promise.all([bookRepository.listBooks(), categoryRepository.listCategories()]);
+  const categoryLabelBySlug = Object.fromEntries(categories.map((c) => [c.slug, c.label]));
+  const facets = buildFacets(books, categories);
+
+  const results = hasIntent
+    ? searchBooks({ books, query, filters, categoryLabelBySlug: new Map(Object.entries(categoryLabelBySlug)) })
+    : [];
   const findUrl = buildFindHref(query, filters);
 
   return (
@@ -36,14 +49,14 @@ export default async function FindPage({ searchParams }: FindPageProps) {
           below by the gap-6/8 on the outer column — an editorial-feeling separation
           rather than a uniform, settings-panel-like stack of equal gaps. */}
       <div className="flex flex-col gap-3 sm:gap-4">
-        <SearchInput initialQuery={query} filters={filters} />
+        <SearchInput initialQuery={query} filters={filters} books={books} categoryLabelBySlug={categoryLabelBySlug} />
 
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <CategoryQuickPills query={query} filters={filters} />
-          <FilterDialog query={query} filters={filters} />
+          <CategoryQuickPills query={query} filters={filters} categories={facets.categories} />
+          <FilterDialog query={query} filters={filters} facets={facets} />
         </div>
 
-        <ActiveFilters query={query} filters={filters} />
+        <ActiveFilters query={query} filters={filters} categoryLabelBySlug={categoryLabelBySlug} />
       </div>
 
       {!hasIntent && <InitialFindState />}
@@ -54,7 +67,7 @@ export default async function FindPage({ searchParams }: FindPageProps) {
             <span aria-hidden="true" className="h-3 w-1 rounded-full bg-accent" />
             <h2 className="text-sm font-semibold uppercase tracking-wide text-text-muted">Top matches</h2>
           </div>
-          <ResultsList results={results} findUrl={findUrl} />
+          <ResultsList results={results} findUrl={findUrl} categoryLabelBySlug={categoryLabelBySlug} />
         </div>
       )}
 

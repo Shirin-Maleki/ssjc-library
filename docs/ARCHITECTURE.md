@@ -75,10 +75,16 @@ a local Postgres+pgvector instance for development, independent of migrations.
 
 ## 4. Canonical database
 
-**Postgres, hosted on Supabase.** Portability stance unchanged from the first draft: no
+**Postgres — implemented in Phase 4.** Portability stance unchanged from the first draft: no
 Supabase Auth, no Supabase-only RLS dependency, no Supabase Storage for canonical images —
-schema and queries are standard SQL/Postgres, portable to Neon/RDS/self-hosted with a
-connection-string change. pgvector is enabled for semantic search (§12).
+schema and queries are standard SQL/Postgres via Drizzle ORM, portable to Supabase/Neon/RDS/
+self-hosted with a connection-string change. **As actually built:** this local development
+environment runs against a disposable local PostgreSQL 16 instance (Homebrew), not a hosted
+Supabase project — Supabase remains the intended hosted target for a real deployment; nothing
+in the schema, queries, or application code is Supabase-specific, so pointing
+`DATABASE_URL` at a Supabase connection string is the entire migration (see
+`docs/DATABASE_SETUP.md`). pgvector is **not** enabled — semantic search stays fully deferred
+to Phase 5 (§13).
 
 ## 5. Relational data model
 
@@ -110,6 +116,17 @@ changed and why (full detail in the data model doc):
   genuinely needs to be admin-editable data).
 - **Contributors, tags, and physical categories** are unchanged from the first draft — see
   `docs/DATA_MODEL.md` for full column detail.
+
+**Phase 4 as-built status:** all 23 tables are implemented as committed Drizzle migrations
+under `drizzle/` (never `drizzle-kit push` against a shared environment — see
+`docs/DATABASE_SETUP.md`). Two small, deliberate corrections surfaced during implementation
+and are documented in full in `docs/DATA_MODEL.md` §16 and `docs/DECISIONS.md`:
+`books.visual_media_type` is a Postgres array of the enum (not a single scalar value), and
+`visual_realism`'s stylized value is named `stylized_illustration`. `book_identity_candidates`
+and `metadata_provider_cache` — whose columns the Phase 0 doc left unspecified ("unchanged from
+the first draft") — now have a real column list, also in `docs/DATA_MODEL.md` §16.
+`embedding`/`embedding_source_hash`/`embedding_generated_at` were **not** added to `books` —
+see §13.
 
 ## 6. Google Drive integration
 
@@ -250,6 +267,14 @@ vector database, no ANN index needed at this collection size, a deterministic em
 template with a source-hash to skip unnecessary regeneration, dimension deferred pending
 provider choice.
 
+**Phase 4 status: entirely untouched, by explicit design.** The pgvector extension is not
+enabled; `books` has no `embedding` / `embedding_source_hash` / `embedding_generated_at`
+columns at all. Adding a placeholder column with an invented dimension would misrepresent a
+real decision (which embedding provider, what dimension) as already made when it isn't —
+better to defer it cleanly and add it as a real, reviewed migration in Phase 5. Until then,
+`BookRepository` → `Book[]` → the existing deterministic `searchBooks()` is the entire
+retrieval path (`docs/DATABASE_SETUP.md`, "The Phase 5 replacement seam").
+
 ## 14. Staff / admin authentication & session architecture — full technical specification
 
 The shared-password UX is unchanged; this section makes the mechanism underneath it fully
@@ -381,14 +406,34 @@ Unchanged: admin dashboard sections are filtered views over `books`, `review_fla
 ## 20. Reading list architecture
 
 Target schema unchanged: `reading_lists` + `reading_list_items`, no accounts, no ownership
-(`docs/DATA_MODEL.md` §9). **Phase 3 update:** built ahead of the real database behind a
-`ReadingListRepository` interface (`get all/getById/create/rename/delete/addBook/removeBook`,
-all `async`), with exactly one implementation today —
-`LocalStorageReadingListRepository`, persisting to the browser's `localStorage` only (see
-`docs/DECISIONS.md`, "Reading Lists persistence"). Every component reaches this through one
-`ReadingListsProvider` React context, never `localStorage` directly. Phase 4 implements a
-second, database-backed class against the same interface and swaps it in at the provider's
-single construction point — no UI code changes.
+(`docs/DATA_MODEL.md` §9). Built ahead of the real database in Phase 3, behind a
+`ReadingListRepository` interface (`getAll/getById/create/rename/delete/addBook/removeBook`,
+all `async`), consumed everywhere through one `ReadingListsProvider` React context.
+
+**Phase 4: implemented for real, genuinely shared across every staff member/device.** The full
+chain, client to database:
+
+```
+React component (Client)
+  → ReadingListsProvider (Client, "use client")
+  → RemoteReadingListRepository (Client-safe, src/lib/reading-lists/remoteRepository.ts)
+  → Server Action (src/lib/reading-lists/actions.ts, "use server", 7 functions)
+  → requireStaffSession() — re-checked independently, every action
+  → DrizzleReadingListRepository (server-only, src/db/repositories/readingListRepository.ts)
+  → Drizzle ORM
+  → Postgres (reading_lists / reading_list_items)
+```
+
+`ReadingListsProvider` changed exactly one line — which class it constructs
+(`RemoteReadingListRepository` instead of `LocalStorageReadingListRepository`) — confirming the
+Phase 3 seam worked as designed; no dialog, page, or component above the repository boundary
+changed. `addBook`/`removeBook` each run inside a `db.transaction()` (the item write and the
+list's `updated_at` bump must succeed together); `addBook`'s insert uses
+`.onConflictDoNothing()` against the `(list_id, book_id)` composite primary key, making
+"add a book already on the list" idempotent at the database level, not via an app-level check.
+Old `localStorage` data was deliberately **not** migrated — it was always disposable
+development data. Full reasoning: `docs/DECISIONS.md`, "Reading Lists: from localStorage to
+Postgres."
 
 ## 21. Privacy & security architecture
 

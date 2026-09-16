@@ -48,9 +48,13 @@ export function AddToReadingListDialog({ bookId, bookTitle, trigger, onAdded }: 
 
   async function handleSelectList(list: ReadingList) {
     const alreadyThere = isBookInList(list, bookId);
-    await addBook(list.id, bookId);
-    setOpen(false);
-    onAdded(alreadyThere ? `Already in "${list.name}."` : `Added to "${list.name}."`);
+    try {
+      await addBook(list.id, bookId);
+      setOpen(false);
+      onAdded(alreadyThere ? `Already in "${list.name}."` : `Added to "${list.name}."`);
+    } catch {
+      setError("Something went wrong adding this book. Please try again.");
+    }
   }
 
   async function handleCreateSubmit(event: React.FormEvent) {
@@ -65,6 +69,8 @@ export function AddToReadingListDialog({ bookId, bookTitle, trigger, onAdded }: 
       await addBook(created.id, bookId);
       setOpen(false);
       onAdded(`Created "${created.name}" and added.`);
+    } catch {
+      setError("Something went wrong creating this list. Please try again.");
     } finally {
       setSubmitting(false);
     }
@@ -82,6 +88,11 @@ export function AddToReadingListDialog({ bookId, bookTitle, trigger, onAdded }: 
 
           {mode === "select" ? (
             <div className="mt-4 flex flex-col gap-4 overflow-y-auto">
+              {error && (
+                <p role="alert" className="text-sm text-danger">
+                  {error}
+                </p>
+              )}
               {!ready && <p className="text-sm text-text-muted">Loading your lists…</p>}
               {ready && lists.length === 0 && (
                 <p className="text-sm text-text-secondary">You don&rsquo;t have any reading lists yet.</p>

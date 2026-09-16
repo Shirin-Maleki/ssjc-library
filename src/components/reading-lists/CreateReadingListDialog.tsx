@@ -48,6 +48,9 @@ export function CreateReadingListDialog({ trigger }: CreateReadingListDialogProp
       const created = await createList({ name, createdBy: createdBy || undefined });
       setOpen(false);
       router.push(`/lists/${created.id}`);
+    } catch {
+      // Never a raw error/stack trace (Phase 4 brief §35) — one calm sentence.
+      setError("Something went wrong creating this list. Please try again.");
     } finally {
       setSubmitting(false);
     }

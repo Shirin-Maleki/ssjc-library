@@ -1,16 +1,19 @@
 # Implementation Status
 
-Last updated: 2026-09-15 (end of Phase 3). This document is continuity insurance — it should
+Last updated: 2026-09-16 (end of Phase 4). This document is continuity insurance — it should
 always let another coding agent open this repository cold and know exactly where things
 stand. Keep it current at the end of every phase.
 
 ## Current phase
 
-**Phase 3 — Voice + Reading Lists + Guide: complete, awaiting review.** Voice search
-(progressive enhancement over the browser's Web Speech API, reusing Find's exact deterministic
-search pipeline), shared local Reading Lists (create/rename/delete/add/remove, localStorage-
-backed behind a repository interface), and a real Library Guide are all built. Phase 4 has
-not started and must not start until Phase 3 is explicitly approved.
+**Phase 4 — Real database: complete, awaiting review.** PostgreSQL is now the canonical data
+store, accessed exclusively through Drizzle ORM behind committed SQL migrations. The full
+23-table schema from `docs/DATA_MODEL.md` is implemented; the 48-book fixture catalog is now
+seed data with stable UUIDs; Find, Book Detail, and Reading Lists all read from Postgres via
+repository classes instead of the in-memory fixture array; Reading Lists moved from Phase 3's
+`localStorage` to genuinely shared Postgres persistence via authenticated Server Actions.
+Semantic search/embeddings/pgvector remain entirely out of scope (Phase 5). Phase 5 has not
+started and must not start until Phase 4 is explicitly approved.
 
 ## Full phase plan (for reference — do not execute ahead of approval)
 
@@ -19,8 +22,8 @@ not started and must not start until Phase 3 is explicitly approved.
 | 0 | Repository inspection + architecture | Complete (approved) |
 | 1 | Foundation + design system + access | Complete (approved), branding applied 2026-09-14 |
 | 2 | Mock library + Find a Book | Complete (approved), visual/mobile revision 2026-09-14 |
-| 3 | Voice + reading lists + guide | **Complete — awaiting review** |
-| 4 | Real database | Not started |
+| 3 | Voice + reading lists + guide | Complete (approved) |
+| 4 | Real database | **Complete — awaiting review** |
 | 5 | Real search architecture | Not started |
 | 6 | Google Drive connection | Not started |
 | 7 | Single Add-a-Book flow | Not started |
@@ -135,22 +138,60 @@ four-color brand palette. Full detail in the phase report; summary:
   restrained, not noisy (see `docs/BRANDING.md`/`docs/DECISIONS.md` — no code change needed).
 - Typecheck, lint, and production build all pass cleanly.
 
+## Completed work (Phase 4)
+
+- **Full 23-table schema implemented as committed Drizzle migrations** (`src/db/schema/`,
+  `drizzle/`) — exactly the reviewed schema from `docs/DATA_MODEL.md`, with no casual
+  simplification and neither `work_groups` nor a `languages` reference table revived. Two small,
+  documented corrections: `visual_media_type` is a Postgres array (not scalar), and
+  `visual_realism`'s `stylized` value is named `stylized_illustration` — full reasoning in
+  `docs/DECISIONS.md` and `docs/DATA_MODEL.md` §16.
+- **The 48-book fixture catalog became seed data** (`src/db/seed.ts`) with stable, hardcoded
+  UUIDs (not the fixtures' string slugs) — truncate-then-seed, fully reproducible. `fixtures.ts`
+  itself is retained as seed/test source material only; no production code path imports it
+  directly anymore.
+- **Find, Book Detail, and category data all read from Postgres** via `BookRepository`/
+  `CategoryRepository` (`src/db/repositories/`) instead of the fixture array — the existing
+  deterministic `searchBooks()` ranking is completely unchanged, just fed real database rows
+  projected into the same `Book` shape.
+- **Reading Lists moved from `localStorage` to genuinely shared Postgres persistence**, via
+  `ReadingListsProvider → RemoteReadingListRepository → 7 authenticated Server Actions →
+  DrizzleReadingListRepository → Drizzle → Postgres` (`docs/ARCHITECTURE.md` §20,
+  `docs/DECISIONS.md`). Old localStorage data was deliberately not migrated (disposable dev
+  data). Every mutation dialog now handles a real network failure with a calm message instead
+  of assuming success.
+- **Real database tests, against a genuinely running Postgres instance, never mocked:** 7
+  migration/schema tests, 8 `BookRepository` tests, 10 `ReadingListRepository` tests including
+  the mandated two-independent-connection shared-persistence proof (`npm run test:integration`).
+- **A local, disposable PostgreSQL 16 setup** (three databases: dev/test/e2e) stood in for
+  Supabase in this environment — nothing in the schema or code is Supabase-specific; switching
+  is a connection-string change (`docs/DATABASE_SETUP.md`).
+- 2 new unit tests (`ReadingListsProvider`'s load-failure path, replacing now-obsolete
+  "corrupted localStorage" E2E coverage), 25 new integration tests, and a full rewrite of
+  `readingLists.spec.ts`'s test strategy for genuinely shared/persistent E2E data (collision-
+  proof list names, desktop-only + serial execution, two real bugs found and fixed along the
+  way — full account in `docs/TESTING.md` and `docs/DECISIONS.md`) — 156 unit / 25 integration /
+  98 E2E tests, all passing, the E2E suite re-run three consecutive times with no flakes.
+- Typecheck, lint, and production build all pass cleanly.
+
 ## In-progress work
 
 None.
 
 ## Blocked work
 
-None. Phase 4 (the real database) can begin without any external credential blocking it, but
-per the approved roadmap it should wait for explicit approval of this Phase 3 report first.
+None. Phase 5 (real search architecture — semantic search/embeddings/pgvector) can begin
+without any external credential blocking it, but per the approved roadmap it should wait for
+explicit approval of this Phase 4 report first.
 
 ## Deferred work
 
-Everything in Phases 4–13, by design. Notably still not built: any AI/LLM involvement in
-search (still fully deterministic), a real database (Reading Lists are local-only until then),
-Google/Sheets/Drive integration, and the school's final physical taxonomy (still the 8
-provisional development categories — see `docs/PRODUCT_SPEC.md` and
-`src/lib/catalog/categories.ts`).
+Everything in Phases 5–13, by design. Notably still not built: any AI/LLM involvement in
+search (still fully deterministic — Phase 5), semantic search/embeddings/pgvector (Phase 5,
+explicitly out of scope this phase — no `embedding` column, no extension enabled, no
+placeholder dimension invented), Google/Sheets/Drive integration, and the school's final
+physical taxonomy (still the 8 provisional development categories — see `docs/PRODUCT_SPEC.md`
+and `src/lib/catalog/categories.ts`, now seed-only source material).
 
 ## Pending user inputs
 
@@ -160,7 +201,7 @@ discrepancy between the logo's actual pixels and the documented official palette
 a genuine open question (which should be the "true" reference) rather than resolved by
 assumption. Branding is now fully real end to end — nothing placeholder remains.
 
-None of these block Phase 4:
+None of these block Phase 5:
 
 - **Google Drive folder — link received 2026-09-14** (three sub-folders of scanned book
   covers). Not yet inspected: the Google Drive connector isn't authorized in-session yet, and
@@ -169,58 +210,75 @@ None of these block Phase 4:
   credentials) — it's tracked outside the repo for when Phase 6 begins.
 - Google Sheet for the teacher catalog projection (Phase 9).
 - Which AI provider(s) you hold API/billing access to.
-- Supabase project credentials.
+- **Supabase project credentials — still not provided.** Phase 4 used a local, disposable
+  PostgreSQL 16 instance instead (`docs/DATABASE_SETUP.md`); nothing in the schema or
+  application code is Supabase-specific, so this remains a pure connection-string swap
+  whenever real credentials arrive — not a blocker for any phase.
 - Eventually: feedback on whether the 8 provisional physical categories used for Phase 2
   testing feel like a reasonable direction, once Phase 11's real taxonomy research begins —
   not needed now.
 
 ## Known bugs
 
-None open. This phase found and fixed three real bugs during its own testing — none search-
-related, all in the new Reading Lists/voice UI — full writeups in `docs/TESTING.md`:
-1. A native HTML `required` attribute on the Create/Rename/Add-to-list name fields silently
-   blocked the custom, more-accessible JS validation message from ever running.
-2. The Add-to-list dialog auto-skipped straight to its "create new list" form whenever no
-   lists existed yet, silently bypassing the documented "select an existing list" view (which
-   already correctly handled the empty case) — an unintended shortcut, not a deliberate one.
-3. `react-hooks/set-state-in-effect` (a newer, stricter lint rule) caught a real anti-pattern
-   in `ReadingListsProvider`'s initial load effect — calling a local `useCallback`-wrapped
-   function that itself calls `setState`, from inside an effect. Fixed by inlining the
-   repository call and handling its resolution directly, per `docs/AGENT_HANDOFF.md`.
+None open. Phase 4 found and fixed three real issues during its own testing — full writeups in
+`docs/TESTING.md` and `docs/DECISIONS.md`:
+1. `readingLists.spec.ts` broke almost entirely on first contact with genuinely shared,
+   persistent Reading Lists data — a test-suite design gap (Phase 3's tests implicitly assumed
+   per-browser-context isolation), not an application bug. Fixed with collision-proof list
+   names, desktop-only serial execution, and reordering the two tests that genuinely need
+   global emptiness to run first.
+2. A real test-only race: several E2E tests navigated away immediately after clicking
+   "Create & add," without waiting for the dialog to close — since `createList`/`addBook` are
+   now genuinely asynchronous Server Actions (not synchronous `localStorage` calls), a full
+   page reload could land between them and orphan the in-flight `addBook` call. Fixed with an
+   explicit wait for the dialog to close before any navigation.
+3. A locator-ambiguity bug in one E2E test, surfaced only after fixing #2: "Already added"
+   matched multiple list rows once earlier tests had added the same book to their own lists.
+   Fixed by scoping the check to the specific list row this test created.
+
+Phase 3's three previously-fixed bugs (native `required` blocking custom validation, the
+Add-to-list dialog's empty-state shortcut, and a `set-state-in-effect` lint violation) remain
+fixed and are unaffected by Phase 4.
 
 ## Environment variables
 
-Unchanged from Phase 1 (`STAFF_PASSWORD_HASH`, `ADMIN_PASSWORD_HASH`, `SESSION_SECRET`,
-optional `SESSION_COOKIE_SECURE`) — Phase 3 needed no new environment variables. Voice search
-uses only the browser's own Web Speech API (no server-side key); Reading Lists use only
-`localStorage`.
+Phase 1's four (`STAFF_PASSWORD_HASH`, `ADMIN_PASSWORD_HASH`, `SESSION_SECRET`, optional
+`SESSION_COOKIE_SECURE`) are unchanged. **Phase 4 adds four database variables**
+(`DATABASE_URL`, `DATABASE_MIGRATION_URL`, `TEST_DATABASE_URL`, `E2E_DATABASE_URL`) — names and
+purposes documented in `docs/DATABASE_SETUP.md` and `.env.example`; no values recorded here.
+Voice search still uses only the browser's own Web Speech API (no server-side key).
 
 ## Migrations
 
-None yet — no database exists until Phase 4. When it arrives, `books` in
-`src/lib/catalog/fixtures.ts` is the seam that gets replaced by a real query, and
-`LocalStorageReadingListRepository` is the seam that gets replaced by a real
-`ReadingListRepository` implementation — both shapes were deliberately kept close to the
-eventual schema (`docs/DATA_MODEL.md`) for exactly this reason.
+**Real now.** Committed SQL migration files live under `drizzle/`, generated from
+`src/db/schema/` via `npm run db:generate` and applied via `npm run db:migrate` — never
+`drizzle-kit push` against a shared environment. `src/lib/catalog/fixtures.ts` is retained as
+seed/test source material only, converted into seed data by `src/db/seed.ts`; no production
+code path imports it directly anymore.
+`LocalStorageReadingListRepository`'s replacement, `DrizzleReadingListRepository`, is wired in
+at `ReadingListsProvider`'s single construction point, exactly as Phase 3 designed the seam.
+See `docs/DATABASE_SETUP.md` for the full command reference.
 
 ## External services
 
-Unchanged — nothing connected. Voice search talks only to the browser's own built-in speech
-recognition (no network call this app makes or controls); Reading Lists talk only to
-`localStorage`. Phase 3 needed no mocks.
+A local, disposable PostgreSQL 16 instance (three databases: dev/test/e2e) — the only "external
+service" this phase connects to, and not actually external at all (see
+`docs/DATABASE_SETUP.md`). Voice search still talks only to the browser's own built-in speech
+recognition (no network call this app makes or controls). No Supabase, Google, or AI service is
+connected yet.
 
 ## Git status
 
 Repository is linked to `github.com/Shirin-Maleki/ssjc-library` (`origin`, `main`). New
-commit(s) this phase add voice search, Reading Lists, and the Library Guide on top of the
-Phase 0–2 history (including the Phase 2 visual/mobile revision). See the phase report for
+commit(s) this phase add the full Postgres/Drizzle data layer, the Reading Lists migration to
+Postgres, and updated documentation, on top of the Phase 0–3 history. See the phase report for
 exact commit SHA(s) and push status.
 
 ## Next recommended task
 
-Await review of this Phase 3 report. Once approved, **Phase 4 — the real database**: Supabase/
-Postgres via Drizzle, replacing `src/lib/catalog/fixtures.ts` and
-`LocalStorageReadingListRepository` with real queries behind the same interfaces, per
-`docs/DATA_MODEL.md` and `docs/DECISIONS.md`.
+Await review of this Phase 4 report. Once approved, **Phase 5 — real search architecture**:
+semantic search, embeddings, pgvector, and trigram/full-text ranking improvements, layered on
+top of (not replacing) the existing deterministic `searchBooks()` engine, per
+`docs/ARCHITECTURE.md` §12/§13 and `docs/DECISIONS.md`.
 
 Do not begin Phase 4 without explicit approval.

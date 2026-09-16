@@ -1,4 +1,3 @@
-import { getCategoryLabel } from "@/lib/catalog/categories";
 import { cn } from "@/lib/utils/cn";
 
 /**
@@ -9,7 +8,7 @@ import { cn } from "@/lib/utils/cn";
  * not "this specific category" — which keeps every other tag neutral and avoids the
  * "rainbow of tags" the product brief explicitly warns against.
  */
-export function CategoryBadge({ categoryId, className }: { categoryId: string; className?: string }) {
+export function CategoryBadge({ categoryLabel, className }: { categoryLabel: string; className?: string }) {
   return (
     <div
       className={cn(
@@ -27,7 +26,7 @@ export function CategoryBadge({ categoryId, className }: { categoryId: string; c
         <circle cx="8" cy="6" r="1.6" stroke="currentColor" strokeWidth="1.3" />
       </svg>
       <span>
-        Located in <span className="font-semibold">{getCategoryLabel(categoryId)}</span>
+        Located in <span className="font-semibold">{categoryLabel}</span>
       </span>
     </div>
   );

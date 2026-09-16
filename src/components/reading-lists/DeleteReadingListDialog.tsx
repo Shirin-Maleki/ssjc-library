@@ -19,6 +19,7 @@ export function DeleteReadingListDialog({ listId, listName, trigger }: DeleteRea
   const { deleteList } = useReadingLists();
   const [open, setOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
 
   async function handleDelete() {
@@ -27,13 +28,20 @@ export function DeleteReadingListDialog({ listId, listName, trigger }: DeleteRea
       await deleteList(listId);
       setOpen(false);
       router.push("/lists");
+    } catch {
+      setError("Something went wrong deleting this list. Please try again.");
     } finally {
       setDeleting(false);
     }
   }
 
+  function handleOpenChange(next: boolean) {
+    if (next) setError(null);
+    setOpen(next);
+  }
+
   return (
-    <Dialog.Root open={open} onOpenChange={setOpen}>
+    <Dialog.Root open={open} onOpenChange={handleOpenChange}>
       <Dialog.Trigger asChild>{trigger}</Dialog.Trigger>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-40 bg-black/30" />
@@ -49,6 +57,12 @@ export function DeleteReadingListDialog({ listId, listName, trigger }: DeleteRea
           <Dialog.Description className="mt-1 text-sm text-text-secondary">
             This removes the Reading List, not the books from the library.
           </Dialog.Description>
+
+          {error && (
+            <p role="alert" className="mt-3 text-sm text-danger">
+              {error}
+            </p>
+          )}
 
           <div className="mt-5 flex items-center justify-end gap-3">
             <Dialog.Close asChild>

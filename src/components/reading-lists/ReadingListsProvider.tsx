@@ -1,16 +1,24 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { LocalStorageReadingListRepository } from "@/lib/reading-lists/localStorageRepository";
+import { RemoteReadingListRepository } from "@/lib/reading-lists/remoteRepository";
 import type { ReadingListRepository } from "@/lib/reading-lists/repository";
 import type { CreateReadingListInput, ReadingList } from "@/lib/reading-lists/types";
 
+/** Never a raw error/SQL/stack trace (Phase 4 brief §35/§42) — one calm, teacher-
+ * readable sentence, distinct from "there are genuinely no lists yet." */
+const LOAD_ERROR_MESSAGE = "Reading Lists couldn't be loaded right now. Please try refreshing the page.";
+
 interface ReadingListsContextValue {
   lists: ReadingList[];
-  /** False until the initial localStorage read completes — consumers must not render
-   * an empty state before this is true, or a real list would flash "No lists yet"
-   * for a moment on every page load (product brief §11). */
+  /** False until the initial load attempt (success OR failure) completes —
+   * consumers must not render an empty state before this is true, or a real list
+   * would flash "No lists yet" for a moment on every page load (product brief §11). */
   ready: boolean;
+  /** Set only when the initial load itself failed (e.g. the database is
+   * unreachable) — distinct from `ready && lists.length === 0`, which means the load
+   * succeeded and there genuinely are no lists yet (Phase 4 brief §42). */
+  loadError: string | null;
   getById: (id: string) => ReadingList | undefined;
   createList: (input: CreateReadingListInput) => Promise<ReadingList>;
   renameList: (id: string, name: string) => Promise<ReadingList>;
@@ -28,28 +36,38 @@ const ReadingListsContext = createContext<ReadingListsContextValue | null>(null)
  * layout (`src/app/(staff)/layout.tsx`) so every staff page shares the same in-memory
  * list state without prop-drilling.
  *
- * The repository instance itself lives behind `ReadingListRepository` — swapping
- * `LocalStorageReadingListRepository` for a real database-backed implementation in
- * Phase 4 is the only change this file (or anything using this provider) will need.
+ * The repository instance itself lives behind `ReadingListRepository` — Phase 4
+ * swapped `LocalStorageReadingListRepository` for `RemoteReadingListRepository`
+ * (Server Actions over Postgres, docs/DECISIONS.md) as the only change this file (or
+ * anything using this provider) needed.
  */
 export function ReadingListsProvider({ children }: { children: ReactNode }) {
-  const [repository] = useState<ReadingListRepository>(() => new LocalStorageReadingListRepository());
+  const [repository] = useState<ReadingListRepository>(() => new RemoteReadingListRepository());
   const [lists, setLists] = useState<ReadingList[]>([]);
   const [ready, setReady] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     const all = await repository.getAll();
     setLists(all);
+    setLoadError(null);
     return all;
   }, [repository]);
 
   useEffect(() => {
     let cancelled = false;
-    repository.getAll().then((all) => {
-      if (cancelled) return;
-      setLists(all);
-      setReady(true);
-    });
+    repository
+      .getAll()
+      .then((all) => {
+        if (cancelled) return;
+        setLists(all);
+        setReady(true);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setLoadError(LOAD_ERROR_MESSAGE);
+        setReady(true);
+      });
     return () => {
       cancelled = true;
     };
@@ -102,8 +120,8 @@ export function ReadingListsProvider({ children }: { children: ReactNode }) {
   );
 
   const value = useMemo<ReadingListsContextValue>(
-    () => ({ lists, ready, getById, createList, renameList, deleteList, addBook, removeBook }),
-    [lists, ready, getById, createList, renameList, deleteList, addBook, removeBook]
+    () => ({ lists, ready, loadError, getById, createList, renameList, deleteList, addBook, removeBook }),
+    [lists, ready, loadError, getById, createList, renameList, deleteList, addBook, removeBook]
   );
 
   return <ReadingListsContext.Provider value={value}>{children}</ReadingListsContext.Provider>;
