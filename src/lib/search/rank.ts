@@ -22,7 +22,10 @@ export type MatchReasonType =
   | "duration"
   | "format"
   | "fiction_type"
-  | "description";
+  | "description"
+  | "exact_retrieval"
+  | "fuzzy_match"
+  | "semantic";
 
 export interface MatchReason {
   type: MatchReasonType;
@@ -113,12 +116,16 @@ export function scoreBook(book: Book, query: string): ScoredBook {
       reasons.push({ type: "tag", value: matchedTag });
     }
 
-    const formatLabel = normalizeSearchText(FORMAT_LABELS[book.format]);
-    if (containsAnyToken(formatLabel, tokens)) {
-      score += RANKING_WEIGHTS.formatOrFictionType;
-      reasons.push({ type: "format", value: book.format });
+    // An unrecorded format/fiction status contributes no signal at all — never
+    // matched, never scored (Phase 5 correction pass).
+    if (book.format) {
+      const formatLabel = normalizeSearchText(FORMAT_LABELS[book.format]);
+      if (containsAnyToken(formatLabel, tokens)) {
+        score += RANKING_WEIGHTS.formatOrFictionType;
+        reasons.push({ type: "format", value: book.format });
+      }
     }
-    if (tokens.includes(book.fictionType)) {
+    if (book.fictionType && tokens.includes(book.fictionType)) {
       score += RANKING_WEIGHTS.formatOrFictionType;
       reasons.push({ type: "fiction_type", value: book.fictionType });
     }
@@ -129,7 +136,13 @@ export function scoreBook(book: Book, query: string): ScoredBook {
     }
   }
 
-  if (intent.languageCode && book.languageCode === intent.languageCode) {
+  // A book matches a free-text language mention via either its primary or an
+  // additional language (Phase 5 correction pass — parity with the explicit-filter
+  // and facet behavior `docs/DECISIONS.md` already established in Phase 4).
+  if (
+    intent.languageCode &&
+    (book.languageCode === intent.languageCode || (book.additionalLanguageCodes ?? []).includes(intent.languageCode))
+  ) {
     score += RANKING_WEIGHTS.languageIntent;
     reasons.push({ type: "language", value: intent.languageCode });
   }
@@ -144,7 +157,7 @@ export function scoreBook(book: Book, query: string): ScoredBook {
     reasons.push({ type: "illustration_style", value: intent.illustrationStyle });
   }
 
-  if (intent.visualRealism && intent.visualRealism.includes(book.visualRealism)) {
+  if (book.visualRealism && intent.visualRealism && intent.visualRealism.includes(book.visualRealism)) {
     score += RANKING_WEIGHTS.visualRealismIntent;
     reasons.push({ type: "visual_realism", value: book.visualRealism });
   }

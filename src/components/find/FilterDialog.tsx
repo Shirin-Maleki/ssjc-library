@@ -3,7 +3,7 @@
 import { useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useRouter } from "next/navigation";
-import type { buildFacets } from "@/lib/search/facets";
+import type { FacetCounts } from "@/db/repositories/searchRepository";
 import { countActiveFilters, EMPTY_FILTERS, type Filters } from "@/lib/search/filters";
 import { buildFindHref } from "@/lib/search/urlParams";
 import { Button } from "@/components/ui/Button";
@@ -15,7 +15,7 @@ interface FilterDialogProps {
   filters: Filters;
   /** Precomputed server-side (Phase 4 brief §31) — this component never imports the
    * catalog or computes facets itself. */
-  facets: ReturnType<typeof buildFacets>;
+  facets: FacetCounts;
 }
 
 /**

@@ -24,8 +24,13 @@ export interface Filters {
 
 export const EMPTY_FILTERS: Filters = {};
 
-function orMatch(selected: string[] | undefined, value: string): boolean {
+/** Phase 5 correction pass: a book with an unrecorded value for this field can never
+ * satisfy an active filter on it — excluded, not silently passed through
+ * (docs/DECISIONS.md, "Incomplete metadata is never invented"). An inactive filter
+ * (nothing selected) still passes everything, known or not. */
+function orMatch(selected: string[] | undefined, value: string | undefined): boolean {
   if (!selected || selected.length === 0) return true;
+  if (value == null) return false;
   return selected.includes(value);
 }
 

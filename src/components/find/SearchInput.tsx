@@ -1,9 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { Book } from "@/lib/catalog/types";
-import { deriveAutocompleteOptions, getSuggestionTypeLabel } from "@/lib/search/autocomplete";
+import { autocompleteAction, type AutocompleteRow } from "@/lib/search/autocompleteAction";
+import { getSuggestionTypeLabel } from "@/lib/search/autocomplete";
 import type { Filters } from "@/lib/search/filters";
 import { buildFindHref } from "@/lib/search/urlParams";
 import { useVoiceSearch } from "@/lib/voice/useVoiceSearch";
@@ -19,26 +19,33 @@ import { VoiceSearchButton } from "./VoiceSearchButton";
 interface SearchInputProps {
   initialQuery: string;
   filters: Filters;
-  /** Precomputed server-side (Phase 4 brief §31) — this component never imports the
-   * catalog directly. */
-  books: Book[];
-  categoryLabelBySlug: Record<string, string>;
 }
 
 /** How long the transcript stays visible, alone, before the search actually runs —
  * long enough to read what was heard, short enough that voice still feels instant. */
 const VOICE_SEARCH_DELAY_MS = 350;
 
-export function SearchInput({ initialQuery, filters, books, categoryLabelBySlug }: SearchInputProps) {
+/** Long enough that fast typing doesn't fire a Server Action per keystroke, short
+ * enough that suggestions still feel responsive (docs/SEARCH.md §6). */
+const AUTOCOMPLETE_DEBOUNCE_MS = 200;
+
+export function SearchInput({ initialQuery, filters }: SearchInputProps) {
   const router = useRouter();
   const [value, setValue] = useState(initialQuery);
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
+  const [suggestions, setSuggestions] = useState<AutocompleteRow[]>([]);
   const listboxId = useId();
   const inputId = useId();
   const containerRef = useRef<HTMLDivElement>(null);
   const preVoiceQueryRef = useRef("");
-  const categoryLabelBySlugMap = useMemo(() => new Map(Object.entries(categoryLabelBySlug)), [categoryLabelBySlug]);
+  // Guards against a slower, earlier request resolving after a faster, later one —
+  // a real risk once suggestions come from a network round-trip instead of a
+  // synchronous in-memory computation (docs/SEARCH.md §6, "stale-response
+  // protection"). Not a real AbortController, since Server Actions don't expose one
+  // the way `fetch` does, but the effect: any response that isn't the most recent
+  // request is simply discarded.
+  const latestRequestId = useRef(0);
 
   const {
     status: voiceStatus,
@@ -50,10 +57,36 @@ export function SearchInput({ initialQuery, filters, books, categoryLabelBySlug 
     reset: resetVoice,
   } = useVoiceSearch();
 
-  const suggestions = useMemo(
-    () => (open ? deriveAutocompleteOptions(books, value, categoryLabelBySlugMap) : []),
-    [open, value, books, categoryLabelBySlugMap]
-  );
+  // Debounced, cancellation-safe server-side autocomplete (Phase 5) — replaces the
+  // old client-side `deriveAutocompleteOptions(books, ...)` over a full catalog
+  // shipped to the browser. A network/provider failure here just means no
+  // suggestions appear; typed Enter-to-search remains fully usable regardless.
+  useEffect(() => {
+    // Derived-via-effect-skip, not a synchronous setState at the top of the effect
+    // (react-hooks/set-state-in-effect — the same rule/fix pattern as Phase 3's
+    // voice-transcript effect, docs/AGENT_HANDOFF.md): when there's nothing to
+    // debounce a request for, simply don't schedule one; `visibleSuggestions` below
+    // derives the empty-list display state instead of this effect setting it.
+    if (!open || value.trim().length < 2) return;
+    const requestId = ++latestRequestId.current;
+    const timer = window.setTimeout(() => {
+      autocompleteAction(value)
+        .then((rows) => {
+          if (latestRequestId.current !== requestId) return; // a newer keystroke already superseded this
+          setSuggestions(rows);
+        })
+        .catch(() => {
+          if (latestRequestId.current !== requestId) return;
+          setSuggestions([]);
+        });
+    }, AUTOCOMPLETE_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [open, value]);
+
+  // Derived, not cleared via the effect above — masks stale suggestions the moment
+  // the dropdown closes or the query drops below the minimum length, without the
+  // effect needing a synchronous setState of its own for that case.
+  const visibleSuggestions = open && value.trim().length >= 2 ? suggestions : [];
 
   const navigate = useCallback(
     (query: string) => {
@@ -66,8 +99,8 @@ export function SearchInput({ initialQuery, filters, books, categoryLabelBySlug 
 
   function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
-    if (activeIndex >= 0 && suggestions[activeIndex]) {
-      const suggestion = suggestions[activeIndex];
+    if (activeIndex >= 0 && visibleSuggestions[activeIndex]) {
+      const suggestion = visibleSuggestions[activeIndex];
       setValue(suggestion.value);
       navigate(suggestion.value);
       return;
@@ -76,7 +109,7 @@ export function SearchInput({ initialQuery, filters, books, categoryLabelBySlug 
   }
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
-    if (!open || suggestions.length === 0) {
+    if (!open || visibleSuggestions.length === 0) {
       if (event.key === "ArrowDown" && value.trim().length >= 2) {
         setOpen(true);
       }
@@ -85,10 +118,10 @@ export function SearchInput({ initialQuery, filters, books, categoryLabelBySlug 
 
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      setActiveIndex((i) => (i + 1) % suggestions.length);
+      setActiveIndex((i) => (i + 1) % visibleSuggestions.length);
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
-      setActiveIndex((i) => (i <= 0 ? suggestions.length - 1 : i - 1));
+      setActiveIndex((i) => (i <= 0 ? visibleSuggestions.length - 1 : i - 1));
     } else if (event.key === "Escape") {
       setOpen(false);
       setActiveIndex(-1);
@@ -163,7 +196,7 @@ export function SearchInput({ initialQuery, filters, books, categoryLabelBySlug 
             id={inputId}
             type="text"
             role="combobox"
-            aria-expanded={open && suggestions.length > 0}
+            aria-expanded={open && visibleSuggestions.length > 0}
             aria-controls={listboxId}
             aria-autocomplete="list"
             aria-activedescendant={activeIndex >= 0 ? `${listboxId}-option-${activeIndex}` : undefined}
@@ -203,14 +236,14 @@ export function SearchInput({ initialQuery, filters, books, categoryLabelBySlug 
         </div>
       </form>
 
-      {open && suggestions.length > 0 && (
+      {open && visibleSuggestions.length > 0 && (
         <ul
           id={listboxId}
           role="listbox"
           aria-label="Search suggestions"
           className="absolute z-10 mt-2 w-full overflow-hidden rounded-lg border border-border bg-surface shadow-sm"
         >
-          {suggestions.map((suggestion, index) => (
+          {visibleSuggestions.map((suggestion, index) => (
             <li
               key={`${suggestion.type}:${suggestion.value}`}
               id={`${listboxId}-option-${index}`}

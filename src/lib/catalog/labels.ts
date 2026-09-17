@@ -1,5 +1,11 @@
 import type { FictionType, Format, IllustrationStyle, VisualRealism } from "./types";
 
+/** The one calm label for any field a real database record can legitimately have
+ * left unrecorded (Phase 5 correction pass, `docs/DECISIONS.md` — "Incomplete
+ * metadata is never invented"). Never used as a lookup key or a matchable value —
+ * purely display text for the `undefined` case. */
+export const NOT_SPECIFIED = "Not specified";
+
 export const FORMAT_LABELS: Record<Format, string> = {
   board_book: "Board book",
   picture_book: "Picture book",

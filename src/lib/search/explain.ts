@@ -13,6 +13,7 @@ import type { MatchReason, MatchReasonType } from "./rank";
  * mirrors the ranking hierarchy in rankingConfig.ts. */
 const REASON_PRIORITY: MatchReasonType[] = [
   "title_exact",
+  "exact_retrieval",
   "title_prefix",
   "author",
   "illustrator",
@@ -27,6 +28,8 @@ const REASON_PRIORITY: MatchReasonType[] = [
   "publisher",
   "format",
   "fiction_type",
+  "semantic",
+  "fuzzy_match",
   "description",
 ];
 
@@ -62,6 +65,12 @@ function phraseFor(reason: MatchReason, categoryLabelBySlug: Map<string, string>
       return FICTION_TYPE_LABELS[reason.value as FictionType].toLowerCase();
     case "description":
       return "its description";
+    case "exact_retrieval":
+      return "an exact catalog match";
+    case "fuzzy_match":
+      return "a close spelling match";
+    case "semantic":
+      return "the theme you described";
     default:
       return "";
   }

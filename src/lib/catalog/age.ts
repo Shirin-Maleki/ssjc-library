@@ -63,6 +63,18 @@ const WORD_NUMBERS: Record<string, number> = {
 export function parseAgeYearsFromText(text: string): number | undefined {
   const normalized = text.toLowerCase();
 
+  // "2 to 5" / "2-5" — a range phrase (Phase 5 correction pass, docs/SEARCH.md §2).
+  // Treated as a single representative point (the midpoint), the same mechanism
+  // "age 4" already uses — this stays a ranking signal only, never a hard filter,
+  // so a coarse midpoint approximation is an acceptable, documented simplification
+  // rather than a genuine two-sided range constraint.
+  const rangeAge = normalized.match(/\b(\d{1,2})\s*(?:to|-)\s*(\d{1,2})\b(?!\s*-?\s*minutes?)/);
+  if (rangeAge) {
+    const low = Number(rangeAge[1]);
+    const high = Number(rangeAge[2]);
+    if (low >= 0 && high <= 18 && low <= high) return Math.round((low + high) / 2);
+  }
+
   const explicitAge = normalized.match(/\bage\s*(\d{1,2})\b/);
   if (explicitAge) {
     const years = Number(explicitAge[1]);

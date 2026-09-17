@@ -2,6 +2,8 @@ import { db } from "../client";
 import { DrizzleBookRepository } from "./bookRepository";
 import { DrizzleCategoryRepository } from "./categoryRepository";
 import { DrizzleReadingListRepository } from "./readingListRepository";
+import { DrizzleSearchRepository } from "./searchRepository";
+import { SearchService } from "@/lib/search/searchService";
 
 /**
  * The only place the running app constructs a repository against its real, live
@@ -14,6 +16,15 @@ import { DrizzleReadingListRepository } from "./readingListRepository";
 export const bookRepository = new DrizzleBookRepository(db);
 export const categoryRepository = new DrizzleCategoryRepository(db);
 export const readingListRepository = new DrizzleReadingListRepository(db);
+export const searchRepository = new DrizzleSearchRepository(db);
+
+/** A fresh `SearchService` per call, with a freshly-fetched category list (Phase 5)
+ * — categories change rarely and this is one small query, so there's no need for
+ * `SearchService` itself to be a long-lived singleton juggling stale category data. */
+export async function createSearchService(): Promise<SearchService> {
+  const categories = await categoryRepository.listCategories();
+  return new SearchService(searchRepository, bookRepository, categories);
+}
 
 export type { BookRepository } from "./bookRepository";
 export type { PhysicalCategoryOption } from "./categoryRepository";

@@ -3,7 +3,13 @@ import { bookRepository, categoryRepository } from "@/db/repositories";
 import { isUuid } from "@/lib/utils/uuid";
 import { formatAgeRange } from "@/lib/catalog/age";
 import { DURATION_BAND_LABELS, getReadDurationBand } from "@/lib/catalog/duration";
-import { FICTION_TYPE_LABELS, FORMAT_LABELS, ILLUSTRATION_STYLE_LABELS, VISUAL_REALISM_LABELS } from "@/lib/catalog/labels";
+import {
+  FICTION_TYPE_LABELS,
+  FORMAT_LABELS,
+  ILLUSTRATION_STYLE_LABELS,
+  NOT_SPECIFIED,
+  VISUAL_REALISM_LABELS,
+} from "@/lib/catalog/labels";
 import { getLanguageName } from "@/lib/catalog/languages";
 import { BookCover } from "@/components/find/BookCover";
 import { CategoryBadge } from "@/components/find/CategoryBadge";
@@ -98,7 +104,12 @@ export default async function BookDetailPage({ params, searchParams }: BookDetai
             </div>
             <div>
               <dt className="text-text-muted">Read-aloud time</dt>
-              <dd className="text-text-primary">{DURATION_BAND_LABELS[getReadDurationBand(book.readAloudMinutes)]}</dd>
+              <dd className="text-text-primary">
+                {(() => {
+                  const band = getReadDurationBand(book.readAloudMinutes);
+                  return band ? DURATION_BAND_LABELS[band] : NOT_SPECIFIED;
+                })()}
+              </dd>
             </div>
             <div>
               <dt className="text-text-muted">Language</dt>
@@ -106,20 +117,22 @@ export default async function BookDetailPage({ params, searchParams }: BookDetai
             </div>
             <div>
               <dt className="text-text-muted">Fiction / nonfiction</dt>
-              <dd className="text-text-primary">{FICTION_TYPE_LABELS[book.fictionType]}</dd>
+              <dd className="text-text-primary">{book.fictionType ? FICTION_TYPE_LABELS[book.fictionType] : NOT_SPECIFIED}</dd>
             </div>
             <div>
               <dt className="text-text-muted">Format</dt>
-              <dd className="text-text-primary">{FORMAT_LABELS[book.format]}</dd>
+              <dd className="text-text-primary">{book.format ? FORMAT_LABELS[book.format] : NOT_SPECIFIED}</dd>
             </div>
             <div>
               <dt className="text-text-muted">Visual style</dt>
-              <dd className="text-text-primary">{VISUAL_REALISM_LABELS[book.visualRealism]}</dd>
+              <dd className="text-text-primary">{book.visualRealism ? VISUAL_REALISM_LABELS[book.visualRealism] : NOT_SPECIFIED}</dd>
             </div>
             <div>
               <dt className="text-text-muted">Illustration</dt>
               <dd className="text-text-primary">
-                {book.illustrationStyles.map((style) => ILLUSTRATION_STYLE_LABELS[style]).join(", ")}
+                {book.illustrationStyles.length > 0
+                  ? book.illustrationStyles.map((style) => ILLUSTRATION_STYLE_LABELS[style]).join(", ")
+                  : NOT_SPECIFIED}
               </dd>
             </div>
             <div>

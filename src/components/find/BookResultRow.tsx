@@ -2,7 +2,7 @@ import Link from "next/link";
 import type { SearchResult } from "@/lib/search/searchBooks";
 import { formatAgeRange } from "@/lib/catalog/age";
 import { DURATION_BAND_LABELS, getReadDurationBand } from "@/lib/catalog/duration";
-import { VISUAL_REALISM_LABELS } from "@/lib/catalog/labels";
+import { NOT_SPECIFIED, VISUAL_REALISM_LABELS } from "@/lib/catalog/labels";
 import { getLanguageName } from "@/lib/catalog/languages";
 import { AddToListButton } from "@/components/reading-lists/AddToListButton";
 import { BookCover } from "./BookCover";
@@ -49,9 +49,14 @@ export function BookResultRow({ result, findUrl, categoryLabel }: BookResultRowP
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-text-muted">
           <span>{formatAgeRange(book.ageMinMonths, book.ageMaxMonths)}</span>
           <span aria-hidden="true">·</span>
-          <span>{DURATION_BAND_LABELS[getReadDurationBand(book.readAloudMinutes)]}</span>
+          <span>
+            {(() => {
+              const band = getReadDurationBand(book.readAloudMinutes);
+              return band ? DURATION_BAND_LABELS[band] : NOT_SPECIFIED;
+            })()}
+          </span>
           <span aria-hidden="true">·</span>
-          <span>{VISUAL_REALISM_LABELS[book.visualRealism]}</span>
+          <span>{book.visualRealism ? VISUAL_REALISM_LABELS[book.visualRealism] : NOT_SPECIFIED}</span>
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5">

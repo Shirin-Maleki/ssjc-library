@@ -16,15 +16,18 @@ exactly what exists right now versus what is planned.
 
 ## Project status
 
-**Current phase: Phase 4 — Real database (complete, awaiting review).** PostgreSQL (via
-Drizzle ORM) is now the canonical data store, behind committed SQL migrations — Find, Book
-Detail, and Reading Lists all read and write real database rows instead of an in-memory
-fixture array. Reading Lists moved from Phase 3's per-browser `localStorage` to genuinely
-shared persistence across every staff member/device, through authenticated Server Actions.
-Voice search (Phase 3) is unchanged. Staff/admin authentication (Phase 1) still gates
-everything. Semantic search/embeddings/pgvector remain entirely out of scope until Phase 5. See
-`docs/IMPLEMENTATION_STATUS.md` for exactly what's built, `docs/DATABASE_SETUP.md` for the
-database itself, and `docs/SEARCH.md` for how the search engine works.
+**Current phase: Phase 5 — Real search architecture (in progress).** Phase 4 (real database) is
+complete and approved. Find a Book now runs a real, bounded, database-backed hybrid search
+pipeline — structured SQL filters, Postgres full-text + trigram fuzzy matching, and optional
+pgvector semantic retrieval, combined by a transparent scorer on top of the unchanged
+deterministic Phase 2–4 ranking engine — instead of loading the whole catalog into Node and
+filtering it in memory. Reading Lists (genuinely shared Postgres persistence, Phase 4) and voice
+search (Phase 3) are unaffected. Staff/admin authentication (Phase 1) still gates everything.
+**No real `GEMINI_API_KEY` exists in this environment** — semantic retrieval is fully built and
+tested with a deterministic fake provider, but real semantic-quality validation has not been
+performed; conventional search works completely without any key. See
+`docs/IMPLEMENTATION_STATUS.md` for exactly what's built and what remains, `docs/DATABASE_SETUP.md`
+for the database itself, and `docs/SEARCH.md` for the full search architecture.
 
 ## Local setup
 
@@ -48,10 +51,15 @@ npm run lint
 npm run test                # unit tests (Vitest), no database needed
 npm run test:integration    # real-database repository tests (needs TEST_DATABASE_URL)
 npm run test:e2e             # end-to-end tests (Playwright, builds its own fixture server + database)
+npm run evaluate:search      # search relevance evaluation report (needs TEST_DATABASE_URL)
+npm run embeddings:generate  # backfill semantic embeddings — no-ops cleanly without GEMINI_API_KEY
 ```
 
-No Google or AI credentials are needed for anything above — those integrations don't exist
-yet (Phases 6, 7, 9).
+No Google Drive/Sheets credentials are needed for anything above — that integration doesn't
+exist yet (Phases 6, 9). An optional `GEMINI_API_KEY` (see
+[`docs/DATABASE_SETUP.md`](docs/DATABASE_SETUP.md)) activates real semantic search retrieval and
+embedding generation; every other feature, including conventional search, works completely
+without it.
 
 ## How to read this repository
 

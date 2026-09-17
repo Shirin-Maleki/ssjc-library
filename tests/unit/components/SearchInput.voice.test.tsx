@@ -3,7 +3,6 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SearchInput } from "@/components/find/SearchInput";
 import { EMPTY_FILTERS } from "@/lib/search/filters";
-import type { Book } from "@/lib/catalog/types";
 import { FakeSpeechRecognition } from "../voice/fakeSpeechRecognition";
 
 const pushMock = vi.fn();
@@ -11,11 +10,12 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: pushMock }),
 }));
 
-// These tests exercise voice → navigation behavior, not autocomplete/category
-// matching, so an empty catalog/label map is deliberate — SearchInput must still
-// render and behave correctly with no books (Phase 4 brief §31 props).
-const noBooks: Book[] = [];
-const noCategoryLabels: Record<string, string> = {};
+// These tests exercise voice → navigation behavior, not autocomplete — the server
+// autocomplete action (Phase 5) is mocked to resolve with no suggestions so it never
+// makes these tests depend on a real database.
+vi.mock("@/lib/search/autocompleteAction", () => ({
+  autocompleteAction: vi.fn().mockResolvedValue([]),
+}));
 
 /**
  * Component-level coverage for the Phase 3 acceptance criterion that a spoken
@@ -39,7 +39,7 @@ describe("SearchInput — voice integration", () => {
   });
 
   it("a final transcript navigates through buildFindHref, the same path typed Enter uses", () => {
-    render(<SearchInput initialQuery="" filters={EMPTY_FILTERS} books={noBooks} categoryLabelBySlug={noCategoryLabels} />);
+    render(<SearchInput initialQuery="" filters={EMPTY_FILTERS} />);
     const micButton = screen.getByRole("button", { name: "Search by voice" });
 
     act(() => micButton.click());
@@ -55,8 +55,6 @@ describe("SearchInput — voice integration", () => {
       <SearchInput
         initialQuery=""
         filters={{ ...EMPTY_FILTERS, languages: ["sv"], ageYears: 4 }}
-        books={noBooks}
-        categoryLabelBySlug={noCategoryLabels}
       />
     );
     const micButton = screen.getByRole("button", { name: "Search by voice" });
@@ -72,7 +70,7 @@ describe("SearchInput — voice integration", () => {
   });
 
   it("the transcript is visible in the search field before the search runs", () => {
-    render(<SearchInput initialQuery="" filters={EMPTY_FILTERS} books={noBooks} categoryLabelBySlug={noCategoryLabels} />);
+    render(<SearchInput initialQuery="" filters={EMPTY_FILTERS} />);
     const micButton = screen.getByRole("button", { name: "Search by voice" });
     const input = screen.getByRole("combobox") as HTMLInputElement;
 
@@ -84,7 +82,7 @@ describe("SearchInput — voice integration", () => {
   });
 
   it("cancel restores the pre-voice query and does not navigate", () => {
-    render(<SearchInput initialQuery="eric carle" filters={EMPTY_FILTERS} books={noBooks} categoryLabelBySlug={noCategoryLabels} />);
+    render(<SearchInput initialQuery="eric carle" filters={EMPTY_FILTERS} />);
     const input = screen.getByRole("combobox") as HTMLInputElement;
     expect(input.value).toBe("eric carle");
 
@@ -102,7 +100,7 @@ describe("SearchInput — voice integration", () => {
   });
 
   it("no-speech shows calm recovery copy and never navigates to an empty search", () => {
-    render(<SearchInput initialQuery="" filters={EMPTY_FILTERS} books={noBooks} categoryLabelBySlug={noCategoryLabels} />);
+    render(<SearchInput initialQuery="" filters={EMPTY_FILTERS} />);
     const micButton = screen.getByRole("button", { name: "Search by voice" });
     act(() => micButton.click());
     act(() => FakeSpeechRecognition.latest().emitFinal(""));
@@ -115,7 +113,7 @@ describe("SearchInput — voice integration", () => {
   });
 
   it("permission denied shows calm recovery copy and typed search remains available", () => {
-    render(<SearchInput initialQuery="" filters={EMPTY_FILTERS} books={noBooks} categoryLabelBySlug={noCategoryLabels} />);
+    render(<SearchInput initialQuery="" filters={EMPTY_FILTERS} />);
     const micButton = screen.getByRole("button", { name: "Search by voice" });
     act(() => micButton.click());
     act(() => FakeSpeechRecognition.latest().emitError("not-allowed"));
@@ -127,7 +125,7 @@ describe("SearchInput — voice integration", () => {
 
   it("renders no mic control and an honest fallback when the browser has no SpeechRecognition", () => {
     delete (window as unknown as { SpeechRecognition?: unknown }).SpeechRecognition;
-    render(<SearchInput initialQuery="" filters={EMPTY_FILTERS} books={noBooks} categoryLabelBySlug={noCategoryLabels} />);
+    render(<SearchInput initialQuery="" filters={EMPTY_FILTERS} />);
 
     expect(screen.queryByRole("button", { name: "Search by voice" })).toBeNull();
     expect(screen.getByText(/voice search isn't supported in this browser/i)).toBeTruthy();

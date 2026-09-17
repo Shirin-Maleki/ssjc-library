@@ -1,6 +1,6 @@
 # Security
 
-Status: reflects what's actually implemented through Phase 4. High-level security architecture
+Status: reflects what's actually implemented through Phase 5 (in progress). High-level security architecture
 was proposed in `docs/ARCHITECTURE.md` §14/§21 during Phase 0; this document tracks the real,
 built mechanism and is the first doc in the target structure to graduate out of
 `ARCHITECTURE.md`, per the plan to split docs out once their subject is operationally real.
@@ -153,14 +153,39 @@ generally, not just for this codebase.
 - **No server-side speech key or endpoint.** Nothing in this app's environment variables,
   Server Actions, or Route Handlers is voice-related — see Environment Variables below.
 
-## What's explicitly out of scope through Phase 4
+## Search and embeddings (Phase 5)
+
+- **No API key ever reaches the browser.** `GEMINI_API_KEY` is read only in
+  `src/lib/embeddings/geminiProvider.ts` and `src/lib/embeddings/index.ts` (`import
+  "server-only"`, same guard/rationale as `client.ts` above), both server-only modules never
+  imported by a Client Component — verified by the same "grep every `"use client"` file for a
+  disallowed import" check used for `@/db/*` above, extended to `@/lib/embeddings/*`.
+  `scripts/embeddings/generate.ts` (a standalone script, not part of the running app) imports
+  `GeminiEmbeddingProvider` directly rather than the `server-only`-guarded `index.ts`, for the
+  same Vitest/tsx-interop reason `client.ts`'s own module is never imported by the repository
+  layer — never a security-relevant difference, since neither path is reachable from a browser.
+- **No raw teacher query is persisted by default.** Embedding calls
+  (`SearchService.tryEmbedQuery`) are ephemeral and request-scoped; nothing writes the query
+  text to a table, log line, or cache.
+- **Parameterized queries throughout.** Every SQL statement in `SearchRepository` goes through
+  Drizzle's tagged `sql` template or query builder, which parameterizes bound values — the same
+  guarantee the rest of the app's Drizzle usage already relies on. No string concatenation is
+  used to build a query anywhere in the search path.
+- **A provider failure, timeout, or absence never surfaces a technical detail to a teacher.**
+  `tryEmbedQuery`'s try/catch swallows every embedding error and degrades to conventional-only
+  retrieval silently — no "semantic search unavailable," no stack trace, no model id ever
+  reaches the Find UI.
+- **No child/student data is involved anywhere in Phase 5** — search operates only on catalog
+  metadata (titles, authors, descriptions, tags) and a teacher's own transient query text.
+
+## What's explicitly out of scope through Phase 5
 
 - The rate limiter is still in-memory, not backed by the now-real `login_attempts` table (see
   above).
 - No file uploads yet, so upload validation (type/size allowlisting) isn't implemented —
   lands with the Add-a-Book flow in Phase 7.
-- No Google/AI credentials exist yet, so there's nothing to scope least-privilege for yet.
-- No pgvector/embeddings — nothing to secure there yet either (Phase 5).
+- No Google Drive/Sheets credentials exist yet, so there's nothing to scope least-privilege for
+  yet on that front.
 
 ## Verified, not assumed
 

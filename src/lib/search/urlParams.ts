@@ -19,7 +19,22 @@ const PARAM = {
   authors: "author",
   illustrators: "illustrator",
   publishers: "publisher",
+  limit: "n",
 } as const;
+
+/** Phase 5 — "Show More" is a larger `limit` on a real re-search, not client-side
+ * slicing of an already-fetched array (docs/SEARCH.md §10). Bounded on the way in:
+ * a malformed/stale/tampered `n` in the URL (e.g. from an old bookmark, or someone
+ * hand-editing it) is clamped, never trusted as an arbitrarily large fetch size. */
+export const INITIAL_RESULT_LIMIT = 5;
+export const RESULT_LIMIT_STEP = 10;
+export const MAX_RESULT_LIMIT = 105;
+
+function parseLimit(raw: string | undefined): number {
+  const value = raw ? Number(raw) : INITIAL_RESULT_LIMIT;
+  if (!Number.isFinite(value) || value < INITIAL_RESULT_LIMIT) return INITIAL_RESULT_LIMIT;
+  return Math.min(Math.floor(value), MAX_RESULT_LIMIT);
+}
 
 type SearchParamsInput = URLSearchParams | Record<string, string | string[] | undefined>;
 
@@ -35,7 +50,7 @@ function splitList(value: string | undefined): string[] | undefined {
   return items.length > 0 ? items : undefined;
 }
 
-export function parseSearchParams(params: SearchParamsInput): { query: string; filters: Filters } {
+export function parseSearchParams(params: SearchParamsInput): { query: string; filters: Filters; limit: number } {
   const query = getParam(params, PARAM.query) ?? "";
   const ageRaw = getParam(params, PARAM.age);
   const ageYears = ageRaw ? Number(ageRaw) : undefined;
@@ -54,7 +69,7 @@ export function parseSearchParams(params: SearchParamsInput): { query: string; f
     publishers: splitList(getParam(params, PARAM.publishers))?.map(decodeURIComponent),
   };
 
-  return { query, filters };
+  return { query, filters, limit: parseLimit(getParam(params, PARAM.limit)) };
 }
 
 /** Builds a query string (no leading "?") from the current query/filters — the
@@ -81,7 +96,12 @@ export function buildSearchParamsString(query: string, filters: Filters): string
   return params.toString();
 }
 
-export function buildFindHref(query: string, filters: Filters): string {
+export function buildFindHref(query: string, filters: Filters, limit?: number): string {
   const search = buildSearchParamsString(query, filters);
-  return search ? `/find?${search}` : "/find";
+  const params = new URLSearchParams(search);
+  if (typeof limit === "number" && limit > INITIAL_RESULT_LIMIT) {
+    params.set(PARAM.limit, String(Math.min(limit, MAX_RESULT_LIMIT)));
+  }
+  const finalSearch = params.toString();
+  return finalSearch ? `/find?${finalSearch}` : "/find";
 }

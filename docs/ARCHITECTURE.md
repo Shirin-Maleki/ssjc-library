@@ -83,8 +83,8 @@ environment runs against a disposable local PostgreSQL 16 instance (Homebrew), n
 Supabase project — Supabase remains the intended hosted target for a real deployment; nothing
 in the schema, queries, or application code is Supabase-specific, so pointing
 `DATABASE_URL` at a Supabase connection string is the entire migration (see
-`docs/DATABASE_SETUP.md`). pgvector is **not** enabled — semantic search stays fully deferred
-to Phase 5 (§13).
+`docs/DATABASE_SETUP.md`). **As of Phase 5**, pgvector and `pg_trgm` are both enabled — see
+§13.
 
 ## 5. Relational data model
 
@@ -126,8 +126,8 @@ and are documented in full in `docs/DATA_MODEL.md` §16 and `docs/DECISIONS.md`:
 `visual_realism`'s stylized value is named `stylized_illustration`. `book_identity_candidates`
 and `metadata_provider_cache` — whose columns the Phase 0 doc left unspecified ("unchanged from
 the first draft") — now have a real column list, also in `docs/DATA_MODEL.md` §16.
-`embedding`/`embedding_source_hash`/`embedding_generated_at` were **not** added to `books` —
-see §13.
+`embedding` and its metadata columns were added in Phase 5, not Phase 4 — see §13 and
+`docs/DATA_MODEL.md` §17.
 
 ## 6. Google Drive integration
 
@@ -268,13 +268,34 @@ vector database, no ANN index needed at this collection size, a deterministic em
 template with a source-hash to skip unnecessary regeneration, dimension deferred pending
 provider choice.
 
-**Phase 4 status: entirely untouched, by explicit design.** The pgvector extension is not
-enabled; `books` has no `embedding` / `embedding_source_hash` / `embedding_generated_at`
-columns at all. Adding a placeholder column with an invented dimension would misrepresent a
-real decision (which embedding provider, what dimension) as already made when it isn't —
-better to defer it cleanly and add it as a real, reviewed migration in Phase 5. Until then,
-`BookRepository` → `Book[]` → the existing deterministic `searchBooks()` is the entire
-retrieval path (`docs/DATABASE_SETUP.md`, "The Phase 5 replacement seam").
+**Phase 4 status (historical): entirely untouched, by explicit design.** The pgvector
+extension was not enabled; `books` had no `embedding` columns at all — deferred cleanly rather
+than inventing a placeholder dimension.
+
+**Phase 5 status: built as designed above, with one real addition and one clarified
+deviation.** `pgvector` (768 dimensions, matching `gemini-embedding-2`) and `pg_trgm` are both
+enabled in the same Postgres database; `books.embedding` plus five metadata columns exist
+(`docs/DATA_MODEL.md` §17); a deterministic embedding-input document with a source hash exists
+exactly as planned (`buildEmbeddingDocument`, `lib/embeddings/document.ts`); no ANN index was
+added (an exact vector scan is fast and correct at this catalog's target scale, per plan).
+
+- **Real addition not anticipated in the original design: structured free-text intent needs its
+  own SQL candidate query.** The original five-layer plan (§12) treated Layer 2 (structured
+  filtering) as producing hard constraints and didn't separately account for a *ranking-only*
+  structured signal (an age/duration/language/style phrase) needing its own retrieval path once
+  candidate retrieval stopped scanning the whole catalog. Found via the evaluation harness
+  (§11 of `docs/SEARCH.md`) as a real regression, fixed by `buildIntentConditions()`
+  (`src/db/repositories/searchRepository.ts`) — see that file and `docs/SEARCH.md` §2.
+- **`search_text` (the full-text index source) deliberately diverges from the embedding
+  document**, rather than reusing one shared text as originally implied — a structural label in
+  the labeled/prose embedding document ("Read-aloud length") leaked into literal full-text
+  matching and made a single common word match the entire seeded catalog. `search_text` is now
+  a separate, label-free, values-only derivation (`buildSearchIndexText`); the embedding
+  document is unaffected. See `docs/SEARCH.md` §3.
+- **Real semantic-quality validation has not been performed** — no `GEMINI_API_KEY` exists in
+  this environment. Every part of the semantic layer is built and tested with a deterministic
+  fake provider, but whether a real embedding actually improves exploratory/paraphrased-query
+  relevance is unmeasured and must not be reported as validated.
 
 ## 14. Staff / admin authentication & session architecture — full technical specification
 

@@ -71,16 +71,20 @@ finish it in one pass.
 Phase 0 (architecture), Phase 1 (foundation, design system, staff/admin auth), Phase 2 (mock
 catalog + Find a Book, plus a visual/mobile revision), Phase 3 (voice search, Reading Lists,
 Library Guide), and Phase 4 (the real database, plus a focused correction pass closing a handful
-of acceptance gaps — see the "Additional lessons" note below) are all complete. A real Next.js
-app runs a fully deterministic search/browse/filter experience against a real Postgres database
-(Drizzle ORM, committed migrations, the full 23-table schema) instead of an in-memory fixture
-array; Reading Lists are genuinely shared across every staff member/device via authenticated
-Server Actions, not `localStorage`; the Library Guide is real content. Still no Google or AI
-integration, and no semantic search (Phase 5 — deliberately deferred, no `embedding` column,
-no pgvector). The full brand system (name, palette, typography, logo) is real — nothing
-placeholder remains there. See `docs/IMPLEMENTATION_STATUS.md` for the authoritative,
-continuously updated detail — this file only orients you to the process, not the current
-state, since state changes every phase and duplicating it here would drift.
+of acceptance gaps) are all complete. **Phase 5 (real search architecture) is in progress, not
+yet complete** — see `docs/IMPLEMENTATION_STATUS.md` for exactly what remains (EXPLAIN ANALYZE
+at a realistic scale, manual visual QA, a standalone security review pass, final commit/push).
+Find a Book now runs a real, bounded, database-backed hybrid search pipeline (structured SQL
+filters, full-text + trigram + optional semantic retrieval, `docs/SEARCH.md`) instead of loading
+the whole catalog into Node and filtering in memory; Reading Lists are genuinely shared across
+every staff member/device via authenticated Server Actions; the Library Guide is real content.
+pgvector and `pg_trgm` are enabled and `books.embedding` exists, but **no real `GEMINI_API_KEY`
+exists in this environment** — real semantic-quality validation has not been performed, and
+conventional search works completely without it. Still no Google Drive/Sheets integration. The
+full brand system (name, palette, typography, logo) is real — nothing placeholder remains
+there. See `docs/IMPLEMENTATION_STATUS.md` for the authoritative, continuously updated detail —
+this file only orients you to the process, not the current state, since state changes every
+phase and duplicating it here would drift.
 
 ## A cross-cutting lesson: bcrypt hashes and `.env` files
 
@@ -157,6 +161,55 @@ if the test harness touches the same platform behavior the app does.
   `pgrep -f chrome-headless-shell`) and killing anything with an implausibly long `ELAPSED` time
   is the first thing to check before assuming a real regression — it took a full run from
   15–35 minutes down to 35 seconds. Full account in `docs/TESTING.md`.
+
+## Practical lessons from Phase 5 (worth knowing before touching search code)
+
+- **`import "server-only"` throws unconditionally in any standalone script/test process that
+  isn't Next.js' own build** (`tsx some-script.ts`, a plain Vitest run) — there's no bundler
+  remapping it to a no-op outside Next's server compilation. `SearchService` and
+  `lib/embeddings/index.ts` both carry this guard. `scripts/embeddings/generate.ts` and
+  `tests/evaluation/searchEvaluation.eval.ts` both had to work around it — the script by
+  importing `GeminiEmbeddingProvider` directly instead of the guarded `getConfiguredEmbeddingProvider()`
+  (duplicating its five lines of "no key → undefined, never throw" logic rather than changing
+  the production guard for a script's sake), the evaluation harness by `vi.mock("server-only",
+  () => ({}))` at the top of the file before importing anything that transitively depends on it.
+  This is not new to Phase 5 — `docs/SECURITY.md` already documented the identical reason
+  `server-only` isn't on the repository classes themselves — but it's easy to forget when adding
+  a *new* server-only-guarded module and then wanting to exercise it from a script or test.
+- **A `.ts` file imported as the *entry point* via `tsx` resolves barrel (`export * from`)
+  re-exports correctly; a `.mjs` entry point importing the same `.ts` barrel from outside can
+  silently return `undefined` for a named export that works fine everywhere else.** Wasted real
+  debugging time on this: a throwaway `.mjs` smoke-test script reported `schema.books` as
+  `undefined` (and a `const { books } = schema` destructure failed the same way), even though
+  the exact same import inside a `.ts` file run via `tsx some-script.ts` — matching how every
+  real script in this project (`seed.ts`, `generate.ts`) is actually invoked — worked correctly.
+  If a schema/repository import mysteriously comes back `undefined` in a scratch script, check
+  whether the *entry file's own extension* matches how the real code is invoked before assuming
+  the barrel export itself is broken.
+- **`plainto_tsquery`'s implicit AND is wrong for natural-language multi-word queries** — it
+  requires every stemmed word to appear in a single document, which a five-word descriptive
+  query almost never satisfies verbatim. An OR-of-lexemes tsquery fixes recall but then needs
+  its own gate (`ftsHasMeaningfulOverlap`, ≥2 matched lexemes) or a single incidental common word
+  will match everything. Don't add one without the other.
+- **Whatever text function builds a semantic embedding document is a bad default source for a
+  full-text index**, if that document format uses human-readable field labels — a label present
+  in every row (e.g. "Read-aloud length") IS content as far as `to_tsvector` is concerned, and
+  can turn an ordinary word into a catalog-wide false-positive magnet. Keep the label-free,
+  values-only full-text derivation (`buildSearchIndexText`) genuinely separate from the labeled
+  embedding document (`buildEmbeddingDocument`), even though they're built from the same input.
+- **Once candidate retrieval is SQL-bounded instead of "score the whole catalog in memory,"
+  every ranking-only signal that used to apply regardless of keyword overlap (age/duration/
+  language/style intent parsed from free text) needs its OWN SQL candidate path** — otherwise a
+  book with the right structured attributes but zero literal keyword overlap with the query text
+  is never even retrieved to be scored. This is easy to miss because it doesn't show up as an
+  error or an empty page — it shows up as "the ranking bonus exists in the code but never
+  actually applies for realistic queries," which only a real evaluation dataset (not just unit
+  tests of the scoring function in isolation) reliably catches. Build the evaluation harness
+  (`tests/evaluation/`) *before* declaring a hybrid retrieval pipeline done, not after.
+- **A search evaluation dataset is worth building even under time pressure** — it found the
+  single most significant Phase 5 regression (the structured-intent gap above), which no amount
+  of unit-testing `combineScores()`/`buildIntentConditions()` in isolation would have surfaced,
+  because the bug was specifically about candidates never reaching the scoring function at all.
 
 ## Practical lessons from Phase 3 (worth knowing before touching voice or Reading Lists code)
 

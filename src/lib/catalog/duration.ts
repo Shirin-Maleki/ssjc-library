@@ -6,7 +6,17 @@ export const DURATION_BAND_LABELS: Record<DurationBand, string> = {
   ten_plus: "10+ minutes",
 };
 
-export function getReadDurationBand(minutes: number): DurationBand {
+/**
+ * Must produce results identical to the database's own generated
+ * `books.read_duration_band` column (`src/db/schema/books.ts`) for any given
+ * `readAloudMinutesEstimate` value — this is the single duration-band authority the
+ * Phase 5 correction pass establishes (`docs/DECISIONS.md`, "One duration-band
+ * authority"); a real-database integration test asserts the two never disagree.
+ * `undefined` in, `undefined` out — an unrecorded duration must never be treated as
+ * "under 5 minutes" just because it's falsy (Phase 5 correction pass).
+ */
+export function getReadDurationBand(minutes: number | undefined): DurationBand | undefined {
+  if (minutes == null) return undefined;
   if (minutes < 5) return "under_5";
   if (minutes <= 10) return "five_to_ten";
   return "ten_plus";

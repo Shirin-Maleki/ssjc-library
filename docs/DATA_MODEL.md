@@ -80,9 +80,16 @@ regardless of how many physical copies exist.
 | `display_cover_source` | enum(`derived_from_drive`,`external_provider_thumbnail`,`drive_proxy_fallback`) | which strategy produced `display_cover_url` |
 | `review_status` | enum(`pending_review`,`active`,`archived`), not null default `pending_review` | denormalized visibility gate, kept in sync by application code |
 | `created_at` / `updated_at` / `verified_at` | timestamptz | |
+| `search_text` | text | **Phase 5.** Label-free, values-only text (`buildSearchIndexText`) — the source `search_vector` is generated from. Deliberately not the same text as the embedding document below; see `docs/SEARCH.md` §3. |
+| `search_vector` | tsvector, `GENERATED ALWAYS AS (to_tsvector('english', coalesce(search_text, ''))) STORED` | **Phase 5.** GIN-indexed; never written directly. |
+| `embedding` | vector(768) | **Phase 5.** Populated only by `npm run embeddings:generate`, never during a request. 768 is a storage contract matching `gemini-embedding-2`'s output — see `docs/SEARCH.md` §5. |
+| `embedding_model` / `embedding_dimension` / `embedding_composition_version` / `embedding_source_hash` / `embedding_generated_at` | text / smallint / smallint / text / timestamptz | **Phase 5.** Records exactly what produced `embedding` — lets the backfill script distinguish "never embedded" from "data changed since" (hash mismatch) from "composition changed since" (version mismatch). |
+| `read_duration_band` (revised) | enum, `GENERATED ALWAYS AS (case ... end) STORED` | **Phase 5.** Was a plain nullable column through Phase 4; now generated directly from `read_aloud_minutes_estimate`, making it the single authoritative source both the database and `lib/catalog/duration.ts::getReadDurationBand` agree with — never independently settable, never able to drift from the raw estimate. |
 
-**Not implemented in Phase 4:** `embedding` / `embedding_source_hash` / `embedding_generated_at`
-— semantic search is entirely out of scope for this phase; see §16.
+Phase 4 deliberately left `embedding`/`embedding_source_hash`/`embedding_generated_at` out
+entirely (semantic search was out of scope that phase); Phase 5 added them, plus `search_text`/
+`search_vector` and the `read_duration_band` column-generation change, in one new migration
+(`drizzle/0001_mighty_war_machine.sql`) — the approved Phase 4 migration is untouched.
 
 **Removed from this table in this revision:** `copy_count`, `home_location`,
 `current_location`, `availability_status`, `work_group_id` — see below and §12.
@@ -556,3 +563,23 @@ design:**
   application-code/repository-layer gap, exactly the kind of thing this schema's own design
   (a plain `text` `field_key`, a real relational `book_languages` table) was already built to
   support without a migration.
+
+## 17. Phase 5 as-built status
+
+- **`embedding` / `embedding_model` / `embedding_dimension` / `embedding_composition_version` /
+  `embedding_source_hash` / `embedding_generated_at` added, exactly as §2 above describes** —
+  the decision §16 deferred (which provider, what dimension) is now made and documented:
+  `vector(768)`, matching Gemini's `gemini-embedding-2`. One new migration
+  (`drizzle/0001_mighty_war_machine.sql`); the approved Phase 4 migration is untouched.
+- **`read_duration_band` changed from a plain nullable column to a `GENERATED ALWAYS AS`
+  column**, derived from `read_aloud_minutes_estimate` — closes a real drift risk (the column
+  and the raw estimate could previously disagree if only one was updated) and makes it the
+  single authority `lib/catalog/duration.ts::getReadDurationBand` mirrors exactly.
+- **`search_text`/`search_vector` added** — see §2. `search_text` is deliberately not the same
+  text Phase 5's embedding document composes (`buildEmbeddingDocument`); see `docs/SEARCH.md`
+  §3 for the real bug (a structural label leaking into full-text-searchable content) that drove
+  this split.
+- **`pg_trgm` and `vector` Postgres extensions enabled** — the first two statements of the new
+  migration.
+- **No changes to any other table.** Reading Lists, provenance, ingestion, and every other
+  Phase 4 table are byte-for-byte unchanged this phase.

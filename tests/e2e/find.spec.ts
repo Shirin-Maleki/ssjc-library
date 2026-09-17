@@ -120,8 +120,14 @@ test.describe("Find a Book", () => {
     await expect(showMore).toBeVisible();
     await showMore.click();
 
-    const newCount = await rows.count();
-    expect(newCount).toBeGreaterThan(5);
+    // Phase 5: "Show More" now triggers a real server re-search (a `router.push` to a
+    // larger `?n=` bound), not an instant client-side slice of an already-fetched
+    // array — so the new rows only exist once that navigation lands. `expect(...)`
+    // auto-retries; a single `await rows.count()` right after `.click()` would race
+    // the navigation and could observe the pre-navigation DOM.
+    await expect(async () => {
+      expect(await rows.count()).toBeGreaterThan(5);
+    }).toPass();
   });
 
   test("Flow 10 — an incompatible combination shows the zero-results recovery state", async ({ page }) => {

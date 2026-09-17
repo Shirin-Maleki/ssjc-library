@@ -1415,3 +1415,150 @@ full future list today, and doing so would misrepresent design decisions (which 
 
 **Relevant files:** `src/lib/metadata/fieldRegistry.ts`; `docs/DATA_MODEL.md` §6/§16;
 `docs/ARCHITECTURE.md` (repository structure listing).
+
+---
+
+## Full-text retrieval: OR-of-lexemes, gated by a meaningful-overlap requirement
+
+**Date:** 2026-09-16 · **Status:** Locked.
+
+**Problem:** `plainto_tsquery`'s implicit AND semantics returned zero results for a genuinely
+relevant five-word query ("animal books with real photos") — no single book's document
+contained every one of those words verbatim. Rebuilding the tsquery as an OR of the same
+stemmed lexemes fixed that, but immediately introduced a worse problem: a filler query
+("something to read please") then matched two real books purely because their descriptions
+happened to contain the ordinary word "read," which is exactly the "never pad weak/irrelevant
+results" invariant this project is built around.
+
+**Chosen approach:** Two changes together, not one. (1) `orTsQuery()` builds an OR tsquery from
+`tsvector_to_array(to_tsvector(query))`'s lexemes, reusing Postgres' own stemming/stopword
+removal. (2) `ftsHasMeaningfulOverlap()` gates candidacy on matching **at least two** of the
+query's own lexemes (or all of them, for a one-lexeme query) — verified directly: a real
+five-lexeme topical query matched 2+ lexemes for multiple genuinely relevant books, while the
+filler-query's incidental single-word match never cleared this bar.
+
+**Why not just raise the score threshold instead?** A blanket `MINIMUM_MEANINGFUL_SCORE`
+increase would have also suppressed genuinely weak-but-real trigram typo matches (calibrated to
+score as low as ~0.2 similarity by design, `docs/SEARCH.md` §3) — the fix had to stop the
+signal from being generated in the first place, not raise the bar every signal has to clear.
+
+**Consequences:** Full-text retrieval now correctly handles natural multi-word descriptive
+queries while remaining resistant to single-incidental-word false positives — see
+`docs/SEARCH.md` §3 and §9 for the exact mechanics and calibration numbers.
+
+**Relevant files:** `src/db/repositories/searchRepository.ts` (`orTsQuery`,
+`ftsHasMeaningfulOverlap`); `tests/integration/db/searchRepository.test.ts`;
+`tests/evaluation/dataset.ts` ("safety-generic-filler-query-returns-nothing").
+
+---
+
+## Full-text index text is a separate derivation from the semantic embedding document
+
+**Date:** 2026-09-16 · **Status:** Locked.
+
+**Problem:** The original implementation reused `buildEmbeddingDocument()`'s labeled,
+prose-style text ("Read-aloud length: Under 5 minutes") as `books.search_text`, the source
+`search_vector` is generated from — a reasonable-looking "one shared representation" choice.
+This meant a structural field label present in literally every book's document ("Read-aloud
+length") put the ordinary word "Read" into every document's searchable content, so any query
+containing "read" matched the entire seeded catalog regardless of actual relevance.
+
+**Chosen approach:** `buildSearchIndexText()` — a second function, same `EmbeddingDocumentInput`
+shape and stable field order as `buildEmbeddingDocument()`, but emitting **values only, no
+labels**. The embedding document (labeled, prose-like) is unaffected and still used for
+semantic retrieval, where a label genuinely helps a model reason about structure. Classifier
+fields already reachable through Layer 2's structured filters (type/format/visual style) don't
+need to be part of literal keyword matching's content at all.
+
+**Why not just rename the collision-prone label instead?** Renaming "Read-aloud length" doesn't
+generalize — any future label containing a common English word (a real risk given several
+existing labels: "Type," "Format," "Style," "Age") would eventually collide the same way.
+Removing labels from the FTS-specific derivation entirely closes the whole class of bug, not
+just the one instance found.
+
+**Consequences:** `search_text`/`search_vector` and the embedding document now intentionally
+diverge — a deliberate, documented split, not an oversight. `src/db/seed.ts` calls
+`buildSearchIndexText()`, not `buildEmbeddingDocument()`, for the `search_text` column.
+
+**Relevant files:** `src/lib/embeddings/document.ts`; `src/db/seed.ts`;
+`tests/unit/embeddings/document.test.ts`; `docs/SEARCH.md` §3.
+
+---
+
+## Structured free-text intent needs its own SQL candidate query
+
+**Date:** 2026-09-16 · **Status:** Locked.
+
+**Problem:** Found via the search evaluation harness, not by inspection: a query like "a book
+for a 4 year old" shares almost no literal vocabulary with a given age-appropriate book's
+title/description. Phase 2–4's deterministic age-intent ranking bonus (`rank.ts`, unchanged)
+was designed to score every book in the filtered set regardless of keyword overlap — but once
+retrieval moved from "score the whole catalog" to "score only SQL-bounded candidates," a book
+with zero keyword overlap with the query text was never retrieved as a candidate in the first
+place, so its ranking bonus never got a chance to apply. Verified directly: before the fix, this
+exact query produced 4 SQL candidates (only those sharing an incidental word); the real count of
+age-4-appropriate seeded books is 38.
+
+**Chosen approach:** `buildIntentConditions()` (`searchRepository.ts`) reuses
+`parseSearchIntent()` (`lib/search/intent.ts`, unchanged) and, whenever it recognizes an
+age/duration/language/illustration-style/visual-realism phrase, runs a dedicated, bounded SQL
+query for every book matching *that one structured signal* — mirroring the hard-filter
+predicates structurally, OR'd together rather than AND'ed, merged into the candidate set with
+no retrieval-signal bump of its own. The unchanged deterministic `scoreBook()` intent bonus is
+what actually scores these candidates, exactly reproducing Phase 2–4's behavior.
+
+**Why not just skip candidate bounding for the whole catalog when intent is detected?** That
+would reopen exactly the "load the whole catalog" problem Phase 5 exists to close — a bounded
+SQL query scoped to the one recognized structured dimension achieves the same discoverability
+without ever approaching the full catalog's size.
+
+**Consequences:** Every structured intent signal Phase 2–4 recognized in free text now
+correctly retrieves its full set of matching candidates under the new architecture, not just
+the subset that also happens to share literal keywords with the query.
+
+**Relevant files:** `src/db/repositories/searchRepository.ts` (`buildIntentConditions`);
+`tests/integration/db/searchRepository.test.ts`; `tests/evaluation/dataset.ts`
+("structured-age-phrase"); `docs/SEARCH.md` §2.
+
+---
+
+## Trigram fuzzy matching needs the `%` operator, not `similarity() > floor`, to use its index
+
+**Date:** 2026-09-16 · **Status:** Locked.
+
+**Problem:** Found via `EXPLAIN ANALYZE` at a realistic ~2,551-row synthetic scale (generated
+specifically because the 48–51-row dev/test seed is too small to expose index-usage problems at
+all) — the trigram query's `WHERE similarity(title, query) > 0.2` never used the newly-added
+`books_title_trgm_idx` (GIN, `gin_trgm_ops`), running instead as a full sequential scan: 6.7ms
+to find a single genuinely matching row for a real typo query. Postgres only index-accelerates
+`pg_trgm`'s `%`/`<%`/`%>` operators, not an arbitrary function-call comparison, even one that
+computes the identical value.
+
+**Chosen approach:** Rewrite the `WHERE` clause to use the indexable `title % query` form,
+under a `SET LOCAL pg_trgm.similarity_threshold = <TRGM_SIMILARITY_FLOOR>` scoped to a
+`db.transaction()` wrapping the whole candidate-retrieval query set — `%`'s matching threshold
+is controlled by that session/transaction-local GUC, not a query parameter, so it has to be set
+somewhere, and `SET LOCAL` inside a transaction is the only form that can never leak into
+another query sharing the same pooled connection afterward. The `SELECT`/`ORDER BY` still use
+the exact `similarity()` function for the real, reported value — only the filtering predicate
+changed. Verified directly: 0.16ms for the identical query afterward, a ~40x improvement.
+
+**Why not just accept the sequential-scan cost?** At the measured ~2,551-row scale it was
+already fast in absolute terms (6.7ms), but a sequential scan's cost grows linearly with catalog
+size while an index scan's cost tracks the (typically tiny) number of trigram-similar
+candidates — the gap would only widen approaching the ~5,000-book target, and per docs/SEARCH.md's
+own performance requirements, "believed fast enough" isn't the same as measured.
+
+**A subtlety that cost real debugging time:** `SET LOCAL pg_trgm.similarity_threshold = $1` is a
+Postgres syntax error — `SET`/`SET LOCAL` do not accept a bind parameter for their value at all,
+only a literal. Fixed with `sql.raw()`, safe here specifically because
+`TRGM_SIMILARITY_FLOOR` is a hardcoded module constant, never user input — `sql.raw()` must
+never be used with anything that could contain user-influenced text.
+
+**Consequences:** `findCandidates()`'s non-empty-query branch now runs inside one
+`db.transaction()` instead of a plain `Promise.all()` against the shared connection — harmless
+for the other parallel queries in that same `Promise.all`, since none of them depend on the GUC.
+
+**Relevant files:** `src/db/repositories/searchRepository.ts`; `src/db/schema/books.ts`
+(`books_title_trgm_idx`); `src/db/schema/contributors.ts` (`contributors_name_trgm_idx`);
+`drizzle/0002_flimsy_goliath.sql`; `docs/SEARCH.md` §3.

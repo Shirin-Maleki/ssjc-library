@@ -84,6 +84,26 @@ createdb ssjc_library_e2e
 Local trust-authenticated connection strings look like:
 `postgresql://<your-username>@127.0.0.1:5432/ssjc_library_dev`.
 
+### pgvector (Phase 5)
+
+Search's optional semantic layer (`docs/SEARCH.md` §5) needs the `vector` extension enabled on
+every database (dev/test/e2e), alongside `pg_trgm` (Phase 5 also uses trigram fuzzy matching).
+Homebrew's `pgvector` bottle may only target the newest 1–2 PostgreSQL major versions it
+supports — if `brew install pgvector` doesn't produce an extension for your installed
+PostgreSQL version, build it from source against that version's own `pg_config`:
+
+```bash
+git clone --depth 1 --branch v0.8.0 https://github.com/pgvector/pgvector.git
+cd pgvector
+make PG_CONFIG=/opt/homebrew/opt/postgresql@16/bin/pg_config   # match your installed version
+make install
+```
+
+The committed migration (`drizzle/0001_mighty_war_machine.sql`) runs
+`CREATE EXTENSION IF NOT EXISTS vector;` and `CREATE EXTENSION IF NOT EXISTS pg_trgm;` as its
+first two statements — `npm run db:migrate` enables both automatically once the extension files
+are installed; nothing needs to be enabled by hand beyond that.
+
 ## Environment variables
 
 Set these in `.env.local` (never committed — see `.env.example` for the full annotated
@@ -95,6 +115,7 @@ template). Names and purpose only; this document never prints real connection st
 | `DATABASE_MIGRATION_URL` | The connection `drizzle-kit`/the migration script uses. Falls back to `DATABASE_URL` when unset — only needs to differ from it against Supabase's pooled connection (see above). |
 | `TEST_DATABASE_URL` | A separate database for `npm run test:integration`. Truncated and reseeded automatically before the suite runs — never point this at development or production data. |
 | `E2E_DATABASE_URL` | A separate database for the Playwright E2E suite. Also truncated and reseeded automatically on every run. |
+| `GEMINI_API_KEY` (optional, Phase 5) | Activates real semantic retrieval and embedding generation (`gemini-embedding-2`). Unset by default — `getConfiguredEmbeddingProvider()` returns `undefined` (never throws), and conventional search (structured filters + exact/FTS/trigram) works completely without it. **A ChatGPT/Claude/Gemini chat subscription is not this credential** — only a real Google AI Studio/Vertex API key activates this. |
 
 Three separate databases exist so the integration-test suite's truncate-then-seed cycle can
 never race the E2E suite's, and so neither ever touches your own hand-inspected development
@@ -111,6 +132,8 @@ data.
 | `npm run db:check` | Runs `drizzle-kit check` — fails if the committed migrations and the current schema have drifted apart (e.g., someone edited a schema file without regenerating a migration). Good to run before opening a PR. |
 | `npm run test:integration` | Runs the real-database repository/migration tests (`tests/integration/`) against `TEST_DATABASE_URL`, migrating and seeding it once per run via a Vitest global setup. |
 | `npx playwright test` | Runs the E2E suite, migrating and seeding `E2E_DATABASE_URL` once per run via `tests/e2e/globalSetup.ts`, then building and starting the app against it. |
+| `npm run embeddings:generate` | Backfills `books.embedding` for every book needing one (Phase 5). `--mode=missing` (default), `--mode=stale` (composition/data changed since the last embedding), or `--mode=all`; `--dry-run` reports what would run without calling the provider or writing anything. Exits cleanly, doing nothing, when `GEMINI_API_KEY` is unset. Idempotent — a second `missing` run after a successful one processes zero books. Never run automatically during a request or migration. |
+| `npm run evaluate:search` | Runs the committed search evaluation dataset (`tests/evaluation/`) against `TEST_DATABASE_URL` and reports recall/top-1/prohibited-result violations — see `docs/SEARCH.md` §11. |
 
 ### What gets wiped by seeding
 
@@ -145,16 +168,15 @@ psql postgresql://<user>@127.0.0.1:5432/ssjc_library_dev -c "\dt"
   across the whole suite, so every list a test creates gets a collision-proof name and every
   assertion is written to hold regardless of what other tests have already created.
 
-## The Phase 5 replacement seam
+## Phase 5 — real search architecture
 
-This phase deliberately stops at `Postgres → BookRepository → Book[] → searchBooks() → Find
-UI` — the exact same deterministic ranking Phase 2 built, just reading from a real database
-instead of an in-memory fixture array. Semantic search, embeddings, and pgvector are
-**entirely out of scope** here: no `embedding` column exists on `books`, no pgvector extension
-is enabled, and no placeholder embedding dimension was invented (see `docs/DATA_MODEL.md` §16
-and `docs/ARCHITECTURE.md` §13). When Phase 5 adds semantic search, the seam is
-`BookRepository` — a new method (or an enhanced `listBooks`) can add embedding-based ranking
-without Find, autocomplete, or any component above the repository boundary needing to change.
+The Phase 4 seam described above is exactly where Phase 5 landed: `SearchRepository`
+(`src/db/repositories/searchRepository.ts`) is the new boundary alongside `BookRepository` —
+`BookRepository.getBookById()`/`listBooks()` remain unchanged (Book Detail/Reading Lists), and
+`SearchRepository` owns every SQL statement Find's search actually needs (hard filters,
+exact/FTS/trigram/vector candidate retrieval, facets, autocomplete). See `docs/SEARCH.md` for
+the full architecture. `books.embedding` (`vector(768)`) and its metadata columns now exist,
+populated only by the controlled `npm run embeddings:generate` script — never automatically.
 
 ## Why Reading Lists moved here but auth didn't
 

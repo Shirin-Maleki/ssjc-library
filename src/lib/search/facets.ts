@@ -1,7 +1,11 @@
-import type { Book } from "@/lib/catalog/types";
+import type { Book, DurationBand, Format, VisualRealism } from "@/lib/catalog/types";
 import { getLanguageName } from "@/lib/catalog/languages";
 import { DURATION_BAND_LABELS, getReadDurationBand } from "@/lib/catalog/duration";
 import { FICTION_TYPE_LABELS, FORMAT_LABELS, ILLUSTRATION_STYLE_LABELS, VISUAL_REALISM_LABELS } from "@/lib/catalog/labels";
+
+function isDefined<T>(value: T | undefined): value is T {
+  return value !== undefined;
+}
 
 export interface FacetOption {
   value: string;
@@ -23,10 +27,15 @@ export function buildFacets(books: Book[], categories: { slug: string; label: st
   const languageCodes = Array.from(
     new Set(books.flatMap((b) => [b.languageCode, ...(b.additionalLanguageCodes ?? [])]))
   );
-  const formats = Array.from(new Set(books.map((b) => b.format)));
+  // Phase 5 correction pass: a book with an unrecorded format/visual-realism/duration
+  // never becomes a misleading synthetic facet option (docs/DECISIONS.md, "Incomplete
+  // metadata is never invented") — `isDefined` drops exactly those, nothing else.
+  const formats: Format[] = Array.from(new Set(books.map((b) => b.format).filter(isDefined)));
   const illustrationStyles = Array.from(new Set(books.flatMap((b) => b.illustrationStyles)));
-  const visualRealism = Array.from(new Set(books.map((b) => b.visualRealism)));
-  const durations = Array.from(new Set(books.map((b) => getReadDurationBand(b.readAloudMinutes))));
+  const visualRealism: VisualRealism[] = Array.from(new Set(books.map((b) => b.visualRealism).filter(isDefined)));
+  const durations: DurationBand[] = Array.from(
+    new Set(books.map((b) => getReadDurationBand(b.readAloudMinutes)).filter(isDefined))
+  );
   const authors = Array.from(new Set(books.flatMap((b) => b.authors))).sort();
   const illustrators = Array.from(new Set(books.flatMap((b) => b.illustrators ?? []))).sort();
   const publishers = Array.from(new Set(books.map((b) => b.publisher))).sort();

@@ -4,6 +4,40 @@ A simple, phase-level record of what actually shipped — not a verbose release 
 Entries are dated by when the work was completed; see `docs/IMPLEMENTATION_STATUS.md` for the
 current state and `docs/DECISIONS.md` for the reasoning behind any of these.
 
+## Phase 5 — real search architecture — 2026-09-16 (in progress)
+
+Replaces the Find page's "load the whole catalog into Node, filter in memory" path with a
+real, bounded, database-backed hybrid search pipeline. See `docs/SEARCH.md` for the full
+architecture and `docs/IMPLEMENTATION_STATUS.md` for exactly what remains undone.
+
+- New `SearchService`/`SearchRepository` boundary — structured SQL hard filters,
+  exact/near-exact matching, Postgres full-text search (generated `tsvector`, GIN-indexed),
+  `pg_trgm` fuzzy typo tolerance, and optional pgvector semantic retrieval, merged into one
+  bounded candidate set and scored by a new hybrid scorer on top of the unchanged Phase 2–4
+  deterministic ranker.
+- pgvector installed and schema-ready (`vector(768)` + embedding metadata columns), with a
+  provider abstraction (production Gemini adapter, deterministic fake test provider), graceful
+  degradation on any embedding failure/absence, and a controlled backfill script
+  (`npm run embeddings:generate`). No real `GEMINI_API_KEY` exists in this environment — real
+  semantic-quality validation has not been performed.
+- Catalog visibility (`review_status = 'active'`) enforced in SQL for every teacher-facing
+  search/autocomplete/facet path, proven by tests against deliberately seeded non-active rows.
+- Incomplete metadata is never invented — optional fields display "Not specified," never a
+  fabricated confirmed-looking value; facets never offer a synthetic "unknown" option.
+  Server-side bounded autocomplete and facets replace full-catalog client-side derivation; "Show
+  More" now performs a real re-search instead of slicing an already-fetched array.
+- A committed search evaluation dataset and command (`npm run evaluate:search`) — this harness
+  caught a real regression (structured free-text intent producing no reachable SQL candidates)
+  before it shipped.
+- Four real bugs found and fixed during this work's own testing (not worked around): an
+  implicit-AND full-text query returning zero results for natural multi-word phrases; a
+  structural field label leaking into full-text-searchable content; structured intent
+  (age/duration/language/style phrases) having no independent SQL candidate path; trigram fuzzy
+  matching never using its own GIN index (found via `EXPLAIN ANALYZE` at a realistic ~2,551-row
+  scale, ~40x faster after the fix). Full writeups in `docs/SEARCH.md`.
+- Test counts: 204 unit (was 178), 50 integration (was 34), 103 E2E (unchanged count, all
+  passing against the new architecture).
+
 ## Phase 4 correction pass — 2026-09-16
 
 A focused acceptance-gap pass over the reviewed Phase 4 database work (no redesign, no new

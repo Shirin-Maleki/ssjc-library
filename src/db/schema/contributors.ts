@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { index, pgTable, primaryKey, smallint, text, timestamp, uuid } from "drizzle-orm/pg-core";
 import { contributorRoleEnum } from "./enums";
 import { books } from "./books";
@@ -15,7 +16,14 @@ export const contributors = pgTable(
     normalizedName: text("normalized_name").notNull().unique(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => [index("contributors_normalized_name_idx").on(table.normalizedName)]
+  (table) => [
+    index("contributors_normalized_name_idx").on(table.normalizedName),
+    // Phase 5 — trigram fuzzy matching (searchRepository.ts) compares a query
+    // directly against contributor names for typo tolerance (e.g. "Eric Carl" for
+    // "Eric Carle"); found missing during EXPLAIN ANALYZE testing at ~2,500-row
+    // scale alongside the equivalent `books.title` index — see docs/SEARCH.md §3.
+    index("contributors_name_trgm_idx").using("gin", sql`${table.name} gin_trgm_ops`),
+  ]
 );
 
 /** Book ↔ contributor, with role. `sortOrder` preserves the existing multi-author

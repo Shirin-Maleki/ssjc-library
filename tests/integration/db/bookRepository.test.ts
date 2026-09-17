@@ -22,8 +22,13 @@ describe.skipIf(!hasTestDb)("DrizzleBookRepository (against a real, seeded Postg
   });
 
   it("lists every seeded development book", async () => {
+    // 48 real fixtures plus the 3 deliberate non-active/incomplete-metadata rows
+    // `src/db/seed.ts` also inserts (Phase 5 correction pass) — `listBooks()` is the
+    // Book Detail/Reading-Lists boundary and must keep resolving every book
+    // regardless of review status; visibility scoping only applies to teacher
+    // search (`TEACHER_VISIBLE_REVIEW_STATUS`, `src/db/repositories/searchRepository.ts`).
     const all = await repository.listBooks();
-    expect(all.length).toBe(48);
+    expect(all.length).toBe(51);
   });
 
   it("projects a book's full teacher-relevant shape", async () => {

@@ -86,15 +86,29 @@ export interface Book {
    * never format or compare years directly, use age.ts. */
   ageMinMonths?: number;
   ageMaxMonths?: number;
-  fictionType: FictionType;
-  format: Format;
+  /** `undefined` when the database's `fiction_status` is `unknown_mixed` (Phase 5
+   * correction — `docs/DECISIONS.md`, "Incomplete metadata is never invented").
+   * Never defaulted to "nonfiction": an unknown fiction status must not be presented
+   * or ranked as if it were a real, confirmed one. */
+  fictionType?: FictionType;
+  /** `undefined` when the database's `format` column is NULL — never defaulted to
+   * "other" (a real, distinct, human-chosen value). */
+  format?: Format;
   /** Exactly one — the physical shelf location. See categories.ts. Never treat this
    * as just another tag. */
   physicalCategory: string;
   tags: Tag[];
   illustrationStyles: IllustrationStyle[];
-  visualRealism: VisualRealism;
-  readAloudMinutes: number;
+  /** `undefined` when the database's `visual_realism` is NULL or `unknown` — never
+   * defaulted to "mixed" (a real, distinct, confirmed value meaning "genuinely
+   * combines styles," not "we don't know"). */
+  visualRealism?: VisualRealism;
+  /** `undefined` when `read_aloud_minutes_estimate` is NULL — never defaulted to
+   * `0`, which would otherwise silently satisfy an "Under 5 minutes" filter/intent
+   * for a book whose duration is simply unrecorded. Use
+   * `src/lib/catalog/duration.ts::getReadDurationBand`, never this value directly,
+   * everywhere a duration *band* (not the raw estimate) is what's actually needed. */
+  readAloudMinutes?: number;
   cover: BookCoverSpec;
   publicationYear?: number;
   /** Derived from `book_copies` rows, never stored (docs/DATA_MODEL.md §2 — "Copies:

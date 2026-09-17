@@ -1,19 +1,23 @@
 # Implementation Status
 
-Last updated: 2026-09-16 (end of Phase 4). This document is continuity insurance — it should
-always let another coding agent open this repository cold and know exactly where things
+Last updated: 2026-09-16 (Phase 5, in progress). This document is continuity insurance — it
+should always let another coding agent open this repository cold and know exactly where things
 stand. Keep it current at the end of every phase.
 
 ## Current phase
 
-**Phase 4 — Real database: complete, awaiting review.** PostgreSQL is now the canonical data
-store, accessed exclusively through Drizzle ORM behind committed SQL migrations. The full
-23-table schema from `docs/DATA_MODEL.md` is implemented; the 48-book fixture catalog is now
-seed data with stable UUIDs; Find, Book Detail, and Reading Lists all read from Postgres via
-repository classes instead of the in-memory fixture array; Reading Lists moved from Phase 3's
-`localStorage` to genuinely shared Postgres persistence via authenticated Server Actions.
-Semantic search/embeddings/pgvector remain entirely out of scope (Phase 5). Phase 5 has not
-started and must not start until Phase 4 is explicitly approved.
+**Phase 5 — Real search architecture: in progress, not yet complete.** Phase 4 (real database)
+is complete and approved as of commit `8b128f0`. Phase 5 replaces the Find page's
+load-the-whole-catalog-then-filter-in-memory path with a real, bounded, database-backed hybrid
+search pipeline: PostgreSQL full-text search + trigram fuzzy matching + structured SQL filters
++ optional pgvector semantic retrieval, combined by a transparent hybrid scorer, on top of the
+unchanged deterministic Phase 2–4 ranking engine. See `docs/SEARCH.md` for the full
+architecture. **Honestly incomplete as of this writing:** real semantic-quality validation has
+not been performed — no `GEMINI_API_KEY` exists in this environment, so no real embedding has
+ever been generated. `EXPLAIN ANALYZE` evidence at a realistic ~2,551-row scale and manual
+visual/accessibility verification at real viewport widths have both now been performed (see
+"Completed work" below) — do not treat Phase 5 as validated beyond what's explicitly listed as
+done, but real semantic quality is the one genuinely open gap, not a placeholder list.
 
 ## Full phase plan (for reference — do not execute ahead of approval)
 
@@ -23,8 +27,8 @@ started and must not start until Phase 4 is explicitly approved.
 | 1 | Foundation + design system + access | Complete (approved), branding applied 2026-09-14 |
 | 2 | Mock library + Find a Book | Complete (approved), visual/mobile revision 2026-09-14 |
 | 3 | Voice + reading lists + guide | Complete (approved) |
-| 4 | Real database | **Complete — awaiting review** |
-| 5 | Real search architecture | Not started |
+| 4 | Real database | Complete (approved) |
+| 5 | Real search architecture | **In progress — see "Current phase"** |
 | 6 | Google Drive connection | Not started |
 | 7 | Single Add-a-Book flow | Not started |
 | 8 | Admin review + taxonomy | Not started |
@@ -217,24 +221,94 @@ See `docs/CHANGELOG.md` for the condensed version and `docs/DECISIONS.md` for fu
   identified and cleaned up, the suite ran in 35 seconds instead of 15–35 minutes and passed
   103/103 three consecutive times.
 
-## In-progress work
+## Completed work (Phase 5, in progress)
 
-None.
+See `docs/SEARCH.md` for the full architecture and `docs/CHANGELOG.md` for the condensed
+version. Starting commit: `8b128f0` (approved Phase 4 correction pass).
+
+- **Real hybrid search pipeline**, replacing `BookRepository.listBooks()` → in-memory
+  `searchBooks()`: structured SQL hard filters, exact/near-exact matching, Postgres full-text
+  search (GIN-indexed generated `tsvector`), `pg_trgm` fuzzy typo tolerance, and optional
+  pgvector semantic retrieval — all bounded (never the full catalog), merged into one candidate
+  set, then scored by `combineScores()`/`rankScoredBooks()` (`lib/search/hybridScore.ts`) on top
+  of the unchanged Phase 2–4 deterministic ranker.
+- **`SearchService`/`SearchRepository` architectural boundary** — the Find page never sees SQL,
+  Drizzle, or vector internals; `BookRepository.getBookById()`/`listBooks()` remain the
+  unscoped Book Detail/Reading-Lists boundary.
+- **Catalog visibility enforced in SQL**: every teacher-facing search/autocomplete/facet query
+  is scoped to `review_status = 'active'`, proven by integration tests against deliberately
+  seeded `pending_review`/`archived` rows.
+- **Incomplete metadata is never invented**: fiction type/format/visual realism/duration are all
+  optional; display falls back to "Not specified"; facets never offer a synthetic "unknown"
+  option; an active filter never matches an unrecorded value.
+- **pgvector installed and schema-ready** (`vector(768)` column + embedding metadata columns),
+  with a provider abstraction (`GeminiEmbeddingProvider` for production,
+  `FakeEmbeddingProvider` for tests), graceful degradation on any embedding failure/absence, a
+  deterministic embedding-document builder, and a controlled backfill script
+  (`npm run embeddings:generate`, missing/stale/all modes, dry-run, batch-tolerant).
+  **`GEMINI_API_KEY` is not set in this environment — no real embedding has ever been
+  generated, and real semantic-quality validation has not been performed.**
+- **Server-side bounded autocomplete and facets**, replacing full-catalog client-side
+  derivation; **real re-search pagination** ("Show More" re-queries with a larger `?n=` bound,
+  not a client-side slice of an already-fetched array).
+- **A committed search evaluation dataset and command** (`npm run evaluate:search`,
+  `tests/evaluation/`) — 13 cases across known-item/structured/exploratory/safety categories,
+  currently 13/13 recall, 2/2 top-1, 0 prohibited-result violations. This harness caught and
+  drove the fix for a real regression (see "Known bugs" below).
+- Four real bugs found via E2E/evaluation/EXPLAIN-ANALYZE testing and fixed (not worked
+  around): (1) `plainto_tsquery`'s implicit AND returned zero results for natural multi-word
+  queries — fixed with an OR-of-lexemes tsquery plus a meaningful-overlap gate; (2) a
+  structural label ("Read-aloud length") leaked into full-text-searchable content, making the
+  word "read" match every seeded book — fixed by splitting the full-text index text from the
+  (differently composed) embedding document; (3) structured free-text intent
+  (age/duration/language/style phrases) had no independent SQL candidate path, so an
+  age-appropriate book with no literal keyword overlap with the query was never retrieved as a
+  candidate at all — fixed by `buildIntentConditions()`; (4) trigram fuzzy matching's
+  `similarity() > floor` predicate never used the trigram GIN index at all (Postgres only
+  index-accelerates the `%` operator) — found via `EXPLAIN ANALYZE` at a realistic ~2,551-row
+  synthetic scale (6.7ms sequential scan), fixed with the indexable `%` operator under a
+  transaction-scoped `pg_trgm.similarity_threshold` (0.16ms, ~40x faster). Full detail in
+  `docs/SEARCH.md`.
+- **`EXPLAIN`/`EXPLAIN ANALYZE` evidence gathered at a realistic ~2,551-row synthetic scale**
+  (not just the 51-row dev/test seed) for every retrieval strategy — hard filters (0.76ms),
+  exact/prefix match (1.36ms), full-text with the meaningful-overlap gate (4.97ms, GIN
+  bitmap-index-accelerated), trigram (0.16ms after the index fix above), structured intent
+  (0.06ms), and vector cosine distance over an exact scan (2.06ms for 500 embedded rows) — all
+  comfortably within acceptable search latency at the catalog's full ~5,000-book target. Full
+  numbers in `docs/SEARCH.md` §3.
+- Test counts as of this writing: 204 unit (was 178), 50 integration (was 34, +16 net across
+  two rounds of new search-repository/regression tests), 103 E2E across both Playwright
+  projects (unchanged count, all passing against the new architecture) — see "Known bugs" for
+  the E2E failures found and fixed during this work.
+
+## In-progress / not yet done for Phase 5
+
+- Final git commit and push for this work.
+
+Everything else originally listed here is now done: manual visual/accessibility verification at
+320/390/tablet/desktop with actual screenshots (`docs/screenshots/phase-5/`, `docs/TESTING.md`),
+`EXPLAIN ANALYZE` evidence at a realistic ~2,551-row scale (`docs/SEARCH.md` §3,
+`docs/TESTING.md`), and a standalone security review pass — verified directly, not assumed: no
+`console.log`/`error`/`warn` calls anywhere in the new search files (no raw query logging);
+`GEMINI_API_KEY` never appears as a literal anywhere in source, only in comments/error message
+text; `server-only` present on `searchService.ts` and `embeddings/index.ts`;
+`autocompleteAction.ts` independently calls `requireStaffSession()`; every client component
+importing from `@/db/repositories/*` or `@/lib/search/searchService` does so via `import type`
+only (erased at build, zero runtime code); all 27 `sql` template usages in
+`searchRepository.ts` are Drizzle-parameterized, none string-concatenated.
 
 ## Blocked work
 
-None. Phase 5 (real search architecture — semantic search/embeddings/pgvector) can begin
-without any external credential blocking it, but per the approved roadmap it should wait for
-explicit approval of this Phase 4 report first.
+None outright, but **real semantic-quality validation is blocked on a real `GEMINI_API_KEY`**,
+which does not exist in this environment. Conventional search (structured filters + exact/FTS/
+trigram matching) is fully independent of this and works completely without it.
 
 ## Deferred work
 
-Everything in Phases 5–13, by design. Notably still not built: any AI/LLM involvement in
-search (still fully deterministic — Phase 5), semantic search/embeddings/pgvector (Phase 5,
-explicitly out of scope this phase — no `embedding` column, no extension enabled, no
-placeholder dimension invented), Google/Sheets/Drive integration, and the school's final
-physical taxonomy (still the 8 provisional development categories — see `docs/PRODUCT_SPEC.md`
-and `src/lib/catalog/categories.ts`, now seed-only source material).
+Everything in Phases 6–13, by design: Google/Sheets/Drive integration, a single Add-a-Book
+flow, Admin Review + taxonomy tooling, bulk import, and the school's final physical taxonomy
+(still the 8 provisional development categories — see `docs/PRODUCT_SPEC.md` and
+`src/lib/catalog/categories.ts`, seed-only source material).
 
 ## Pending user inputs
 
@@ -289,13 +363,25 @@ referenced *book* existed, not the *list* — a nonexistent list still hit a raw
 foreign-key-violation exception on the `reading_list_items` → `reading_lists` constraint. Fixed
 by checking both referenced rows before writing. Full writeup in `docs/TESTING.md`.
 
+Phase 5 found and fixed four real bugs (see "Completed work (Phase 5, in progress)" above for
+the full list) — two caught by a first E2E run against the new architecture (zero results for a
+natural multi-word query; a "Show More" test racing a real navigation instead of an instant
+client-side update — the latter was a test-timing fix, not a product bug), one caught by the
+search evaluation harness (structured intent producing no reachable candidates for a query with
+no keyword overlap), and one caught by `EXPLAIN ANALYZE` at a realistic synthetic scale (trigram
+fuzzy matching never actually using its own GIN index). All four are fixed and covered by
+regression tests. No known open bugs.
+
 ## Environment variables
 
 Phase 1's four (`STAFF_PASSWORD_HASH`, `ADMIN_PASSWORD_HASH`, `SESSION_SECRET`, optional
-`SESSION_COOKIE_SECURE`) are unchanged. **Phase 4 adds four database variables**
-(`DATABASE_URL`, `DATABASE_MIGRATION_URL`, `TEST_DATABASE_URL`, `E2E_DATABASE_URL`) — names and
-purposes documented in `docs/DATABASE_SETUP.md` and `.env.example`; no values recorded here.
-Voice search still uses only the browser's own Web Speech API (no server-side key).
+`SESSION_COOKIE_SECURE`) and Phase 4's four database variables (`DATABASE_URL`,
+`DATABASE_MIGRATION_URL`, `TEST_DATABASE_URL`, `E2E_DATABASE_URL`) are unchanged — documented in
+`docs/DATABASE_SETUP.md` and `.env.example`; no values recorded here. **Phase 5 adds one
+optional variable: `GEMINI_API_KEY`** — activates real semantic retrieval and embedding
+generation when present; every part of search works completely without it (conventional
+retrieval has no dependency on it at all). **Not set in this environment.** Voice search still
+uses only the browser's own Web Speech API (no server-side key).
 
 ## Migrations
 
@@ -306,28 +392,28 @@ seed/test source material only, converted into seed data by `src/db/seed.ts`; no
 code path imports it directly anymore.
 `LocalStorageReadingListRepository`'s replacement, `DrizzleReadingListRepository`, is wired in
 at `ReadingListsProvider`'s single construction point, exactly as Phase 3 designed the seam.
-See `docs/DATABASE_SETUP.md` for the full command reference.
+**Phase 5 adds one new migration** (`drizzle/0001_mighty_war_machine.sql`) — enables the
+`vector` and `pg_trgm` Postgres extensions, converts `read_duration_band` to a generated
+column, and adds `search_text`/`search_vector` (generated) and the `embedding*` columns. The
+approved Phase 4 migration (`0000_...`) is untouched. See `docs/DATABASE_SETUP.md` for the full
+command reference, including pgvector-capable local setup.
 
 ## External services
 
-A local, disposable PostgreSQL 16 instance (three databases: dev/test/e2e) — the only "external
-service" this phase connects to, and not actually external at all (see
+A local, disposable PostgreSQL 16 instance (three databases: dev/test/e2e), now with the
+`vector` and `pg_trgm` extensions enabled — still not actually external (see
 `docs/DATABASE_SETUP.md`). Voice search still talks only to the browser's own built-in speech
-recognition (no network call this app makes or controls). No Supabase, Google, or AI service is
-connected yet.
+recognition. **Optionally, Google's Gemini embedding API** (`gemini-embedding-2`) when
+`GEMINI_API_KEY` is configured — not configured in this environment; search works completely
+without it. No Supabase, Drive/Sheets, or other AI service is connected.
 
 ## Git status
 
-Repository is linked to `github.com/Shirin-Maleki/ssjc-library` (`origin`, `main`). New
-commit(s) this phase add the full Postgres/Drizzle data layer, the Reading Lists migration to
-Postgres, and updated documentation, on top of the Phase 0–3 history. See the phase report for
-exact commit SHA(s) and push status.
+Repository is linked to `github.com/Shirin-Maleki/ssjc-library` (`origin`, `main`). Phase 5's
+work is not yet committed/pushed as of this writing — see the phase report for the exact commit
+SHA once it is.
 
 ## Next recommended task
 
-Await review of this Phase 4 report. Once approved, **Phase 5 — real search architecture**:
-semantic search, embeddings, pgvector, and trigram/full-text ranking improvements, layered on
-top of (not replacing) the existing deterministic `searchBooks()` engine, per
-`docs/ARCHITECTURE.md` §12/§13 and `docs/DECISIONS.md`.
-
-Do not begin Phase 4 without explicit approval.
+Commit and push this work, then await review of the Phase 5 report. Phase 6 (Google Drive
+connection) must not begin until Phase 5 is explicitly approved.

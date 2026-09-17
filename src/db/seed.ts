@@ -5,9 +5,9 @@ import { sql } from "drizzle-orm";
 import * as schema from "./schema";
 import { books as fixtureBooks } from "../lib/catalog/fixtures";
 import { PHYSICAL_CATEGORIES } from "../lib/catalog/categories";
-import { getReadDurationBand } from "../lib/catalog/duration";
 import { stripDiacritics } from "../lib/search/normalize";
-import type { Book } from "../lib/catalog/types";
+import { buildSearchIndexText } from "../lib/embeddings/document";
+import type { Book, LanguageCode } from "../lib/catalog/types";
 
 /**
  * DEVELOPMENT / DEMO DATA SEED — NOT CONFIRMED SSJC INVENTORY.
@@ -105,9 +105,12 @@ function normalizeTitle(title: string): string {
     .trim();
 }
 
-function readAloudMinutesEstimate(book: Book): string {
+function readAloudMinutesEstimate(book: Book): string | null {
   // numeric(4,1) column — drizzle-orm/postgres-js expects numeric values as strings.
-  return book.readAloudMinutes.toFixed(1);
+  // None of the 48 real fixtures are missing this, but the type now genuinely
+  // allows it (Phase 5 correction pass) — never coerced to 0, which would silently
+  // satisfy an "Under 5 minutes" search.
+  return book.readAloudMinutes != null ? book.readAloudMinutes.toFixed(1) : null;
 }
 
 async function main() {
@@ -140,12 +143,14 @@ async function main() {
 
   // 1. Physical categories — development taxonomy only, see docs/DATA_MODEL.md §12.
   const categoryIdBySlug = new Map<string, string>();
+  const categoryLabelBySlug = new Map<string, string>();
   for (const category of PHYSICAL_CATEGORIES) {
     const [row] = await db
       .insert(schema.physicalCategories)
       .values({ slug: category.id, label: category.label })
       .returning({ id: schema.physicalCategories.id });
     categoryIdBySlug.set(category.id, row.id);
+    categoryLabelBySlug.set(category.id, category.label);
   }
 
   // 2. Publishers.
@@ -190,6 +195,28 @@ async function main() {
     const bookId = BOOK_ID_BY_SLUG[book.id];
     if (!bookId) throw new Error(`No stable UUID assigned for fixture book "${book.id}" — add one to BOOK_ID_BY_SLUG.`);
 
+    const additionalLanguageCodes = (ADDITIONAL_LANGUAGES[book.id] ?? []) as LanguageCode[];
+    const searchText = buildSearchIndexText({
+      title: book.title,
+      subtitle: book.subtitle,
+      description: book.description,
+      authors: book.authors,
+      illustrators: book.illustrators,
+      publisher: book.publisher,
+      imprint: book.imprint,
+      categoryLabel: categoryLabelBySlug.get(book.physicalCategory),
+      tags: book.tags,
+      languageCode: book.languageCode,
+      additionalLanguageCodes,
+      fictionType: book.fictionType,
+      format: book.format,
+      illustrationStyles: book.illustrationStyles,
+      visualRealism: book.visualRealism,
+      ageMinMonths: book.ageMinMonths,
+      ageMaxMonths: book.ageMaxMonths,
+      readAloudMinutes: book.readAloudMinutes,
+    });
+
     await db.insert(schema.books).values({
       id: bookId,
       title: book.title,
@@ -198,11 +225,14 @@ async function main() {
       sortTitle: book.sortTitle,
       shortDescription: book.description,
       languageCode: book.languageCode,
-      fictionStatus: book.fictionType,
+      // Every one of the 48 real fixtures has a concrete fictionType; the fallback
+      // only exists to satisfy the type (Phase 5 made this field optional to
+      // represent genuinely unknown records — see the dedicated incomplete-metadata
+      // seed book below for real coverage of that path).
+      fictionStatus: book.fictionType ?? "unknown_mixed",
       ageMinMonths: book.ageMinMonths,
       ageMaxMonths: book.ageMaxMonths,
       readAloudMinutesEstimate: readAloudMinutesEstimate(book),
-      readDurationBand: getReadDurationBand(book.readAloudMinutes),
       format: book.format,
       visualMediaType: book.illustrationStyles,
       visualRealism: book.visualRealism,
@@ -211,6 +241,7 @@ async function main() {
       physicalCategoryId: categoryIdBySlug.get(book.physicalCategory),
       reviewStatus: "active",
       verifiedAt: new Date(),
+      searchText,
     });
 
     let sortOrder = 0;
@@ -233,7 +264,7 @@ async function main() {
       await db.insert(schema.bookTags).values({ bookId, tagId: tagIdByName.get(tagName)! });
     }
 
-    for (const languageCode of ADDITIONAL_LANGUAGES[book.id] ?? []) {
+    for (const languageCode of additionalLanguageCodes) {
       await db.insert(schema.bookLanguages).values({ bookId, languageCode });
     }
 
@@ -243,8 +274,71 @@ async function main() {
     }
   }
 
+  // 6. Deliberate non-active and incomplete-metadata records (Phase 5 correction
+  // pass) — not derived from fixtures.ts, since these specifically exist to prove
+  // catalog-visibility scoping and "unknown metadata is never invented" behavior
+  // against a real database, not just in-memory unit fixtures. Never shown to
+  // teacher search/autocomplete/facets; see docs/DATA_MODEL.md's visibility section
+  // and tests/integration/db/searchRepository.test.ts.
+  const anyCategoryId = [...categoryIdBySlug.values()][0];
+  await db.insert(schema.books).values({
+    id: "10000000-0000-0000-0000-000000000001",
+    title: "Pending Review Test Book",
+    normalizedTitle: normalizeTitle("Pending Review Test Book"),
+    sortTitle: "Pending Review Test Book",
+    languageCode: "en",
+    physicalCategoryId: anyCategoryId,
+    reviewStatus: "pending_review",
+    searchText: buildSearchIndexText({
+      title: "Pending Review Test Book",
+      authors: [],
+      tags: [],
+      languageCode: "en",
+      illustrationStyles: [],
+    }),
+  });
+  await db.insert(schema.books).values({
+    id: "10000000-0000-0000-0000-000000000002",
+    title: "Archived Test Book",
+    normalizedTitle: normalizeTitle("Archived Test Book"),
+    sortTitle: "Archived Test Book",
+    languageCode: "en",
+    physicalCategoryId: anyCategoryId,
+    reviewStatus: "archived",
+    searchText: buildSearchIndexText({
+      title: "Archived Test Book",
+      authors: [],
+      tags: [],
+      languageCode: "en",
+      illustrationStyles: [],
+    }),
+  });
+  // Active, but every "can be unknown" field genuinely is — no fictionStatus,
+  // format, visualRealism, age, or duration recorded. This must still search,
+  // display, and facet safely: "Not specified" everywhere, never a fabricated
+  // "nonfiction"/"other"/"mixed"/"under 5 minutes".
+  await db.insert(schema.books).values({
+    id: "10000000-0000-0000-0000-000000000003",
+    title: "Book With Incomplete Metadata",
+    normalizedTitle: normalizeTitle("Book With Incomplete Metadata"),
+    sortTitle: "Book With Incomplete Metadata",
+    languageCode: "en",
+    physicalCategoryId: anyCategoryId,
+    reviewStatus: "active",
+    // fictionStatus defaults to "unknown_mixed"; format/visualRealism/age/duration
+    // all left NULL.
+    searchText: buildSearchIndexText({
+      title: "Book With Incomplete Metadata",
+      authors: [],
+      tags: [],
+      languageCode: "en",
+      illustrationStyles: [],
+    }),
+  });
+
   console.log(`Seed complete: ${fixtureBooks.length} books, ${categoryIdBySlug.size} categories, ` +
-    `${publisherIdByName.size} publishers, ${contributorIdByName.size} contributors, ${tagIdByName.size} tags.`);
+    `${publisherIdByName.size} publishers, ${contributorIdByName.size} contributors, ${tagIdByName.size} tags, ` +
+    `3 deliberate non-active/incomplete-metadata test books.`);
 
   await client.end();
 }

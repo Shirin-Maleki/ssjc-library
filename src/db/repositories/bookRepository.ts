@@ -19,7 +19,7 @@ import {
   publishers,
   tags,
 } from "../schema";
-import type { Book, FictionType, Format, IllustrationStyle, LanguageCode, VisualRealism } from "@/lib/catalog/types";
+import type { Book, FictionType, IllustrationStyle, LanguageCode, VisualRealism } from "@/lib/catalog/types";
 
 /**
  * The catalog data-access boundary (Phase 4 brief §29) — the only thing Find, Book
@@ -37,6 +37,11 @@ import type { Book, FictionType, Format, IllustrationStyle, LanguageCode, Visual
 export interface BookRepository {
   listBooks(): Promise<Book[]>;
   getBookById(id: string): Promise<Book | undefined>;
+  /** Batch-projects a specific set of book ids — the boundary `SearchService`
+   * (Phase 5) uses to turn a bounded set of SQL-retrieved candidate ids into full
+   * `Book` objects, never by fetching the whole catalog (`docs/SEARCH.md` §1). Order
+   * is not guaranteed to match `ids`; callers that care about order re-sort. */
+  getBooksByIds(ids: string[]): Promise<Book[]>;
 }
 
 /** Deterministic per-book placeholder-cover variant, replacing the fixture-only
@@ -52,9 +57,39 @@ function coverVariantFromId(id: string): number {
   return hash % 4;
 }
 
-const FICTION_STATUS_FALLBACK: FictionType = "nonfiction";
-const FORMAT_FALLBACK: Format = "other";
-const VISUAL_REALISM_FALLBACK: VisualRealism = "mixed";
+/** The subset of the database's `visual_media_type` enum that is a real, specific
+ * illustration style a teacher can filter/search on — `other`/`unknown` are database
+ * concepts (Phase 5 correction pass) that must never be unsafely cast into the
+ * narrower `IllustrationStyle` union (that cast previously let an unlabelled value
+ * flow straight into facet/label lookups, e.g. `ILLUSTRATION_STYLE_LABELS["unknown"]`
+ * is `undefined`). Filtered out here, not defaulted to anything. */
+const KNOWN_ILLUSTRATION_STYLES: ReadonlySet<string> = new Set<IllustrationStyle>([
+  "photography",
+  "watercolor",
+  "collage",
+  "digital_illustration",
+  "pencil",
+  "ink",
+  "painted",
+  "mixed_media",
+  "graphic_vector",
+]);
+
+function safeIllustrationStyles(values: string[] | null): IllustrationStyle[] {
+  return (values ?? []).filter((v): v is IllustrationStyle => KNOWN_ILLUSTRATION_STYLES.has(v));
+}
+
+/** `unknown_mixed`/NULL/`unknown` are real, distinct "not yet determined" database
+ * states (Phase 5 correction pass, `docs/DECISIONS.md`) — never coerced into a
+ * confirmed value like "nonfiction"/"other"/"mixed". `Book`'s corresponding fields
+ * are optional specifically so "not specified" can be represented honestly instead. */
+function safeFictionType(value: FictionType | "unknown_mixed"): FictionType | undefined {
+  return value === "unknown_mixed" ? undefined : value;
+}
+
+function safeVisualRealism(value: VisualRealism | "unknown" | null): VisualRealism | undefined {
+  return value == null || value === "unknown" ? undefined : value;
+}
 
 type BookRow = typeof books.$inferSelect;
 
@@ -71,6 +106,12 @@ export class DrizzleBookRepository implements BookRepository {
     if (rows.length === 0) return undefined;
     const [projected] = await this.projectMany(rows);
     return projected;
+  }
+
+  async getBooksByIds(ids: string[]): Promise<Book[]> {
+    if (ids.length === 0) return [];
+    const rows = await this.db.select().from(books).where(inArray(books.id, ids));
+    return this.projectMany(rows);
   }
 
   /** Batch-loads every relation for a set of book rows (contributors, tags,
@@ -186,16 +227,16 @@ export class DrizzleBookRepository implements BookRepository {
       description: row.shortDescription ?? "",
       ageMinMonths: row.ageMinMonths ?? undefined,
       ageMaxMonths: row.ageMaxMonths ?? undefined,
-      // `unknown_mixed` has no equivalent in the teacher-facing UI yet — no Phase 4
-      // seed data produces it; see docs/DECISIONS.md for why this narrow gap is an
-      // accepted, documented limitation rather than a new UI concept invented here.
-      fictionType: row.fictionStatus === "unknown_mixed" ? FICTION_STATUS_FALLBACK : row.fictionStatus,
-      format: row.format ?? FORMAT_FALLBACK,
+      // Phase 5 correction pass: none of the following four fields are ever
+      // defaulted to a confirmed-looking value — see the safe* helpers above and
+      // docs/DECISIONS.md, "Incomplete metadata is never invented."
+      fictionType: safeFictionType(row.fictionStatus),
+      format: row.format ?? undefined,
       physicalCategory: related.categorySlug ?? "",
       tags: related.tags,
-      illustrationStyles: (row.visualMediaType ?? []) as IllustrationStyle[],
-      visualRealism: (row.visualRealism ?? VISUAL_REALISM_FALLBACK) as VisualRealism,
-      readAloudMinutes: row.readAloudMinutesEstimate ? Number(row.readAloudMinutesEstimate) : 0,
+      illustrationStyles: safeIllustrationStyles(row.visualMediaType),
+      visualRealism: safeVisualRealism(row.visualRealism),
+      readAloudMinutes: row.readAloudMinutesEstimate != null ? Number(row.readAloudMinutesEstimate) : undefined,
       cover: { variant: coverVariantFromId(row.id) },
       publicationYear: row.publicationYear ?? undefined,
       copyCount: related.copyCount,

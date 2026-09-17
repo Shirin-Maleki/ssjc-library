@@ -1,7 +1,7 @@
 # Testing
 
-Status: reflects what's actually built and run through Phase 4 — every command below was
-executed against the real project, not just written.
+Status: reflects what's actually built and run through Phase 5 (in progress) — every command
+below was executed against the real project, not just written.
 
 ## Running the suite
 
@@ -50,6 +50,10 @@ against an actual Postgres instance, never a mocked Drizzle client.
 | `reading-lists/format.test.ts` | `formatCreatedBy` (Anonymous fallback for undefined/whitespace), `formatBookCount` pluralization, `formatListDate` (including an unparseable-date fallback), `isBookInList` |
 | `reading-lists/localStorageRepository.test.ts` | Every repository method against real `localStorage` (jsdom) — this class is no longer used in production (see Phase 4 below) but stays covered as reference/example code |
 | `components/ReadingListsProvider.test.tsx` (Phase 4) | The client-side load-failure path: a rejected `getAll()` surfaces the calm "couldn't be loaded" message, distinct from a genuinely empty list; a successful empty load shows the real empty state, not an error. This replaces E2E coverage of the old "corrupted localStorage" scenario, whose premise no longer applies now that Reading Lists aren't stored in the browser at all — see below |
+| `embeddings/document.test.ts` (Phase 5) | `buildEmbeddingDocument` determinism (byte-identical output, stable `sourceHash`), tag alphabetical sorting, omitting undefined fields entirely (never `undefined`/`null`/`NaN` in the output text), multilingual primary+additional language names; `buildSearchIndexText` never contains structural label words (the "Read-aloud length" regression), still contains every real content value |
+| `embeddings/fakeProvider.test.ts` (Phase 5) | Deterministic (same text → same vector), different text → different vector, correct dimensionality, L2-normalization, `embedDocuments` matching `embedQuery` per-text |
+| `embeddings/index.test.ts` (Phase 5) | `getConfiguredEmbeddingProvider()` returns `undefined` (never throws) with no `GEMINI_API_KEY`, returns a real `GeminiEmbeddingProvider` when one is set |
+| `search/hybridScore.test.ts` (Phase 5) | Each retrieval signal's contribution in isolation (exact/FTS/trgm/semantic), the full-text/semantic contribution caps relative to `exactTitle`, a vector distance at or beyond the meaningful ceiling contributing nothing, an exact deterministic match outranking a purely semantic match on an unrelated book, threshold filtering (never pads), deterministic alphabetical tie-break |
 
 Environment note: tests run with `environment: "node"`, not `jsdom` — an early attempt to use
 `jsdom` caused `jose`'s WebCrypto key handling to see cross-realm `Uint8Array` instances and
@@ -69,6 +73,20 @@ result; every assertion is a real round-trip to a real running Postgres instance
 | `db/migrations.test.ts` | The committed migrations actually produce all 23 tables; a handful of specific columns/constraints/indexes exist as designed (the `books_isbn13_unique` partial index, the age check constraints, the `book_field_provenance` current-row partial unique index) |
 | `db/bookRepository.test.ts` | `DrizzleBookRepository` against real seeded data: correct book count, contributor ordering via `array_agg(... order by sort_order)`, multi-value `visual_media_type` arrays round-tripping correctly, `copyCount` matching a real `count(*)` on `book_copies`; (Phase 4 correction pass) the multilingual seed book's `additionalLanguageCodes` projected by the repository itself — not merely visible via a raw `book_languages` query — including "de" (outside the original six fixture languages), and a single-language book's `additionalLanguageCodes` staying `undefined` |
 | `db/readingListRepository.test.ts` | Full CRUD, idempotent `addBook` via the composite primary key, and the mandated **two-independent-connection acceptance test**: a list created and populated through one `DrizzleReadingListRepository` instance (its own separate Postgres connection) is immediately visible, with the same data, through a second, completely independent instance/connection — the actual proof that Reading Lists are genuinely shared, not just that one repository method returns the right object; (Phase 4 correction pass) `createWithBook` as one atomic transaction (the new list already contains the book; both rows persist; a nonexistent book fails the *entire* operation and leaves no orphan list), typed domain errors (`ReadingListNotFoundError`/`BookNotFoundError`/`InvalidIdError`) instead of raw foreign-key/UUID-syntax exceptions, and malformed ids treated as a safe no-result for `getById`/`delete` |
+| `db/searchRepository.test.ts` (Phase 5) | Catalog visibility (pending/archived books never appear in candidates, facet rows, or autocomplete, active/incomplete-metadata books still do); exact/near-exact matching (author full name, exact title); full-text OR-semantics (a multi-word descriptive query returns real results; a filler query returns none — the "read"-label regression); trigram floor (a real typo is a candidate, an unrelated query isn't); language hard-filtering via primary+additional; incomplete metadata never producing an invented format/realism/duration value; **structured intent producing real SQL candidates, not just a ranking bonus** (the age-phrase regression — see `docs/SEARCH.md` §2); vector storage/distance retrieval (a stored embedding is retrievable by cosine distance; a book with no embedding never receives a fabricated distance; omitting a query embedding never touches the vector column at all) |
+
+## Search evaluation (Phase 5) — `tests/evaluation/`
+
+Run with `npm run evaluate:search`, against `TEST_DATABASE_URL` (same seeded database as the
+integration suite). A committed, human-readable dataset (`tests/evaluation/dataset.ts`) of
+known-item, structured, exploratory, and safety/correctness cases, run through the real
+`SearchService` and reported as recall / top-1 accuracy / prohibited-result violations — see
+`docs/SEARCH.md` §11. This is a *report* as much as a test: a genuine regression fails it loudly
+rather than being tuned away, and it is what caught the structured-intent regression above
+before it shipped. **13/13 recall, 2/2 top-1, 0 prohibited-result violations** as of this
+writing. The report also states honestly that no real embedding provider is configured in this
+environment, so every case ran through conventional retrieval only — no hybrid-vs-conventional
+comparison with a real semantic signal has been performed.
 
 ## E2E tests (Playwright) — `tests/e2e/`
 
@@ -89,9 +107,12 @@ Phase 4 correction pass also added two `find.spec.ts` cases (run on both project
 rest of that file): a malformed Book Detail id (`/books/not-a-uuid`) and a valid-but-nonexistent
 UUID both render the calm "Book not found" state, never a database error.
 
-**103 tests, 0 failures** (Phase 4 correction pass) — `readingLists.spec.ts` runs on the desktop
-project only (18 tests, serial, including the new two-browser acceptance test), everything else
-still runs on both mobile/WebKit and desktop/Chromium. Re-run three consecutive times end to end
+**103 tests, 0 failures against the Phase 5 architecture** (same count as the Phase 4 correction
+pass — no new E2E test files were needed; the existing `find.spec.ts` flows exercise the new
+real search pipeline end to end without modification, aside from the two fixes below).
+`readingLists.spec.ts` runs on the desktop project only (18 tests, serial, including the
+two-browser acceptance test), everything else still runs on both mobile/WebKit and
+desktop/Chromium. Re-run three consecutive times end to end
 with no flakes before being
 considered done.
 
@@ -258,6 +279,60 @@ consecutive times. Worth knowing before assuming a flaky E2E run means a real re
 for leftover browser processes from a previous session first, especially after a long working
 session with many backgrounded/interrupted test runs.
 
+### Real bugs this suite (and the evaluation harness) caught — Phase 5
+
+1. **A five-word descriptive query returned zero results end to end**
+   ("animal books with real photos") — `plainto_tsquery`'s implicit AND required every word to
+   appear verbatim in a single book's document, which no real photography/animal book's text
+   did. Found by the first E2E run against the new architecture (`find.spec.ts` Flow 3). Fixed
+   with an OR-of-lexemes tsquery. Full writeup in `docs/SEARCH.md` §3.
+2. **Fixing #1 exposed a second, more interesting bug**: the OR query then made the ordinary
+   word "read" match every seeded book, because the structural label "Read-aloud length"
+   appeared in literally every document. Found immediately after fixing #1, by testing the
+   known "zero-results" filler-query case from Phase 2–4's own test suite
+   (`docs/SEARCH.md`'s "Real bugs this phase's testing caught," #3's spiritual successor) and
+   seeing it regress. Fixed by splitting the full-text index text from the labeled embedding
+   document (`buildSearchIndexText` vs. `buildEmbeddingDocument`) plus a meaningful-overlap gate
+   requiring ≥2 matched lexemes.
+3. **"Show More" appeared not to increase the result count** — actually a test-timing bug, not
+   a product bug: the test read `rows.count()` once, synchronously, right after clicking,
+   racing the real server navigation Phase 5 introduced (Phase 2–4's "Show More" was an instant
+   client-side slice with nothing to race). Fixed by making the test assertion auto-retry.
+4. **The most significant find: structured free-text intent (an age/duration/language/style
+   phrase) produced no reachable SQL candidates at all for a query sharing no literal keyword
+   overlap with a matching book** — found by the search evaluation harness
+   (`tests/evaluation/`), not by E2E testing. "A book for a 4 year old" is a real Phase 2–4
+   capability (the deterministic age-intent ranking bonus) that had silently regressed the
+   moment retrieval moved from "score the whole catalog" to "score only SQL-bounded
+   candidates" — an age-appropriate book with zero keyword overlap with the query text was
+   never even retrieved as a candidate, so its ranking bonus never got a chance to apply. Fixed
+   by `buildIntentConditions()`, a dedicated SQL candidate query for recognized structured
+   intent signals. Verified directly: 4 candidates before the fix, 38 (the real count of
+   age-appropriate seeded books) after. Full writeup in `docs/SEARCH.md` §2. This is exactly the
+   kind of regression the evaluation harness exists to catch, and it worked.
+
+## Query performance evidence at realistic scale (Phase 5)
+
+The 48–51-row dev/test/e2e seed is too small to expose real index-usage problems, so
+performance claims in `docs/SEARCH.md` are backed by `EXPLAIN ANALYZE` against a throwaway
+~2,551-row synthetic database (generated, measured, and dropped — not part of the repository or
+any committed seed), sized within the catalog's stated ~1,500–5,000-book target:
+
+| Query | Time | Plan |
+|---|---|---|
+| Hard filter / queryless browse | 0.76ms | Sequential scan (correct choice — ~99% of rows match `review_status='active'`) |
+| Exact/prefix match | 1.36ms | Sequential scan |
+| Full-text (OR-tsquery + meaningful-overlap gate) | 4.97ms | Bitmap index scan on `books_search_vector_idx` (GIN) |
+| Trigram fuzzy match, before fix | 6.7ms | Sequential scan — the trigram index existed but was never used |
+| Trigram fuzzy match, after fix | 0.16ms | Bitmap index scan on `books_title_trgm_idx` (GIN) — **~40x faster** |
+| Structured intent (age) | 0.06ms | Sequential scan (short-circuited by `LIMIT`) |
+| Vector cosine distance (exact scan, 500 embedded rows) | 2.06ms | Sequential scan + top-N sort |
+
+The trigram regression this table documents (row 4→5) was a real, previously-undiscovered bug
+— see `docs/SEARCH.md` §3 and `docs/DECISIONS.md`, "Trigram fuzzy matching needs the `%`
+operator." All other queries used an appropriate plan on first measurement. Every number above
+comes from an actual `EXPLAIN ANALYZE` run, not an estimate.
+
 ## Manual verification performed
 
 - Visually inspected real Playwright screenshots (not just automated assertions) of every
@@ -283,15 +358,42 @@ session with many backgrounded/interrupted test runs.
   seeded with several books to check whether the tinted `BookCover` system (Phase 2 revision)
   reads as noisy once a list is genuinely book-heavy — it didn't; the four-composition cycle
   stayed legible and restrained even with repeats, so no change was made.
+- Phase 5: captured and inspected real screenshots at 320/390/820(tablet)/1440 of the new/
+  changed search surfaces — the autocomplete dropdown open, real search results with grounded
+  explanations, "Show More" with its exact remaining-count label, and the calm zero-results
+  state — see `docs/screenshots/phase-5/` (captured via a throwaway Playwright script, deleted
+  after review, per the same local/not-committed convention as Phases 1–3). One real timing
+  race in the *capture script itself* was caught and fixed this way (a `networkidle`-based
+  wait resolved before a real search navigation completed, capturing the pre-navigation empty
+  state) — re-verified as a test-script artifact, not a product bug, by re-running the same
+  interaction in isolation with an explicit wait for real content and confirming correct
+  results. The "Book With Incomplete Metadata" seed row was visually confirmed rendering
+  "Age not specified · Not specified · Not specified" in a real result card, not just asserted
+  by a test. No visual defects requiring a fix were found at any of the four widths.
 
 ## What's not tested yet (by design)
 
 Nothing in Add or the Admin dashboard beyond their placeholder states — there's no real
-functionality there yet to test. Google and AI integrations have no tests because nothing is
-connected yet (Phases 6, 7, 9). Semantic search/embeddings/pgvector have no tests because
-they're entirely out of scope for Phase 4 (see `docs/DATABASE_SETUP.md`, "The Phase 5
-replacement seam"). Find a Book, voice search, Reading Lists, and the Library Guide are all
-fully tested at the unit, integration, and E2E level for everything Phases 2–4 actually built —
-Phase 4 additionally adds real-database coverage (migrations, repositories, and the
-two-connection shared-persistence proof) that didn't exist, and couldn't have existed, before
-there was a real database to test against.
+functionality there yet to test. Google Drive/Sheets integration has no tests because nothing
+is connected yet (Phases 6, 9). Find a Book, voice search, Reading Lists, and the Library Guide
+are all fully tested at the unit, integration, and E2E level for everything Phases 2–5 actually
+built.
+
+**Genuinely not tested in Phase 5, and reported honestly rather than glossed over:**
+
+- **Real semantic-quality relevance.** No `GEMINI_API_KEY` exists in this environment, so no
+  real embedding has ever been generated and no real semantic retrieval has ever run. Every
+  test involving an embedding uses the deterministic `FakeEmbeddingProvider`, which proves the
+  storage/retrieval/scoring/graceful-degradation *mechanics* work correctly but carries no real
+  semantic meaning whatsoever. Whether a real embedding actually improves exploratory/
+  paraphrased-query relevance over conventional retrieval alone is unmeasured.
+- **`EXPLAIN`/`EXPLAIN ANALYZE` query-plan evidence at a realistic (~1,500–5,000 row) catalog
+  scale.** Only verified functionally against the 48–51-row dev/test/e2e seed so far — index
+  usage and query cost at the collection's actual target size have not been measured.
+- **Manual visual/accessibility verification at real viewport widths for the new/changed Find
+  UI surfaces** (autocomplete dropdown, Show More loading state, calm search-failure copy) —
+  only automated Playwright assertions exist for these so far, unlike Phases 1–3's own
+  screenshot-based manual review documented above.
+
+Phase 4's real-database coverage (migrations, repositories, the two-connection
+shared-persistence proof) remains fully in place and unaffected by Phase 5.
