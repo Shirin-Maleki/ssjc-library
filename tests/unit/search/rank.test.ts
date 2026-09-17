@@ -72,6 +72,42 @@ describe("scoreBook", () => {
     expect(scoreBook(photoBook, "animal books with real photos").reasons.some((r) => r.type === "visual_realism")).toBe(true);
     expect(scoreBook(illustratedBook, "animal books with real photos").reasons.some((r) => r.type === "visual_realism")).toBe(false);
   });
+
+  it("credits a literal 'fiction'/'nonfiction' keyword — a soft preference, never a hard filter", () => {
+    const fictionBook = makeBook({ id: "a", title: "Dragon Tale", tags: ["dragons"], fictionType: "fiction" });
+    const nonfictionBook = makeBook({ id: "b", title: "Real Dragons of History", tags: ["dragons"], fictionType: "nonfiction" });
+
+    expect(scoreBook(fictionBook, "dragons fiction").reasons.some((r) => r.type === "fiction_type")).toBe(true);
+    expect(scoreBook(nonfictionBook, "dragons fiction").reasons.some((r) => r.type === "fiction_type")).toBe(false);
+    expect(scoreBook(nonfictionBook, "dragons nonfiction").reasons.some((r) => r.type === "fiction_type")).toBe(true);
+  });
+
+  it("credits a format-name keyword (e.g. 'picture book', 'board book') — a soft preference", () => {
+    const pictureBook = makeBook({ id: "a", title: "Bear Tale", tags: ["bears"], format: "picture_book" });
+    const boardBook = makeBook({ id: "b", title: "Bear Tale Two", tags: ["bears"], format: "board_book" });
+
+    expect(scoreBook(pictureBook, "bears picture book").reasons.some((r) => r.type === "format")).toBe(true);
+    expect(scoreBook(boardBook, "bears picture book").reasons.some((r) => r.type === "format")).toBe(false);
+    expect(scoreBook(boardBook, "bears board book").reasons.some((r) => r.type === "format")).toBe(true);
+  });
+
+  it("credits a category-name keyword — a soft/strong structured fit, never a hard filter", () => {
+    const natureBook = makeBook({ id: "a", title: "Forest Walk", tags: [], physicalCategory: "animals-nature" });
+    expect(scoreBook(natureBook, "animals books").reasons.some((r) => r.type === "category")).toBe(true);
+    // Ranking-only: a book NOT in the mentioned category still isn't excluded by
+    // scoreBook itself (only an explicit UI category Filter hard-excludes) — it
+    // simply doesn't receive this particular bonus.
+    const otherCategoryBook = makeBook({ id: "b", title: "Forest Walk Two", tags: [], physicalCategory: "stem-discovery" });
+    expect(scoreBook(otherCategoryBook, "animals books").reasons.some((r) => r.type === "category")).toBe(false);
+    expect(scoreBook(otherCategoryBook, "animals books").score).not.toBeLessThan(0);
+  });
+
+  it("an unrecorded format/fiction status never fabricates a match", () => {
+    const unknownFormatBook = makeBook({ id: "a", title: "Mystery Book", tags: ["mystery"], format: undefined, fictionType: undefined });
+    const result = scoreBook(unknownFormatBook, "mystery picture book fiction");
+    expect(result.reasons.some((r) => r.type === "format")).toBe(false);
+    expect(result.reasons.some((r) => r.type === "fiction_type")).toBe(false);
+  });
 });
 
 describe("rankBooks", () => {

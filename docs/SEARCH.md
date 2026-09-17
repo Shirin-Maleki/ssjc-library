@@ -109,6 +109,23 @@ count of age-4-appropriate books in the seeded catalog). See
 `tests/integration/db/searchRepository.test.ts`, "structured free-text intent produces real
 candidates, not just a ranking bonus."
 
+**Hard constraint vs. strong structured fit vs. soft preference (Phase 5 correction pass).**
+Every structured signal this system recognizes falls into exactly one of three tiers, and the
+distinction is load-bearing — a signal never silently moves from one tier to another:
+
+| Tier | What it means | Examples |
+|---|---|---|
+| **Hard constraint** | An explicit UI Filter selection. Enforced as a real SQL `WHERE` condition (`buildHardFilterConditions`); a book failing it is excluded, full stop, regardless of how well it matches the free-text query. | Any checkbox/radio in the Filters dialog: language, age, fiction type, format, category, duration, visual realism, illustration style, author/illustrator/publisher. |
+| **Strong structured fit** | A phrase *parsed from free text* that resolves to the same underlying dimension as a hard constraint, scored with a weight in the same "strong" tier as author/category/tag matching (`RANKING_WEIGHTS`) and retrieved via its own bounded SQL candidate query (`buildIntentConditions`) — but never enforced as exclusion. A book that doesn't match still can appear; it just doesn't get the bonus. | Age point/range ("age 4", "2 to 5"), language name ("a Swedish book"), duration phrase ("a 5 minute read"), illustration-style phrase ("watercolor books"), visual-realism phrase ("real photos"). |
+| **Soft preference** | A literal keyword match against a label/value, weighted "medium" (format/fiction-type) or "weak" (description keyword) — the least precise signals, present mostly to avoid missing an obvious literal mention. | The literal words "fiction"/"nonfiction" in a query; a format name like "picture book"/"board book"; a category name like "animals" (matched against the category slug's words). |
+
+No tier ever converts an ambiguous natural-language hint into a silent hard filter — only an
+explicit Filter selection excludes a book. See `tests/unit/search/intent.test.ts` and
+`tests/unit/search/rank.test.ts` for direct coverage of every named example above (age range,
+fiction/nonfiction, format, category, real photos, watercolor, collage), and
+`tests/evaluation/dataset.ts`'s "structured" category for end-to-end cases against a real
+database.
+
 ## §3 — Layer 3: Postgres full-text + trigram retrieval
 
 **Full-text search.** `books.search_text` (populated by `buildSearchIndexText()`,
@@ -176,9 +193,69 @@ to another query sharing the same pooled connection afterward.
 contributor-or-publisher name) is a separate, unbounded-priority candidate source — a known-item
 query like an ISBN or an author's full name should never depend on FTS/trgm heuristics at all.
 
+**Title-exact matching uses one canonical normalizer on both sides (Phase 5 correction pass).**
+The exact-title candidate query previously compared `books.normalized_title` (written at seed/
+backfill time via `normalizeTitle()` — lowercased, leading-article-stripped, diacritic-stripped)
+against a bare `trimmed.toLowerCase()` on the query side — no article-stripping, no diacritic
+handling. A query that still carried its own leading article ("The Very Hungry Caterpillar")
+therefore failed to exact-match the stored, article-stripped value ("very hungry caterpillar").
+Fixed by exporting `normalizeTitle()` from `lib/search/normalize.ts` (previously a private
+function inside `seed.ts`) and calling the exact same function on the query side
+(`eq(books.normalizedTitle, normalizeTitle(trimmed))`) — never two subtly different
+title-normalization implementations. See `tests/unit/search/normalize.test.ts` and
+`tests/evaluation/dataset.ts`'s "known-item-normalized-title-no-article" case.
+
 **Field weighting.** No raw provenance, audit, review-status, or operational metadata is ever
 part of `search_text` — only teacher-facing content fields, the same fields
 `lib/catalog/types.ts`'s `Book` type exposes.
+
+**Migration-upgrade backfill and ongoing search-text maintenance (Phase 5 correction pass).**
+Migration `0001` added `books.search_text` as a nullable column — correct for a from-zero
+migrate-then-seed database (nothing to backfill), but silently wrong for an already-populated
+Phase 4 database: its existing rows would keep a NULL `search_text` (and therefore an empty
+generated `search_vector`, disabling full-text discovery for every pre-existing book) until
+something happened to reseed them, with no visible error. Two distinct, clearly separated
+mechanisms fix this:
+
+1. **Automatic upgrade backfill, folded into `npm run db:migrate` itself.** After running the
+   schema migrations, `src/db/migrate.ts` calls `rebuildSearchText(db, { mode: "missing" })`
+   (`lib/search/searchTextMaintenance.ts`), which finds every book with a NULL `search_text` and
+   computes it using the exact same `buildSearchIndexText()` function (and the same relational
+   data sourcing — contributors by role/order, publisher, category label, tags, primary +
+   additional languages) that `seed.ts` already uses. A from-zero database finds nothing to do
+   (a fast no-op); a populated Phase 4 database gets every existing book backfilled, as part of
+   the same command that's already the documented upgrade step — never a second manual step
+   someone could forget. Deterministic and idempotent by construction (re-running it finds
+   nothing left to update).
+2. **`npm run search:rebuild-text`** (`scripts/search/rebuildSearchText.ts`) — the controlled
+   command for the ongoing maintenance case: a book's metadata changed through a path that
+   didn't already recompute `search_text` (a bulk import, a direct edit), and its conventional-
+   search text is now stale. `--mode=missing` (default, matches the migration's own scope) or
+   `--mode=all` (every book — the right choice after editing `buildSearchIndexText`'s
+   composition itself). **Distinct from `npm run embeddings:generate`**: this command never
+   calls an embedding provider, needs no `GEMINI_API_KEY`, and only ever touches `search_text`.
+   Rebuilding `search_text` for an edited book also makes any of its existing stored embeddings
+   detectably stale — `buildEmbeddingDocument()`'s `sourceHash` is computed from the same
+   underlying fields, so `embeddings:generate --mode=stale` independently notices the mismatch
+   on its own next run. The two commands compose; they are never conflated.
+
+**Why a script, not a third `.sql` migration file, for the backfill logic itself.** The
+composition (which relational data feeds `search_text`, in what order) already lives in one
+place, `buildSearchIndexText()` — reimplementing that same logic in raw SQL for a migration file
+would create a second, drift-prone implementation of the exact kind of duplication this
+correction pass separately fixed for title normalization (see above). `rebuildSearchText()` is
+still a genuinely forward-only, deterministic, idempotent operation, and running it is mandatory
+(not optional) as part of `db:migrate` on any existing database — it is simply implemented as a
+data operation triggered by the migration command, not as DDL inside a `.sql` file.
+
+Proven end to end by `tests/integration/db/migrationUpgrade.test.ts`: a fresh database is
+brought to exactly the Phase 4 (migration `0000`) schema state with real relational data
+inserted directly (no `search_text` column exists yet at that point), the real Phase 5
+migrations are applied via drizzle's own `migrate()`, and the test confirms `search_text` is
+NULL immediately after (reproducing the bug), then populated correctly by the backfill —
+including title, contributor, publisher, category, tag, and additional-language content, all
+verified as genuinely full-text-searchable afterward — with the book's id, its `book_copies` row,
+and its Reading List reference all unchanged throughout.
 
 ## §4 — Architecture boundary
 
@@ -227,7 +304,27 @@ interface (`modelId`, `dimensions`, `embedDocuments`, `embedQuery`) with three t
 
 - `GeminiEmbeddingProvider` (`lib/embeddings/geminiProvider.ts`) — a production adapter using
   plain `fetch()` (no SDK) against `gemini-embedding-2`'s REST endpoint, a 3-second timeout via
-  `AbortController`, and `outputDimensionality: 768`. Requires `GEMINI_API_KEY`.
+  `AbortController`, and `outputDimensionality: 768`. Requires `GEMINI_API_KEY`. **Implements an
+  explicit asymmetric retrieval input contract (Phase 5 correction pass)**: `embedQuery()` and
+  `embedDocuments()` previously sent the exact same unlabeled text through the same code path —
+  no distinction between "this is a query" and "this is a document being indexed," even though
+  Google's own retrieval guidance is that the two should be formatted differently so the model
+  produces embeddings actually optimized for each role. `gemini-embedding-2` (unlike the older
+  `gemini-embedding-001`, which exposes a discrete `task_type` request field) documents this as a
+  plain-text instruction prefix embedded in the content itself: a document being indexed is sent
+  as `"title: none | text: {content}"` (Google's own guidance for when no separate title field is
+  used — the real title already appears as the first line of `buildEmbeddingDocument()`'s own
+  composed text); a search query is sent as `"task: search result | query: {content}"`. Sourced
+  from `ai.google.dev/gemini-api/docs/embeddings` and Google's "Gemini Embedding 2" model
+  announcement — **not independently verified against a live API call**, since no
+  `GEMINI_API_KEY` exists in this environment; re-confirm against Google's current documentation
+  before relying on this in a real deployment. This formatting change is what a real Gemini call
+  actually embeds, even though `buildEmbeddingDocument()`'s own output text and `sourceHash` are
+  unchanged — `EMBEDDING_COMPOSITION_VERSION` was bumped 1 → 2 specifically so any embedding
+  generated before this change is detectably stale. See `tests/unit/embeddings/geminiProvider.test.ts`
+  (proves the two paths send genuinely different request bodies, with a mocked `fetch` — this
+  cannot and does not claim a real semantic-quality improvement, only that the documented
+  contract is actually applied).
 - `FakeEmbeddingProvider` (`lib/embeddings/fakeProvider.ts`) — a deterministic, SHA-256-seeded,
   L2-normalized pseudo-embedding provider, **test-only**. It is never wired into
   `getConfiguredEmbeddingProvider()` and never produces a real search result; it exists purely
@@ -276,10 +373,23 @@ oversight — see `docs/IMPLEMENTATION_STATUS.md`.
 Server-side, authenticated, bounded, and backed by real active-catalog values —
 `autocompleteAction()` (`lib/search/autocompleteAction.ts`, a `"use server"` action) calls
 `requireStaffSession()` independently (the same pattern established for Reading Lists' Server
-Actions) and delegates to `SearchRepository.autocomplete()`, which runs five parallel, bounded,
-visibility-scoped `ILIKE` queries (title, author, illustrator, publisher, category), never a
-full-catalog fetch. Client-side prefix-first / type-priority / alphabetical ordering is applied
-in the action itself before returning at most 8 rows.
+Actions) and delegates to `SearchRepository.autocomplete()`, which runs seven parallel, bounded,
+visibility-scoped queries — title, author, illustrator, publisher, category (`ILIKE`), tag/topic
+(`ILIKE` against `tags` scoped to visible books via `book_tags`), and language (Phase 5
+correction pass: `AutocompleteRow`'s type always declared "topic" and "language" as real
+suggestion types, but nothing ever produced them — a real gap between the implementation and its
+own report). Language matching is necessarily a two-step process: display names live only in
+the centralized ISO 639-1 registry (`lib/catalog/languages.ts`), not the database, so SQL first
+gathers the small, visibility-scoped, bounded *set* of codes actually in use (primary `books.
+language_code` UNION additional `book_languages.language_code`, both restricted to visible
+books), and only that small set — never the full catalog — is matched against the query by
+display name in application code. A tag or language used only by a `pending_review`/`archived`
+book must never surface here; a language used only as an ADDITIONAL (never primary) language on
+a visible book still must. Never a full-catalog fetch. Client-side prefix-first / type-priority
+/ alphabetical ordering is applied in the action itself before returning at most 8 rows — see
+`tests/integration/db/searchRepository.test.ts` ("topic/tag and language autocomplete"),
+`tests/unit/search/autocompleteAction.test.ts` (ordering logic), and
+`tests/unit/components/SearchInput.autocomplete.test.tsx` (the type label actually renders).
 
 `SearchInput` debounces keystrokes 200ms before calling the action, and guards against
 out-of-order responses with a monotonically increasing request-id ref: if a slower, earlier
@@ -301,8 +411,8 @@ other language as a choice, so switching languages doesn't require clearing filt
 every facet's option list, so "Not specified" never becomes a synthetic, misleading filter
 choice.
 
-**Pagination.** "The database performs the limiting" refers to *candidate bounding*, not a
-literal single SQL `LIMIT` on the final ranked page: each retrieval strategy in
+**Pagination for a free-text query.** "The database performs the limiting" refers to *candidate
+bounding*, not a literal single SQL `LIMIT` on the final ranked page: each retrieval strategy in
 `SearchRepository` caps how many rows it contributes (`FTS_CANDIDATE_LIMIT=150`,
 `TRGM_CANDIDATE_LIMIT=80` each, `VECTOR_CANDIDATE_LIMIT=60`, `EXACT_CANDIDATE_LIMIT=30` — a few
 hundred rows at most, never the full catalog), those bounded candidates are the only rows ever
@@ -312,7 +422,30 @@ entire catalog. This is a deliberate, documented design choice: true SQL-side `O
 final-rank pagination isn't used because the final rank depends on the TypeScript-side hybrid
 score (§9), which combines signals SQL alone can't compute; bounding candidate retrieval away
 from the full catalog is what actually matters for the "never ship/score the whole catalog"
-invariant, and is fully achieved.
+invariant, and is fully achieved. `totalQualifying` for a free-text query is therefore the
+number of candidates that cleared the relevance threshold *within that bounded retrieval pool*
+— a real number, but not a literal catalog-wide count, and never claimed as one (see
+`SearchService.SearchResultPage`'s own doc comment).
+
+**Pagination for queryless (filter-only) browsing is a real, bounded, database-side-ordered
+page — a genuine gap fixed in the Phase 5 correction pass, not a restatement of the above.**
+The original implementation's queryless path (`findCandidates()`'s empty-query branch) selected
+every matching book id with no `LIMIT` at all, `SearchService` then projected *all* of them into
+full `Book` objects via `getBooksByIds()`, sorted the entire set in memory by `sort_title`, and
+only *then* sliced to the requested `limit` — a filter-only search, and every "Show More" click
+on one, silently re-did that full unbounded retrieval and projection on every request. Fixed
+with two new `SearchRepository` methods used only for this case:
+`findVisibleBookIdsPage({ filters, limit })` (`ORDER BY sort_title LIMIT (limit + 1)` — one extra
+row, never returned, just enough to answer `hasMore`; no `OFFSET`, since `limit` here is always
+"how many total to show so far," the same increasing-bounded-limit model the with-query path
+already uses for "Show More") and `countVisibleBooks(filters)` (a real `COUNT(*)` — the true,
+exact total, unlike the candidate-pool-bounded number above). `SearchService.browseByFiltersOnly()`
+calls both, then projects (`getBooksByIds`) *only* the bounded page's ids — never the full
+matching set. Proven at a real scale (`tests/integration/db/boundedPagination.test.ts`: 300
+synthetic active books sharing one category) with a `vi.spyOn(bookRepository, "getBooksByIds")`
+assertion that a 5-result page calls it with exactly 5 ids (never 300), and that a 15-result
+"Show More" page calls it with exactly 15 (never 300) — the actual proof, not just an inference
+from the query shape.
 
 "Show More" (`ResultsList.tsx`) triggers a real server re-search — `router.push()` to the same
 Find URL with a larger `?n=` limit (`RESULT_LIMIT_STEP = 10` per click,
@@ -375,12 +508,43 @@ came from typing or speech.
 
 ## §11 — Evaluation
 
-A committed, human-readable evaluation dataset and command validate the pipeline against known
-expectations, distinct from the seeded development catalog. See
-`tests/evaluation/` and `docs/TESTING.md` for the dataset format, the categories of cases
-covered (known-item, structured/filter, exploratory/semantic-adjacent, and safety/correctness —
-prohibited results that must never appear), and how to run the evaluation command. Results are
-reported honestly, including whenever real semantic-quality testing was not performed (§5).
+A committed, human-readable evaluation dataset and command (`npm run evaluate:search`) validate
+the pipeline against known expectations, distinct from the seeded development catalog. See
+`tests/evaluation/` and `docs/TESTING.md` for the exact case format and how to run it. **41
+cases** (expanded from an initial 13 in the Phase 5 correction pass) across four reported
+categories:
+
+- **known_item** (11) — exact title, a title without its own leading article (proving the
+  normalization fix above), a title with trailing punctuation, author, illustrator, publisher,
+  ISBN-10, ISBN-13, a title typo, a contributor-name typo, and a diacritic-insensitive query.
+- **structured** (14) — a primary-language native-script title query, an additional-language-only
+  free-text query, an explicit language filter, two distinct explicit ages, an age-range phrase,
+  and hard filters for fiction type, format, category, duration, visual realism, two illustration
+  styles, and three simultaneous filters together.
+- **safety** (11) — the generic-filler-query and pending/archived-exclusion regressions from the
+  original 13, plus: incomplete metadata never satisfying a duration/realism/fiction-type filter
+  it doesn't actually have a value for, an incompatible filter combination, a hard category filter
+  never overridden by strong thematic relevance (the closest this environment can get to proving
+  "hard filters never yield to semantic similarity" without a real embedding provider), an exact
+  title/contributor outranking weaker matches, and an explicit case confirming the
+  provider-absence fallback preserves normal conventional results.
+- **exploratory** (5) — friendship/sharing, winter atmosphere, and a curriculum/concept query
+  against real fixtures, plus two development-only evaluation fixtures
+  (`EVALUATION_ONLY_FIXTURE_BOOKS` in `searchEvaluation.eval.ts`, inserted and removed by that
+  file alone, never part of `src/db/seed.ts`) for gentle daily separation/goodbye and
+  starting-school anxiety — themes the real 48-book catalog has no credible match for.
+
+Reported per-category (recall, prohibited violations) and in aggregate (recall, top-1, **top-5**,
+prohibited violations) — not one aggregate recall number alone. Results are reported honestly,
+including whenever real semantic-quality testing was not performed (§5): the report's own final
+line states explicitly that every case ran conventional-only in this environment, and that
+deterministic fake embeddings elsewhere in this codebase prove storage/retrieval/scoring
+mechanics only, never semantic-quality evidence. A genuine regression fails this suite loudly —
+cases are not adjusted to make a run pass; every fix in this correction pass to a genuinely wrong
+expected value (e.g. an alphabetical-tie assumption that didn't match the real top-10) is
+recorded in the case's own comment, distinct from a case that exposed a real product bug (the
+structured-intent-candidate regression this suite caught before it shipped in the original Phase
+5 work).
 
 ## Multilingual parity
 

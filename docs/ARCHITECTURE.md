@@ -297,6 +297,24 @@ added (an exact vector scan is fast and correct at this catalog's target scale, 
   fake provider, but whether a real embedding actually improves exploratory/paraphrased-query
   relevance is unmeasured and must not be reported as validated.
 
+**Phase 5 correction pass (2026-09-17) — three further architectural corrections, found by
+review, not by this environment's own testing catching them first:**
+
+- **Queryless (filter-only) browsing needed its own bounded SQL page.** The original
+  implementation's "the database performs the limiting" claim (§12) was true for a free-text
+  query but not for a plain filtered browse, which still fetched every matching id, projected
+  all of them, and sorted in memory before slicing. Fixed with real `ORDER BY ... LIMIT`
+  pagination and an exact `COUNT(*)`, proven at a 300-row synthetic scale. See `docs/SEARCH.md`
+  §7 and `docs/DECISIONS.md`.
+- **A schema migration that adds a column populated from existing rows' relational data needs an
+  explicit, tested upgrade path for an already-populated database — "migrates cleanly from
+  zero" is not the same claim.** Fixed by folding an idempotent backfill into `db:migrate`
+  itself. See `docs/SEARCH.md` §4.
+- **The Gemini embedding adapter's document/query calls were symmetric (identical, unlabeled
+  text) despite the provider's own documented asymmetric retrieval contract.** Fixed per
+  `gemini-embedding-2`'s current documented convention — not independently verified against a
+  live call. See `docs/SEARCH.md` §5.
+
 ## 14. Staff / admin authentication & session architecture — full technical specification
 
 The shared-password UX is unchanged; this section makes the mechanism underneath it fully

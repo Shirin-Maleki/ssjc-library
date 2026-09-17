@@ -5,7 +5,7 @@ import { sql } from "drizzle-orm";
 import * as schema from "./schema";
 import { books as fixtureBooks } from "../lib/catalog/fixtures";
 import { PHYSICAL_CATEGORIES } from "../lib/catalog/categories";
-import { stripDiacritics } from "../lib/search/normalize";
+import { normalizeTitle } from "../lib/search/normalize";
 import { buildSearchIndexText } from "../lib/embeddings/document";
 import type { Book, LanguageCode } from "../lib/catalog/types";
 
@@ -93,17 +93,6 @@ const ADDITIONAL_LANGUAGES: Record<string, string[]> = {
 /** A few books get a second physical copy so derived copy-count logic has something
  * real to compute against (Phase 4 brief §28). */
 const BOOKS_WITH_TWO_COPIES = new Set(["very-hungry-caterpillar", "the-gruffalo", "goodnight-moon"]);
-
-/** Lowercased, punctuation/article-stripped — for duplicate matching
- * (docs/DATA_MODEL.md §2). Reuses the same diacritic-stripping the search engine
- * already relies on (`src/lib/search/normalize.ts`) rather than a second
- * implementation. */
-function normalizeTitle(title: string): string {
-  return stripDiacritics(title.toLowerCase())
-    .replace(/^(the|a|an)\s+/, "")
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-}
 
 function readAloudMinutesEstimate(book: Book): string | null {
   // numeric(4,1) column — drizzle-orm/postgres-js expects numeric values as strings.
@@ -239,6 +228,8 @@ async function main() {
       publisherId: publisherIdByName.get(book.publisher),
       publicationYear: book.publicationYear,
       physicalCategoryId: categoryIdBySlug.get(book.physicalCategory),
+      isbn10: book.isbn10,
+      isbn13: book.isbn13,
       reviewStatus: "active",
       verifiedAt: new Date(),
       searchText,

@@ -67,6 +67,23 @@ export function stripDiacritics(text: string): string {
   return withKnownLetters.normalize("NFD").replace(/[̀-ͯ]/g, "");
 }
 
+/** The one canonical title-normalization function — used both when a book's
+ * `normalized_title` column is written (seed, backfill, future import) and when an
+ * incoming free-text query is compared against it (`SearchRepository`'s exact-match
+ * candidate query). Lowercased, leading-article-stripped, diacritic-stripped,
+ * punctuation-collapsed. Phase 5 correction pass: these two sides previously used
+ * different logic (`normalizeTitle` in `seed.ts` vs. a bare `trimmed.toLowerCase()`
+ * in `searchRepository.ts`), so a query like "The Very Hungry Caterpillar" (with
+ * its leading article) failed to exact-match a stored `normalized_title` of "very
+ * hungry caterpillar" (the article already stripped at seed time) — never
+ * maintain two subtly different title-normalization implementations. */
+export function normalizeTitle(title: string): string {
+  return stripDiacritics(title.toLowerCase())
+    .replace(/^(the|a|an)\s+/, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
 export function normalizeSearchText(text: string): string {
   return stripDiacritics(text.toLowerCase())
     .replace(/[^a-z0-9\s]/g, " ")

@@ -18,14 +18,25 @@ import type {
 } from "@/lib/catalog/types";
 
 /**
- * Bumped whenever the *composition* below changes (a field added/removed/reworded) —
- * not whenever a single book's data changes. Stored alongside every embedding
+ * Bumped whenever the *composition* below changes (a field added/removed/reworded),
+ * OR whenever a configured provider's own input-formatting contract changes in a way
+ * that changes what's actually sent to the embedding model — not whenever a single
+ * book's data changes. Stored alongside every embedding
  * (`books.embedding_composition_version`) so the backfill script can tell "this
- * book's embedding used an old composition" apart from "this book's data changed
- * since its embedding was made" (`embedding_source_hash`, below).
- * `docs/SEARCH.md` §5 / `docs/DECISIONS.md`.
+ * book's embedding used an old composition/provider-contract" apart from "this
+ * book's data changed since its embedding was made" (`embedding_source_hash`,
+ * below). `docs/SEARCH.md` §5 / `docs/DECISIONS.md`.
+ *
+ * Bumped 1 → 2 in the Phase 5 correction pass: `GeminiEmbeddingProvider` began
+ * wrapping this function's output in `gemini-embedding-2`'s documented asymmetric
+ * retrieval task-instruction format ("title: none | text: …" for documents,
+ * "task: search result | query: …" for a search query) before sending it to the
+ * API — this function's own output text and `sourceHash` are unchanged, but what a
+ * real Gemini call actually embeds is now different, so any embedding generated
+ * under version 1 must be treated as stale. See `geminiProvider.ts`'s own comment
+ * for the exact contract and its sourcing.
  */
-export const EMBEDDING_COMPOSITION_VERSION = 1;
+export const EMBEDDING_COMPOSITION_VERSION = 2;
 
 /**
  * Everything the deterministic document (and, by extension, the `search_text`/

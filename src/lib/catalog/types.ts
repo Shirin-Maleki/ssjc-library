@@ -66,6 +66,14 @@ export interface Book {
   illustrators?: string[];
   publisher: string;
   imprint?: string;
+  /** Phase 5 correction pass: exposed only so the fixture catalog can carry a real
+   * ISBN for the small number of known-item search evaluation cases that need one
+   * (`tests/evaluation/dataset.ts`) — most fixture books have neither, matching a
+   * real record with genuinely unrecorded ISBN data (never invented). Not surfaced
+   * anywhere in the Find/Book Detail UI; the search boundary
+   * (`SearchRepository.findCandidates`) reads these directly from the database. */
+  isbn10?: string;
+  isbn13?: string;
   /** The primary/display language — see docs/DATA_MODEL.md §3. Never removed or
    * repurposed in favor of `additionalLanguageCodes` below; a book always has exactly
    * one primary language, plus zero or more additional ones for multilingual

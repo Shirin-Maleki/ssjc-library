@@ -1,6 +1,7 @@
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { eq, sql } from "drizzle-orm";
 import { books } from "@/db/schema";
+import * as schema from "@/db/schema";
 import { DrizzleSearchRepository } from "@/db/repositories/searchRepository";
 import { EMPTY_FILTERS } from "@/lib/search/filters";
 import { requireTestDatabaseUrl, createTestDb } from "./testDb";
@@ -58,6 +59,61 @@ describe.skipIf(!hasTestDb)("DrizzleSearchRepository (against a real, seeded Pos
       const values = results.map((r) => r.value);
       expect(values).not.toContain("Pending Review Test Book");
       expect(values).not.toContain("Archived Test Book");
+    });
+  });
+
+  describe("topic/tag and language autocomplete (Phase 5 correction pass)", () => {
+    const PENDING_BOOK_ID = "10000000-0000-0000-0000-000000000001";
+    let onlyOnPendingTagId: string;
+
+    beforeAll(async () => {
+      if (!hasTestDb) return;
+      const [tag] = await db
+        .insert(schema.tags)
+        .values({ name: "quokka-habitats", normalizedName: "quokka-habitats" })
+        .returning();
+      onlyOnPendingTagId = tag.id;
+      await db.insert(schema.bookTags).values({ bookId: PENDING_BOOK_ID, tagId: onlyOnPendingTagId });
+      // Icelandic is not used by ANY seeded active book, primary or additional —
+      // attaching it only to the pending book proves a pending-only language never
+      // surfaces (mirroring the tag case above).
+      await db.insert(schema.bookLanguages).values({ bookId: PENDING_BOOK_ID, languageCode: "is" });
+    });
+
+    afterAll(async () => {
+      if (!hasTestDb) return;
+      await db.delete(schema.bookLanguages).where(eq(schema.bookLanguages.bookId, PENDING_BOOK_ID));
+      await db.delete(schema.bookTags).where(eq(schema.bookTags.tagId, onlyOnPendingTagId));
+      await db.delete(schema.tags).where(eq(schema.tags.id, onlyOnPendingTagId));
+    });
+
+    it("a real tag used by active books autocompletes as a topic", async () => {
+      const results = await repository.autocomplete("caterpillar", 20);
+      expect(results).toContainEqual({ value: "caterpillars", type: "topic" });
+    });
+
+    it("a tag used ONLY by a pending_review book never autocompletes", async () => {
+      const results = await repository.autocomplete("quokka", 20);
+      expect(results).toEqual([]);
+    });
+
+    it("a real, catalog-used language autocompletes by its display name", async () => {
+      const results = await repository.autocomplete("swed", 20);
+      expect(results).toContainEqual({ value: "Swedish", type: "language" });
+    });
+
+    it("a language used ONLY as an ADDITIONAL (never primary) language on an active book still autocompletes", async () => {
+      // "Guess How Much I Love You" is English-primary with German as an additional
+      // language (tests/integration/db/bookRepository.test.ts) — no seeded active
+      // book has German as its PRIMARY language, so this only passes if the
+      // additional-language UNION branch actually runs.
+      const results = await repository.autocomplete("german", 20);
+      expect(results).toContainEqual({ value: "German", type: "language" });
+    });
+
+    it("a language used ONLY by a pending_review book never autocompletes", async () => {
+      const results = await repository.autocomplete("icelandic", 20);
+      expect(results).toEqual([]);
     });
   });
 

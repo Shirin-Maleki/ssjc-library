@@ -583,3 +583,19 @@ design:**
   migration.
 - **No changes to any other table.** Reading Lists, provenance, ingestion, and every other
   Phase 4 table are byte-for-byte unchanged this phase.
+
+**Correction pass (2026-09-17):**
+
+- **A second migration, `drizzle/0002_flimsy_goliath.sql`** — corrects the trigram index to
+  target `books.title`/`contributors.name` (the columns the trigram queries actually compare
+  against) instead of the unused `books.search_text` index §16/§17 above originally shipped.
+  Found via `EXPLAIN ANALYZE` at scale; see `docs/SEARCH.md` §3 and `docs/DECISIONS.md`.
+- **`books.isbn10`/`isbn13` (already part of the Phase 4 schema, §2) are now populated for two
+  real fixture books** (`src/lib/catalog/fixtures.ts`: "The Very Hungry Caterpillar," "The
+  Gruffalo") with their real published ISBNs — specifically so the search evaluation dataset
+  (`docs/SEARCH.md` §11) could include real ISBN-10/13 known-item cases without fabricating a
+  synthetic book. No fixture had ever recorded an ISBN before this. No schema change — the
+  columns already existed and were simply never written to.
+- **No third `.sql` migration for the existing-database `search_text` backfill** — a deliberate
+  choice, explained in `docs/DECISIONS.md`, to avoid reimplementing `buildSearchIndexText()`'s
+  composition logic a second time in raw SQL. See `docs/SEARCH.md` §4.

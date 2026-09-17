@@ -15,7 +15,6 @@ import { getLanguageName } from "@/lib/catalog/languages";
 import type { Filters } from "./filters";
 import { buildMatchExplanation } from "./explain";
 import { combineScores, rankScoredBooks } from "./hybridScore";
-import type { ScoredBook } from "./rank";
 
 const KNOWN_ILLUSTRATION_STYLE_VALUES: ReadonlySet<string> = new Set<IllustrationStyle>(
   Object.keys(ILLUSTRATION_STYLE_LABELS) as IllustrationStyle[]
@@ -38,9 +37,22 @@ export interface SearchResultRow {
 
 export interface SearchResultPage {
   results: SearchResultRow[];
-  /** How many candidates cleared the relevance threshold in total — not the whole
-   * catalog, just this bounded candidate set (see `docs/SEARCH.md` §7 for why that
-   * distinction is deliberate and documented, not a shortcut). */
+  /**
+   * How many results qualify in total. Two genuinely different meanings depending
+   * on whether there was a free-text query — both real counts, neither a shortcut,
+   * but not the same *kind* of count (docs/SEARCH.md §7):
+   *
+   * - Queryless (filter-only) browsing: an exact `COUNT(*)` of every visible book
+   *   matching the active filters — the true catalog-wide total.
+   * - A free-text query: the number of candidates that cleared the relevance
+   *   threshold *within the bounded retrieval pool* (exact/FTS/trgm/vector
+   *   candidates, each individually capped — see `searchRepository.ts`'s
+   *   `*_CANDIDATE_LIMIT` constants). Computing a literal catalog-wide count for a
+   *   ranked free-text query would require scoring the entire catalog against that
+   *   query, exactly what this architecture exists to avoid — so this number is
+   *   never claimed as "the total number of matches in the whole catalog," only as
+   *   "how many of the results we actually retrieved and scored qualify."
+   */
   totalQualifying: number;
   hasMore: boolean;
   facets: FacetCounts;
@@ -65,23 +77,16 @@ export class SearchService {
     const trimmed = query.trim();
     const categoryLabelBySlug = new Map(this.categories.map((c) => [c.slug, c.label]));
 
-    const queryEmbedding = trimmed.length > 0 ? await this.tryEmbedQuery(trimmed) : undefined;
+    if (trimmed.length === 0) {
+      return this.browseByFiltersOnly(filters, limit, categoryLabelBySlug);
+    }
 
+    const queryEmbedding = await this.tryEmbedQuery(trimmed);
     const signalsById = await this.searchRepository.findCandidates({ query: trimmed, filters, queryEmbedding });
     const candidateIds = [...signalsById.keys()];
     const books = await this.bookRepository.getBooksByIds(candidateIds);
 
-    let scored: ScoredBook[];
-    if (trimmed.length === 0) {
-      // Queryless filter browsing stays alphabetical and unthresholded — the same
-      // rule `rankBooks` (rank.ts) has always applied (docs/SEARCH.md §10).
-      scored = [...books]
-        .sort((a, b) => a.sortTitle.localeCompare(b.sortTitle))
-        .map((book) => ({ book, score: 0, reasons: [] }));
-    } else {
-      scored = rankScoredBooks(books.map((book) => combineScores(book, trimmed, signalsById.get(book.id))));
-    }
-
+    const scored = rankScoredBooks(books.map((book) => combineScores(book, trimmed, signalsById.get(book.id))));
     const page = scored.slice(0, limit);
     const facetRows = await this.searchRepository.getVisibleBookFacetRows();
 
@@ -93,6 +98,42 @@ export class SearchService {
       })),
       totalQualifying: scored.length,
       hasMore: scored.length > limit,
+      facets: buildFacetsFromRows(facetRows, this.categories),
+    };
+  }
+
+  /**
+   * Queryless (filter-only) browsing — a real, bounded, database-side-ordered page,
+   * not "fetch every matching book, sort in memory, then slice" (Phase 5 correction
+   * pass; see `SearchRepository.findVisibleBookIdsPage`'s own comment for the exact
+   * problem this replaces). Alphabetical and unthresholded, the same rule
+   * `rankBooks` (rank.ts) has always applied for a query-less browse — there's no
+   * relevance score to sort by, so `sort_title` order is the honest default.
+   * `totalQualifying` here is a real `COUNT(*)`, not a candidate-pool size (see
+   * `SearchResultPage.totalQualifying`'s own doc comment).
+   */
+  private async browseByFiltersOnly(
+    filters: Filters,
+    limit: number,
+    categoryLabelBySlug: Map<string, string>
+  ): Promise<SearchResultPage> {
+    const [{ ids, hasMore }, totalQualifying, facetRows] = await Promise.all([
+      this.searchRepository.findVisibleBookIdsPage({ filters, limit }),
+      this.searchRepository.countVisibleBooks(filters),
+      this.searchRepository.getVisibleBookFacetRows(),
+    ]);
+
+    // getBooksByIds does not itself preserve the requested id order — re-sort the
+    // projected books by the same sort_title order the SQL page was already
+    // fetched in, rather than trusting projection order to match it.
+    const books = await this.bookRepository.getBooksByIds(ids);
+    const booksById = new Map(books.map((book) => [book.id, book]));
+    const orderedBooks = ids.map((id) => booksById.get(id)).filter((book): book is Book => book !== undefined);
+
+    return {
+      results: orderedBooks.map((book) => ({ book, score: 0, explanation: buildMatchExplanation([], categoryLabelBySlug) })),
+      totalQualifying,
+      hasMore,
       facets: buildFacetsFromRows(facetRows, this.categories),
     };
   }

@@ -1,23 +1,26 @@
 # Implementation Status
 
-Last updated: 2026-09-16 (Phase 5, in progress). This document is continuity insurance — it
-should always let another coding agent open this repository cold and know exactly where things
-stand. Keep it current at the end of every phase.
+Last updated: 2026-09-17 (Phase 5 correction pass, in progress). This document is continuity
+insurance — it should always let another coding agent open this repository cold and know
+exactly where things stand. Keep it current at the end of every phase.
 
 ## Current phase
 
-**Phase 5 — Real search architecture: in progress, not yet complete.** Phase 4 (real database)
-is complete and approved as of commit `8b128f0`. Phase 5 replaces the Find page's
-load-the-whole-catalog-then-filter-in-memory path with a real, bounded, database-backed hybrid
-search pipeline: PostgreSQL full-text search + trigram fuzzy matching + structured SQL filters
-+ optional pgvector semantic retrieval, combined by a transparent hybrid scorer, on top of the
-unchanged deterministic Phase 2–4 ranking engine. See `docs/SEARCH.md` for the full
-architecture. **Honestly incomplete as of this writing:** real semantic-quality validation has
-not been performed — no `GEMINI_API_KEY` exists in this environment, so no real embedding has
-ever been generated. `EXPLAIN ANALYZE` evidence at a realistic ~2,551-row scale and manual
-visual/accessibility verification at real viewport widths have both now been performed (see
-"Completed work" below) — do not treat Phase 5 as validated beyond what's explicitly listed as
-done, but real semantic quality is the one genuinely open gap, not a placeholder list.
+**Phase 5 — Real search architecture: correction pass complete, Phase 5 itself still not
+approved.** Phase 4 (real database) is complete and approved as of commit `8b128f0`. The initial
+Phase 5 work (commit `d5648e3`) built a real, bounded, database-backed hybrid search pipeline —
+PostgreSQL full-text search + trigram fuzzy matching + structured SQL filters + optional
+pgvector semantic retrieval, combined by a transparent hybrid scorer, on top of the unchanged
+deterministic Phase 2–4 ranking engine (see `docs/SEARCH.md`) — but a review of that commit found
+four material acceptance gaps (an unsafe migration path for an already-populated database,
+unbounded queryless-browse pagination, incomplete autocomplete, and a thin evaluation suite) plus
+two adjacent issues (a title-normalization mismatch, an unlabeled Gemini retrieval contract).
+This correction pass fixes all six — see "Completed work (Phase 5 correction pass)" below.
+**Honestly incomplete as of this writing:** real semantic-quality validation has still not been
+performed — no `GEMINI_API_KEY` exists in this environment, so no real embedding has ever been
+generated. This is the one genuinely open gap keeping Phase 5 from being marked complete; every
+other requirement in the original brief and this correction pass has been built, tested against
+real PostgreSQL, and documented.
 
 ## Full phase plan (for reference — do not execute ahead of approval)
 
@@ -281,6 +284,74 @@ version. Starting commit: `8b128f0` (approved Phase 4 correction pass).
   projects (unchanged count, all passing against the new architecture) — see "Known bugs" for
   the E2E failures found and fixed during this work.
 
+## Completed work (Phase 5 correction pass, 2026-09-17)
+
+A bounded correction pass fixing four material acceptance gaps a reviewer found in commit
+`d5648e3`, plus two adjacent issues the same review exposed. No Phase 6 work; no Find UI
+redesign. Full detail in `docs/SEARCH.md`, `docs/DECISIONS.md`, and `docs/CHANGELOG.md`.
+
+1. **Safe upgrade of an existing Phase 4 database.** `rebuildSearchText()`
+   (`lib/search/searchTextMaintenance.ts`) reuses `buildSearchIndexText()` — the exact function
+   `seed.ts` already uses — against `DrizzleBookRepository`'s real relational projection, and is
+   called automatically by `db:migrate` right after the schema migrations, scoped to rows a
+   schema change actually left with a NULL `search_text`. A from-zero database finds nothing to
+   backfill; a populated one gets every existing book backfilled as part of the same command
+   that's already the documented upgrade step. A separate `npm run search:rebuild-text` command
+   handles the ongoing-maintenance case (a metadata edit/import), explicitly distinct from
+   embedding generation. Proven end to end by `tests/integration/db/migrationUpgrade.test.ts`: a
+   database is brought to exactly the Phase 4 schema state with real relational data, the real
+   Phase 5 migrations are applied, `search_text` is confirmed NULL immediately after (reproducing
+   the bug) then correctly backfilled and genuinely full-text-searchable, backfilling twice is a
+   no-op, the book's id/copies/Reading List reference all survive unchanged, and editing the
+   book afterward both updates conventional search and makes a stored embedding's source hash
+   detectably stale.
+2. **Real server-side pagination for filter-only browsing.** Two new `SearchRepository` methods,
+   `findVisibleBookIdsPage` (`ORDER BY sort_title LIMIT (limit + 1)`, no `OFFSET` — an increasing
+   bounded limit, matching the with-query path's own model) and `countVisibleBooks` (a real exact
+   `COUNT(*)`), replace the previous "fetch every match, sort in memory, then slice" queryless
+   path. Proven at a 300-synthetic-row scale (`tests/integration/db/boundedPagination.test.ts`)
+   with a `vi.spyOn` assertion that a 5-result page (and a 15-result "Show More" page) each
+   project only that many books, never all 300. `SearchResultPage.totalQualifying`'s doc comment
+   now explicitly distinguishes this exact count from the free-text path's bounded-candidate-pool
+   count, per the brief's own requirement not to call a capped number a complete catalog count
+   without qualification.
+3. **Complete database-backed autocomplete.** `SearchRepository.autocomplete()` now queries tags/
+   topics (scoped to visible books via `book_tags`) and languages (matched by display name from
+   the centralized ISO 639-1 registry, against the small, visibility-scoped, primary-OR-
+   additional set of codes actually in use) — `AutocompleteRow`'s type always declared these,
+   nothing ever produced them until now. Repository-level tests prove a pending-only tag/language
+   never surfaces and an additional-language-only value still does; action-level tests prove the
+   ordering logic handles them; a UI-level test proves the "Topic"/"Language" labels actually
+   render.
+4. **Expanded the search evaluation suite from 13 to 41 cases**, reported per-category
+   (known_item/structured/safety/exploratory) with a new top-5 metric alongside recall/top-1/
+   prohibited-violations. Added: ISBN-10/13 cases (two real ISBNs added to two real fixture
+   books, since none existed in the seed at all before), a diacritics case, ranked-filter-
+   combination cases, incomplete-metadata-never-satisfies-a-filter cases, a hard-filter-vs-
+   thematic-relevance dominance case, and two explicitly labeled development-only fixtures
+   (inserted/removed by the evaluation harness itself) for two exploratory themes the real
+   catalog has no credible match for. **41/41 cases pass.**
+5. **Normalized-matching audit**: found and fixed a real mismatch — the exact-title candidate
+   query compared a bare `trimmed.toLowerCase()` against a canonically-normalized (article-
+   stripped, diacritic-stripped) stored value, so a query retyped with its own leading article
+   never exact-matched. Fixed by exporting the one `normalizeTitle()` function and using it on
+   both sides. **Deterministic-intent audit**: every documented phrasing (age ranges, fiction/
+   nonfiction, format/category names, illustration styles) was verified to already work
+   correctly; added the test coverage that was missing (`tests/unit/search/intent.test.ts`, new
+   `rank.test.ts` cases) and an explicit hard-constraint/strong-structured-fit/soft-preference
+   classification in `docs/SEARCH.md` §2.
+6. **Explicit asymmetric retrieval input contract for the Gemini adapter.** `embedQuery`/
+   `embedDocuments` previously sent identical, unlabeled text. Implemented `gemini-embedding-2`'s
+   documented text-prefix convention (`"task: search result | query: …"` for queries,
+   `"title: none | text: …"` for documents) — sourced from Google's current documentation, **not
+   independently verified against a live API call** (no `GEMINI_API_KEY` in this environment).
+   `EMBEDDING_COMPOSITION_VERSION` bumped 1 → 2 so any hypothetical existing embedding is
+   detectably stale. Proven only that the contract is applied (`tests/unit/embeddings/
+   geminiProvider.test.ts`, mocked `fetch`) — never claimed as a semantic-quality improvement.
+7. Test counts: 231 unit (was 204), 68 integration (was 50), 41 evaluation cases (was 13), 103
+   E2E (unchanged, all still passing). Full quality gate (typecheck, lint, `db:check`, unit,
+   integration, evaluation, build, E2E both projects) re-run clean.
+
 ## In-progress / not yet done for Phase 5
 
 - Final git commit and push for this work.
@@ -392,11 +463,16 @@ seed/test source material only, converted into seed data by `src/db/seed.ts`; no
 code path imports it directly anymore.
 `LocalStorageReadingListRepository`'s replacement, `DrizzleReadingListRepository`, is wired in
 at `ReadingListsProvider`'s single construction point, exactly as Phase 3 designed the seam.
-**Phase 5 adds one new migration** (`drizzle/0001_mighty_war_machine.sql`) — enables the
-`vector` and `pg_trgm` Postgres extensions, converts `read_duration_band` to a generated
-column, and adds `search_text`/`search_vector` (generated) and the `embedding*` columns. The
-approved Phase 4 migration (`0000_...`) is untouched. See `docs/DATABASE_SETUP.md` for the full
-command reference, including pgvector-capable local setup.
+**Phase 5 adds two migrations**: `drizzle/0001_mighty_war_machine.sql` (enables the `vector` and
+`pg_trgm` Postgres extensions, converts `read_duration_band` to a generated column, adds
+`search_text`/`search_vector` (generated) and the `embedding*` columns) and
+`drizzle/0002_flimsy_goliath.sql` (correction pass: corrects the trigram index to target
+`books.title`/`contributors.name`, the columns actually queried, instead of the unused
+`search_text` index). The approved Phase 4 migration (`0000_...`) is untouched by either. The
+correction pass adds no third migration file — an existing-database upgrade's `search_text`
+backfill is instead handled by a script folded into `db:migrate` itself, a deliberate choice
+explained in `docs/DECISIONS.md`. See `docs/DATABASE_SETUP.md` for the full command reference,
+including pgvector-capable local setup.
 
 ## External services
 
@@ -409,11 +485,13 @@ without it. No Supabase, Drive/Sheets, or other AI service is connected.
 
 ## Git status
 
-Repository is linked to `github.com/Shirin-Maleki/ssjc-library` (`origin`, `main`). Phase 5's
-work is not yet committed/pushed as of this writing — see the phase report for the exact commit
-SHA once it is.
+Repository is linked to `github.com/Shirin-Maleki/ssjc-library` (`origin`, `main`). The initial
+Phase 5 work was reviewed at commit `d5648e3`. This correction pass's work is not yet committed/
+pushed as of this writing — see the correction report for the exact commit SHA once it is.
 
 ## Next recommended task
 
-Commit and push this work, then await review of the Phase 5 report. Phase 6 (Google Drive
-connection) must not begin until Phase 5 is explicitly approved.
+Commit and push this correction pass, then await review. Phase 6 (Google Drive connection) must
+not begin until Phase 5 — correction pass included — is explicitly approved. If the review finds
+Phase 5 otherwise complete, the only remaining open item is real semantic-quality validation,
+which requires a real `GEMINI_API_KEY` this environment does not have.

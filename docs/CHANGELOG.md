@@ -4,6 +4,47 @@ A simple, phase-level record of what actually shipped — not a verbose release 
 Entries are dated by when the work was completed; see `docs/IMPLEMENTATION_STATUS.md` for the
 current state and `docs/DECISIONS.md` for the reasoning behind any of these.
 
+## Phase 5 correction pass — 2026-09-17 (in progress)
+
+A bounded correction pass over four material Phase 5 acceptance gaps a reviewer found (real
+Postgres integration tests pass, typecheck/lint/unit all pass, but real gaps remained), plus two
+adjacent items the same review exposed. No Phase 6 work, no Find UI redesign:
+
+- **Safe upgrade of an existing Phase 4 database.** Migration `0001` left pre-existing books'
+  `search_text` NULL — silently disabling full-text discovery until a reseed. Fixed by folding
+  an automatic, idempotent backfill into `npm run db:migrate` itself (`rebuildSearchText()`,
+  reusing the same `buildSearchIndexText()` composition `seed.ts` already uses), plus a
+  standalone `npm run search:rebuild-text` command for the ongoing-maintenance case, distinct
+  from embedding generation. Proven end to end by `tests/integration/db/migrationUpgrade.test.ts`
+  — a real Phase-4-shaped database with real relational data, upgraded without reseeding.
+- **Real server-side pagination for filter-only browsing.** The queryless-browse path selected
+  every matching book, sorted them all in memory, then sliced — unbounded on every request and
+  every "Show More" click. Fixed with `findVisibleBookIdsPage`/`countVisibleBooks`, real SQL
+  ordering/limiting and an exact `COUNT(*)`. Proven at a 300-row synthetic scale with a spy
+  assertion that only the requested page size is ever projected, never the full match set.
+- **Complete database-backed autocomplete.** `AutocompleteRow` always declared "topic" and
+  "language" as suggestion types; the query never produced them. Added both, visibility-scoped
+  and additional-language-aware, with repository/action/UI-level test coverage.
+- **Expanded the search evaluation suite** from 13 to 41 cases across known-item/structured/
+  safety/exploratory, reported per-category with a new top-5 metric — including ISBN cases (two
+  real ISBNs added to two real fixture books), a diacritics case, and two explicitly labeled
+  development-only fixtures for themes the real catalog has no credible match for.
+- **A normalization audit** found and fixed a real mismatch: the exact-title query compared a
+  bare lowercase string against a canonically-normalized stored value, so a query with its own
+  leading article never matched. A deterministic-intent audit confirmed every documented
+  phrasing (age ranges, fiction/nonfiction, format/category names, illustration styles) already
+  worked correctly and added the missing test coverage, plus an explicit hard/strong/soft
+  classification for every structured signal.
+- **An explicit asymmetric retrieval input contract** for the Gemini embedding adapter — document
+  and query embedding calls previously sent identical, unlabeled text. Implemented per Google's
+  documented `gemini-embedding-2` contract (not independently verified against a live call, since
+  no `GEMINI_API_KEY` exists in this environment); the embedding composition version was bumped
+  so any hypothetical existing embedding is detectably stale.
+- Test counts: 231 unit (was 204), 68 integration (was 50), 41 evaluation cases (was 13), 103 E2E
+  (unchanged, all still passing).
+- **Real semantic-quality validation remains unvalidated** — still no `GEMINI_API_KEY` in this
+  environment. Phase 5 is not marked complete for this reason alone.
+
 ## Phase 5 — real search architecture — 2026-09-16 (in progress)
 
 Replaces the Find page's "load the whole catalog into Node, filter in memory" path with a

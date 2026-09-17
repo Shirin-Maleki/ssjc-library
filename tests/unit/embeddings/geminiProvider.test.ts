@@ -1,0 +1,71 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GeminiEmbeddingProvider } from "@/lib/embeddings/geminiProvider";
+import { EMBEDDING_DIMENSIONS } from "@/db/schema/books";
+
+function fakeEmbedContentResponse() {
+  return { embedding: { values: Array.from({ length: EMBEDDING_DIMENSIONS }, () => 0.01) } };
+}
+function fakeBatchResponse(count: number) {
+  return { embeddings: Array.from({ length: count }, () => ({ values: Array.from({ length: EMBEDDING_DIMENSIONS }, () => 0.01) })) };
+}
+
+/**
+ * Phase 5 correction pass — proves the asymmetric retrieval input contract
+ * actually reaches the network request, not just that it exists as a helper
+ * function somewhere. No real network call is made (fetch is mocked); this cannot
+ * prove real semantic-quality improvement — only that the documented
+ * document/query formatting distinction is genuinely applied. See
+ * `geminiProvider.ts`'s own comment for where this contract was sourced from and
+ * its explicit "not independently verified against a live call" caveat.
+ */
+describe("GeminiEmbeddingProvider — asymmetric retrieval input contract", () => {
+  const originalFetch = global.fetch;
+
+  beforeEach(() => {
+    global.fetch = vi.fn();
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("embedQuery wraps the input as a retrieval query, not the raw text", async () => {
+    const fetchMock = vi.mocked(global.fetch);
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(fakeEmbedContentResponse()), { status: 200 }));
+
+    const provider = new GeminiEmbeddingProvider("fake-key");
+    await provider.embedQuery("caterpillar");
+
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse(init!.body as string);
+    expect(body.content.parts[0].text).toBe("task: search result | query: caterpillar");
+  });
+
+  it("embedDocuments wraps each input as a retrieval document, not the raw text", async () => {
+    const fetchMock = vi.mocked(global.fetch);
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(fakeBatchResponse(2)), { status: 200 }));
+
+    const provider = new GeminiEmbeddingProvider("fake-key");
+    await provider.embedDocuments(["Title: The Very Hungry Caterpillar", "Title: The Gruffalo"]);
+
+    const [, init] = fetchMock.mock.calls[0];
+    const body = JSON.parse(init!.body as string);
+    expect(body.requests[0].content.parts[0].text).toBe("title: none | text: Title: The Very Hungry Caterpillar");
+    expect(body.requests[1].content.parts[0].text).toBe("title: none | text: Title: The Gruffalo");
+  });
+
+  it("a document and a query built from the identical underlying text are sent as genuinely different inputs", async () => {
+    const fetchMock = vi.mocked(global.fetch);
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(fakeEmbedContentResponse()), { status: 200 }));
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(fakeBatchResponse(1)), { status: 200 }));
+
+    const provider = new GeminiEmbeddingProvider("fake-key");
+    const sharedText = "dinosaurs";
+    await provider.embedQuery(sharedText);
+    await provider.embedDocuments([sharedText]);
+
+    const queryBody = JSON.parse(fetchMock.mock.calls[0][1]!.body as string);
+    const documentBody = JSON.parse(fetchMock.mock.calls[1][1]!.body as string);
+    expect(queryBody.content.parts[0].text).not.toBe(documentBody.requests[0].content.parts[0].text);
+  });
+});

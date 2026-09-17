@@ -8,6 +8,39 @@ import { EMBEDDING_DIMENSIONS } from "@/db/schema/books";
 
 const MODEL_ID = "gemini-embedding-2";
 const API_BASE = "https://generativelanguage.googleapis.com/v1beta";
+
+/**
+ * Asymmetric retrieval input contract (Phase 5 correction pass) — a document
+ * embedded for indexing and a query embedded to search against it are not
+ * interchangeable inputs: Google's own guidance for retrieval is to format each
+ * side differently so the model produces embeddings actually optimized for its
+ * role, rather than sending the same unlabeled text through both paths (which is
+ * what this adapter did before this pass — `embedQuery` and `embedDocuments` both
+ * called the same unlabeled `embedOne`/batch logic).
+ *
+ * `gemini-embedding-001` (the API's previous generation) exposes this as a
+ * discrete `task_type` request field (`RETRIEVAL_DOCUMENT` / `RETRIEVAL_QUERY`).
+ * `gemini-embedding-2` — the model this adapter targets — does not accept that
+ * field at all; its documented mechanism is a plain-text instruction prefix
+ * embedded directly in the content sent to the model:
+ *   - a document being indexed: `"title: {title} | text: {content}"` (Google's own
+ *     guidance: use `"title: none"` when no separate title exists — which is the
+ *     case here, since `buildEmbeddingDocument()`'s output already opens with its
+ *     own "Title: …" line as part of the composed text itself).
+ *   - a search query: `"task: search result | query: {content}"`.
+ * Sourced from ai.google.dev/gemini-api/docs/embeddings and Google's own
+ * "Gemini Embedding 2" model announcement (September 2026) — **not independently
+ * verified against a live call**, since no `GEMINI_API_KEY` exists in this
+ * environment; re-confirm against Google's current documentation before relying on
+ * this in a real deployment, and never claim a semantic-quality improvement from
+ * this change without real-provider testing (docs/SEARCH.md §5).
+ */
+function toDocumentInput(text: string): string {
+  return `title: none | text: ${text}`;
+}
+function toQueryInput(text: string): string {
+  return `task: search result | query: ${text}`;
+}
 /** Short and documented (docs/SEARCH.md §5) — a teacher's search must never hang
  * waiting on an external network call; a slow/unresponsive provider degrades to
  * conventional retrieval exactly like a missing key does. */
@@ -84,7 +117,7 @@ export class GeminiEmbeddingProvider implements EmbeddingProvider {
   }
 
   async embedQuery(text: string): Promise<number[]> {
-    return this.embedOne(text);
+    return this.embedOne(toQueryInput(text));
   }
 
   async embedDocuments(texts: string[]): Promise<number[][]> {
@@ -98,7 +131,7 @@ export class GeminiEmbeddingProvider implements EmbeddingProvider {
         body: JSON.stringify({
           requests: batch.map((text) => ({
             model: `models/${MODEL_ID}`,
-            content: { parts: [{ text }] },
+            content: { parts: [{ text: toDocumentInput(text) }] },
             outputDimensionality: EMBEDDING_DIMENSIONS,
           })),
         }),

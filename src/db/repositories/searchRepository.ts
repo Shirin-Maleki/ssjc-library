@@ -4,13 +4,17 @@ import {
   bookContributors,
   bookLanguages,
   books,
+  bookTags,
   contributors,
   physicalCategories,
   publishers,
+  tags,
 } from "../schema";
 import { TEACHER_VISIBLE_REVIEW_STATUS } from "@/lib/catalog/visibility";
 import { ageYearsToRepresentativeMonths } from "@/lib/catalog/age";
 import { parseSearchIntent } from "@/lib/search/intent";
+import { normalizeTitle } from "@/lib/search/normalize";
+import { getLanguageName, ISO_639_1_LANGUAGE_NAMES, type LanguageCode } from "@/lib/catalog/languages";
 import type { Filters } from "@/lib/search/filters";
 
 /** How many SQL-ranked candidates each retrieval strategy contributes at most —
@@ -263,8 +267,10 @@ export class DrizzleSearchRepository {
     };
 
     if (trimmed.length === 0) {
-      // No free text — the whole (filtered, visible) catalog is the candidate set;
-      // SearchService's queryless path sorts alphabetically and paginates it.
+      // Queryless (filter-only) browsing never goes through this candidate-signal
+      // path at all — see `findVisibleBookIdsPage`/`countVisibleBooks` below and
+      // `SearchService.search()`, which calls those directly instead. Kept as a
+      // defensive fallback, never exercised by real callers.
       const rows = await this.db.select({ id: books.id }).from(books).where(where);
       for (const row of rows) merge(row.id, {});
       return signals;
@@ -302,7 +308,14 @@ export class DrizzleSearchRepository {
             and(
               where,
               or(
-                eq(books.normalizedTitle, trimmed.toLowerCase()),
+                // The exact same canonical normalizer used to write `normalized_title`
+                // at seed/backfill time (`normalizeTitle`, `lib/search/normalize.ts`) —
+                // not a second, subtly different implementation. Phase 5 correction
+                // pass: this previously compared against a bare `trimmed.toLowerCase()`,
+                // so a query still carrying its leading article ("The Very Hungry
+                // Caterpillar") failed to exact-match the stored, article-stripped
+                // `normalized_title` ("very hungry caterpillar").
+                eq(books.normalizedTitle, normalizeTitle(trimmed)),
                 sql`${books.title} ilike ${trimmed + "%"}`,
                 isIsbnLike ? eq(books.isbn13, digits) : sql`false`,
                 isIsbnLike ? eq(books.isbn10, digits) : sql`false`,
@@ -393,6 +406,47 @@ export class DrizzleSearchRepository {
     return signals;
   }
 
+  /**
+   * Queryless (filter-only) browsing — Phase 5 correction pass. Previously,
+   * `SearchService` called `findCandidates()` for an empty query (which selected
+   * every matching book id, unbounded), projected all of them into full `Book`
+   * objects, sorted the entire set in memory, and only then sliced to the requested
+   * `limit` — a filter-only search, and every "Show More" click on one, silently
+   * re-did that full retrieval/projection every time. This method does the
+   * ordering and limiting in SQL instead: `ORDER BY sort_title LIMIT (limit + 1)` —
+   * one extra row, never fetched into the final page, just enough to answer
+   * `hasMore` without a separate count-vs-limit comparison. No `OFFSET`: `limit`
+   * here is always "how many total to show so far" (5, then 15, then 25, …, via
+   * `RESULT_LIMIT_STEP`), matching exactly how the with-query path's
+   * `.slice(0, limit)` already behaves — an increasing bounded limit, not
+   * page-by-page offset pagination, is a deliberate, documented choice at this
+   * catalog's target scale (docs/SEARCH.md §7).
+   */
+  async findVisibleBookIdsPage(params: { filters: Filters; limit: number }): Promise<{ ids: string[]; hasMore: boolean }> {
+    const where = and(...buildHardFilterConditions(params.filters));
+    const rows = await this.db
+      .select({ id: books.id })
+      .from(books)
+      .where(where)
+      .orderBy(books.sortTitle)
+      .limit(params.limit + 1);
+    const hasMore = rows.length > params.limit;
+    return { ids: rows.slice(0, params.limit).map((r) => r.id), hasMore };
+  }
+
+  /** The exact total count of visible books matching the current hard filters —
+   * a real `COUNT(*)`, not a candidate-pool size. Only meaningful (and only ever
+   * called) for queryless/filter-only browsing: a free-text query's "how many
+   * qualify" figure is intentionally the size of its bounded, scored candidate
+   * pool instead (docs/SEARCH.md §7 — computing a literal catalog-wide count for a
+   * ranked free-text query would require scoring the whole catalog, exactly what
+   * this architecture exists to avoid). */
+  async countVisibleBooks(filters: Filters): Promise<number> {
+    const where = and(...buildHardFilterConditions(filters));
+    const [row] = await this.db.select({ count: sql<number>`count(*)::int` }).from(books).where(where);
+    return row?.count ?? 0;
+  }
+
   /** Facet options + counts over the full active/visible catalog, independent of
    * the current search's other active filters (docs/SEARCH.md §8 — "the simplest
    * behavior that's useful and predictable": the same choice Phase 2–4 already
@@ -480,6 +534,16 @@ export class DrizzleSearchRepository {
    * (docs/SEARCH.md §6) — never the full catalog shipped to the browser. Prefix
    * matches are asked for first and given priority by the caller; this method just
    * returns real distinct catalog values matching the query as a prefix or substring.
+   *
+   * Phase 5 correction pass: this previously queried only title/author/illustrator/
+   * publisher/category — `AutocompleteRow`'s own type always declared "topic" and
+   * "language" as real suggestion types, but nothing ever produced them. Added here:
+   * tag/topic values (from `tags`, scoped to visible books via `book_tags`) and
+   * language display names (from the centralized ISO 639-1 registry, scoped to
+   * whichever codes — primary via `books.language_code` OR additional via
+   * `book_languages` — actually appear on a visible book). A tag or language used
+   * only by a pending/archived book must never surface here; an additional-language-
+   * only value (never any visible book's primary language) must still surface.
    */
   async autocomplete(query: string, limit: number): Promise<AutocompleteRow[]> {
     const trimmed = query.trim();
@@ -487,39 +551,69 @@ export class DrizzleSearchRepository {
     const pattern = `%${trimmed}%`;
     const visible = eq(books.reviewStatus, TEACHER_VISIBLE_REVIEW_STATUS);
 
-    const [titleRows, authorRows, illustratorRows, publisherRows, categoryRows] = await Promise.all([
-      this.db
-        .select({ value: books.title })
-        .from(books)
-        .where(and(visible, sql`${books.title} ilike ${pattern}`))
-        .limit(limit),
-      this.db
-        .select({ value: contributors.name })
-        .from(bookContributors)
-        .innerJoin(contributors, eq(contributors.id, bookContributors.contributorId))
-        .innerJoin(books, eq(books.id, bookContributors.bookId))
-        .where(and(visible, eq(bookContributors.role, "author"), sql`${contributors.name} ilike ${pattern}`))
-        .limit(limit),
-      this.db
-        .select({ value: contributors.name })
-        .from(bookContributors)
-        .innerJoin(contributors, eq(contributors.id, bookContributors.contributorId))
-        .innerJoin(books, eq(books.id, bookContributors.bookId))
-        .where(and(visible, eq(bookContributors.role, "illustrator"), sql`${contributors.name} ilike ${pattern}`))
-        .limit(limit),
-      this.db
-        .select({ value: publishers.name })
-        .from(publishers)
-        .innerJoin(books, eq(books.publisherId, publishers.id))
-        .where(and(visible, sql`${publishers.name} ilike ${pattern}`))
-        .limit(limit),
-      this.db
-        .select({ value: physicalCategories.label })
-        .from(physicalCategories)
-        .innerJoin(books, eq(books.physicalCategoryId, physicalCategories.id))
-        .where(and(visible, sql`${physicalCategories.label} ilike ${pattern}`))
-        .limit(limit),
-    ]);
+    const [titleRows, authorRows, illustratorRows, publisherRows, categoryRows, tagRows, visibleLanguageCodeRows] =
+      await Promise.all([
+        this.db
+          .select({ value: books.title })
+          .from(books)
+          .where(and(visible, sql`${books.title} ilike ${pattern}`))
+          .limit(limit),
+        this.db
+          .select({ value: contributors.name })
+          .from(bookContributors)
+          .innerJoin(contributors, eq(contributors.id, bookContributors.contributorId))
+          .innerJoin(books, eq(books.id, bookContributors.bookId))
+          .where(and(visible, eq(bookContributors.role, "author"), sql`${contributors.name} ilike ${pattern}`))
+          .limit(limit),
+        this.db
+          .select({ value: contributors.name })
+          .from(bookContributors)
+          .innerJoin(contributors, eq(contributors.id, bookContributors.contributorId))
+          .innerJoin(books, eq(books.id, bookContributors.bookId))
+          .where(and(visible, eq(bookContributors.role, "illustrator"), sql`${contributors.name} ilike ${pattern}`))
+          .limit(limit),
+        this.db
+          .select({ value: publishers.name })
+          .from(publishers)
+          .innerJoin(books, eq(books.publisherId, publishers.id))
+          .where(and(visible, sql`${publishers.name} ilike ${pattern}`))
+          .limit(limit),
+        this.db
+          .select({ value: physicalCategories.label })
+          .from(physicalCategories)
+          .innerJoin(books, eq(books.physicalCategoryId, physicalCategories.id))
+          .where(and(visible, sql`${physicalCategories.label} ilike ${pattern}`))
+          .limit(limit),
+        this.db
+          .selectDistinct({ value: tags.name })
+          .from(tags)
+          .innerJoin(bookTags, eq(bookTags.tagId, tags.id))
+          .innerJoin(books, eq(books.id, bookTags.bookId))
+          .where(and(visible, sql`${tags.name} ilike ${pattern}`))
+          .limit(limit),
+        // Language display names live only in the TS registry, not the database, so
+        // matching by name has to happen in application code — but the *set* of
+        // codes to check is still a small, SQL-bounded, visibility-scoped query
+        // (distinct primary language codes UNION distinct additional-language codes
+        // actually used by a visible book), never a full catalog scan.
+        this.db
+          .select({ code: books.languageCode })
+          .from(books)
+          .where(visible)
+          .groupBy(books.languageCode)
+          .union(
+            this.db
+              .selectDistinct({ code: bookLanguages.languageCode })
+              .from(bookLanguages)
+              .innerJoin(books, eq(books.id, bookLanguages.bookId))
+              .where(visible)
+          ),
+      ]);
+
+    const languageRows = Array.from(new Set(visibleLanguageCodeRows.map((r) => r.code)))
+      .filter((code): code is LanguageCode => code in ISO_639_1_LANGUAGE_NAMES)
+      .map((code) => ({ value: getLanguageName(code) }))
+      .filter((row) => row.value.toLowerCase().includes(trimmed.toLowerCase()));
 
     const seen = new Set<string>();
     const results: AutocompleteRow[] = [];
@@ -536,6 +630,8 @@ export class DrizzleSearchRepository {
     add(illustratorRows, "illustrator");
     add(publisherRows, "publisher");
     add(categoryRows, "category");
+    add(tagRows, "topic");
+    add(languageRows, "language");
     return results;
   }
 }

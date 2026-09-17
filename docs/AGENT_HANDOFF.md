@@ -71,9 +71,13 @@ finish it in one pass.
 Phase 0 (architecture), Phase 1 (foundation, design system, staff/admin auth), Phase 2 (mock
 catalog + Find a Book, plus a visual/mobile revision), Phase 3 (voice search, Reading Lists,
 Library Guide), and Phase 4 (the real database, plus a focused correction pass closing a handful
-of acceptance gaps) are all complete. **Phase 5 (real search architecture) is in progress, not
-yet complete** — see `docs/IMPLEMENTATION_STATUS.md` for exactly what remains (EXPLAIN ANALYZE
-at a realistic scale, manual visual QA, a standalone security review pass, final commit/push).
+of acceptance gaps) are all complete. **Phase 5 (real search architecture) has had its own
+correction pass (2026-09-17) closing four material acceptance gaps a review found — migration
+safety for an already-populated database, unbounded queryless-browse pagination, incomplete
+autocomplete, and a thin evaluation suite — plus two adjacent fixes (title-normalization
+mismatch, an unlabeled Gemini retrieval contract). Phase 5 overall is still not marked
+complete/approved** — see `docs/IMPLEMENTATION_STATUS.md`; the one genuinely open item is real
+semantic-quality validation, which needs a real `GEMINI_API_KEY` this environment doesn't have.
 Find a Book now runs a real, bounded, database-backed hybrid search pipeline (structured SQL
 filters, full-text + trigram + optional semantic retrieval, `docs/SEARCH.md`) instead of loading
 the whole catalog into Node and filtering in memory; Reading Lists are genuinely shared across
@@ -210,6 +214,49 @@ if the test harness touches the same platform behavior the app does.
   single most significant Phase 5 regression (the structured-intent gap above), which no amount
   of unit-testing `combineScores()`/`buildIntentConditions()` in isolation would have surfaced,
   because the bug was specifically about candidates never reaching the scoring function at all.
+
+### Additional lessons from the Phase 5 correction pass
+
+- **"Migrate-from-zero-plus-seed passes" is not the same claim as "migration is safe" — test the
+  upgrade-an-existing-database path explicitly, with real data in it.** Every test up to this
+  correction pass exercised a freshly-migrated, freshly-seeded database, which can never expose a
+  nullable-column-added-but-never-backfilled bug, because a fresh seed always populates every
+  column itself. To actually test the upgrade path: bring a fresh database to the OLD schema
+  version by running that migration's raw `.sql` directly, insert a tracking row into
+  `drizzle.__drizzle_migrations` with that migration's own `folderMillis` (from `drizzle/meta/
+  _journal.json`'s "when" field) and any hash value — drizzle's migrator only ever compares
+  `created_at` against each migration's timestamp to decide what's pending, it never re-validates
+  a hash for something already marked applied — then insert real relational data through raw SQL
+  (not through a repository/seed function that might already write the new column), then run the
+  REAL `migrate()` against the real migrations folder. See
+  `tests/integration/db/migrationUpgrade.test.ts`.
+- **When a schema migration adds a column whose value depends on relational data plus complex
+  composition logic, don't reimplement that logic a second time in raw SQL for a backfill
+  migration** — reuse the existing TypeScript function against the existing repository
+  projection instead, triggered by a script (optionally auto-run as part of the migration
+  command), even though this technically isn't "a new `.sql` migration file." Two
+  implementations of the same composition logic (one in SQL, one in TypeScript) will drift the
+  moment either one changes and nobody remembers to update the other — this is the same lesson
+  as the title-normalization bug below, just for a bigger piece of logic.
+- **A domain concept normalized once (lowercased, article-stripped, diacritic-stripped) for
+  storage must be normalized the exact same way, by calling the exact same function, on the
+  query side too** — a bare `.toLowerCase()` on the query side "looks like" it matches a
+  `normalizeTitle()`-processed stored value closely enough that this class of bug can sit unnoticed
+  for an entire phase (a query without the book's own article change is a common enough phrasing
+  that it should have been an obvious test case, and wasn't, until an explicit audit went looking
+  for it).
+- **A TypeScript union type declaring more variants than the code that's supposed to produce them
+  is a real, easy-to-miss gap, not just future-proofing** — `AutocompleteRow["type"]` declared
+  `"topic" | "language"` since the type was written, and `tsc` has no way to warn "this union
+  member is never actually constructed anywhere in the codebase." If a type declares a variant,
+  grep for where it's actually produced before assuming it's the type just being extensible.
+- **For a retrieval-embedding API where asymmetric document/query formatting matters, verify the
+  CURRENT model's actual mechanism before assuming a well-known older convention still applies**
+  — `gemini-embedding-001`'s `task_type` enum field is a different, no-longer-applicable
+  mechanism from `gemini-embedding-2`'s plain-text instruction-prefix convention; the API surface
+  changed between model generations even though the underlying goal (asymmetric retrieval) didn't.
+  When no real API credential exists to test against, say so explicitly rather than asserting the
+  contract is correct.
 
 ## Practical lessons from Phase 3 (worth knowing before touching voice or Reading Lists code)
 

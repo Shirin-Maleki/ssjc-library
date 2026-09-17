@@ -126,14 +126,15 @@ data.
 | Command | What it does |
 |---|---|
 | `npm run db:generate` | Reads `src/db/schema/index.ts` and writes a new migration file under `drizzle/` reflecting whatever changed. Review the generated SQL before committing it — this is the only step that touches the schema definition. |
-| `npm run db:migrate` | Applies every not-yet-applied migration in `drizzle/` to `DATABASE_MIGRATION_URL` (or `DATABASE_URL`). Safe to run repeatedly — already-applied migrations are tracked and skipped. |
+| `npm run db:migrate` | Applies every not-yet-applied migration in `drizzle/` to `DATABASE_MIGRATION_URL` (or `DATABASE_URL`), then automatically backfills `books.search_text` for any existing book a schema change left with a NULL value (Phase 5 correction pass — safe and necessary when upgrading an already-populated database, a fast no-op on a from-zero one). Safe to run repeatedly — already-applied migrations and already-backfilled rows are both tracked and skipped. |
 | `npm run db:seed` | Truncates every seeded table and re-inserts the 48-book fixture catalog with its stable UUIDs. Does **not** touch `reading_lists`/`reading_list_items` data you created by hand through the app... actually it does — see "What gets wiped" below. |
 | `npm run db:reset` | Runs migrate then seed, in order, against `DATABASE_URL`. The normal way to get a clean development database. |
 | `npm run db:check` | Runs `drizzle-kit check` — fails if the committed migrations and the current schema have drifted apart (e.g., someone edited a schema file without regenerating a migration). Good to run before opening a PR. |
 | `npm run test:integration` | Runs the real-database repository/migration tests (`tests/integration/`) against `TEST_DATABASE_URL`, migrating and seeding it once per run via a Vitest global setup. |
 | `npx playwright test` | Runs the E2E suite, migrating and seeding `E2E_DATABASE_URL` once per run via `tests/e2e/globalSetup.ts`, then building and starting the app against it. |
 | `npm run embeddings:generate` | Backfills `books.embedding` for every book needing one (Phase 5). `--mode=missing` (default), `--mode=stale` (composition/data changed since the last embedding), or `--mode=all`; `--dry-run` reports what would run without calling the provider or writing anything. Exits cleanly, doing nothing, when `GEMINI_API_KEY` is unset. Idempotent — a second `missing` run after a successful one processes zero books. Never run automatically during a request or migration. |
-| `npm run evaluate:search` | Runs the committed search evaluation dataset (`tests/evaluation/`) against `TEST_DATABASE_URL` and reports recall/top-1/prohibited-result violations — see `docs/SEARCH.md` §11. |
+| `npm run search:rebuild-text` | Rebuilds `books.search_text` (conventional full-text search) after a metadata edit or import — `--mode=missing` (default) or `--mode=all`. **Distinct from `embeddings:generate`**: never calls an embedding provider, needs no `GEMINI_API_KEY`, only ever touches `search_text`. The migration-upgrade case (an already-populated database) is handled automatically by `db:migrate` itself, not this command — this one is for the ongoing-maintenance case. See `docs/SEARCH.md` §4. |
+| `npm run evaluate:search` | Runs the committed search evaluation dataset (`tests/evaluation/`, 41 cases across known-item/structured/safety/exploratory) against `TEST_DATABASE_URL` and reports recall/top-1/top-5/prohibited-result violations, broken down by category — see `docs/SEARCH.md` §11. |
 
 ### What gets wiped by seeding
 

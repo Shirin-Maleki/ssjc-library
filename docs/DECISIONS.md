@@ -1562,3 +1562,98 @@ for the other parallel queries in that same `Promise.all`, since none of them de
 **Relevant files:** `src/db/repositories/searchRepository.ts`; `src/db/schema/books.ts`
 (`books_title_trgm_idx`); `src/db/schema/contributors.ts` (`contributors_name_trgm_idx`);
 `drizzle/0002_flimsy_goliath.sql`; `docs/SEARCH.md` §3.
+
+---
+
+## Migration-upgrade search-text backfill: a script folded into `db:migrate`, not a third `.sql` migration
+
+**Date:** 2026-09-17 · **Status:** Locked.
+
+**Problem:** Migration `0001` added `books.search_text` as a nullable column, correct for a
+from-zero migrate-then-seed database but silently wrong for an already-populated Phase 4
+database — its existing rows would keep a NULL `search_text` (and an empty generated
+`search_vector`) until something happened to reseed them, disabling full-text discovery with no
+visible error. A reviewer explicitly flagged that migration safety had only ever been
+demonstrated migrate-from-zero-plus-seed, never against real pre-existing data.
+
+**Chosen approach:** `rebuildSearchText()` (`lib/search/searchTextMaintenance.ts`) reuses
+`buildSearchIndexText()` — the same function `seed.ts` already calls — against
+`DrizzleBookRepository`'s existing relational projection (contributors by role/order, publisher,
+category label, tags, primary+additional languages), so there is exactly one implementation of
+"how a book's relational data becomes its search text." `src/db/migrate.ts` calls it
+automatically right after applying the schema migrations, scoped to `mode: "missing"` (only rows
+a schema change actually left behind) — folded into the one command that's already the
+documented upgrade step, not a second manual step an operator could forget or skip. A separate
+`npm run search:rebuild-text` command (`mode: "missing"` or `"all"`) exists for the distinct
+ongoing-maintenance case: a book's metadata changed through a path that didn't already recompute
+`search_text`.
+
+**Why not a third `.sql` migration file instead, as literally requested?** A raw-SQL migration
+would need to reimplement `buildSearchIndexText()`'s composition rules (field order, tag
+sorting, contributor ordering, category-label lookup) a second time directly in SQL — exactly
+the same "two subtly different implementations of the same logic" anti-pattern this same
+correction pass fixed for title normalization (see the "Full-text retrieval" and normalization
+entries elsewhere in this document), except worse, since keeping a hand-written SQL
+reimplementation in sync with a TypeScript function every time either one changes is a real,
+ongoing drift risk. A script triggered by the migration command is still genuinely forward-only,
+deterministic, and mandatory — it is simply implemented as a data operation rather than DDL. This
+is a deliberate deviation from the letter of "add a new migration file," made explicitly and
+explained here rather than silently — the underlying requirement (a populated Phase 4 database
+upgrades safely, with no manual step to forget) is fully met and proven by
+`tests/integration/db/migrationUpgrade.test.ts`.
+
+**Consequences:** `npm run db:migrate` now does slightly more than run `drizzle-kit`'s migrator —
+documented explicitly in `docs/DATABASE_SETUP.md` and this file so a future maintainer isn't
+surprised by the extra console output ("Backfilled search_text for N existing book(s)...").
+
+**Relevant files:** `src/lib/search/searchTextMaintenance.ts`; `src/db/migrate.ts`;
+`scripts/search/rebuildSearchText.ts`; `tests/integration/db/migrationUpgrade.test.ts`;
+`docs/SEARCH.md` §4.
+
+---
+
+## Queryless (filter-only) browsing needed its own bounded SQL page, not "sort everything in memory"
+
+**Date:** 2026-09-17 · **Status:** Locked.
+
+**Problem:** `SearchService.search()`'s empty-query branch called `findCandidates()` (which
+selected every visible book id matching the active filters, with no `LIMIT` at all), projected
+*all* of them into full `Book` objects via `getBooksByIds()`, sorted the entire set in memory by
+`sort_title`, and only then sliced to the requested `limit`. A filter-only browse — and every
+"Show More" click on one — silently re-did that full, unbounded retrieval and projection on
+every request, exactly the "load everything, then trim" anti-pattern Phase 5 was built to
+eliminate for the with-query path but had never actually fixed for the queryless one.
+
+**Chosen approach:** Two new, narrowly-scoped `SearchRepository` methods used only for this
+case: `findVisibleBookIdsPage({ filters, limit })` does the ordering and bounding in SQL
+(`ORDER BY sort_title LIMIT (limit + 1)`, the extra row only ever used to answer `hasMore`, never
+returned), and `countVisibleBooks(filters)` computes a real `COUNT(*)` for the exact total.
+`SearchService.browseByFiltersOnly()` calls both, then projects only the bounded page's ids.
+
+**Why `LIMIT (limit + 1)` with no `OFFSET`, instead of real page-by-page offset pagination?**
+`limit` in this system has always meant "how many total results to show so far" (5, then 15,
+then 25, via `RESULT_LIMIT_STEP` on "Show More"), matching exactly how the with-query path's
+`.slice(0, limit)` already behaves against its own bounded candidate pool. Introducing a
+genuinely different pagination model (offset-based pages) for just the queryless case would mean
+two different mental models for the same "Show More" button depending on whether a query is
+typed — worse for both the URL contract (`?n=`) and for reasoning about the code, for no real
+benefit at this catalog's target scale (an increasing bounded limit is explicitly acceptable per
+the brief).
+
+**Why is `totalQualifying` an exact `COUNT(*)` here but a bounded-pool size for a free-text
+query?** These are genuinely different situations, not an inconsistency: a queryless browse has
+no ranking to compute, so `COUNT(*)` is trivial and exact. A free-text query's final rank depends
+on the TypeScript-side hybrid score (`docs/SEARCH.md` §9), which SQL alone can't compute — a
+literal catalog-wide count for a scored query would require scoring the whole catalog against
+it, exactly what this architecture exists to avoid. Both behaviors are now documented explicitly
+on `SearchResultPage.totalQualifying`'s own doc comment so this is never mistaken for an
+oversight.
+
+**Consequences:** Proven at a real scale, not just inferred from the query's shape:
+`tests/integration/db/boundedPagination.test.ts` inserts 300 synthetic active books sharing one
+category and uses `vi.spyOn(bookRepository, "getBooksByIds")` to assert a 5-result page — and a
+15-result "Show More" page — each call `getBooksByIds` with exactly that many ids, never all 300.
+
+**Relevant files:** `src/db/repositories/searchRepository.ts` (`findVisibleBookIdsPage`,
+`countVisibleBooks`); `src/lib/search/searchService.ts` (`browseByFiltersOnly`);
+`tests/integration/db/boundedPagination.test.ts`; `docs/SEARCH.md` §7.

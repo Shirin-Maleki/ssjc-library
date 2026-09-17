@@ -53,6 +53,7 @@ npm run test:integration    # real-database repository tests (needs TEST_DATABAS
 npm run test:e2e             # end-to-end tests (Playwright, builds its own fixture server + database)
 npm run evaluate:search      # search relevance evaluation report (needs TEST_DATABASE_URL)
 npm run embeddings:generate  # backfill semantic embeddings — no-ops cleanly without GEMINI_API_KEY
+npm run search:rebuild-text  # rebuild conventional full-text search after a metadata edit/import
 ```
 
 No Google Drive/Sheets credentials are needed for anything above — that integration doesn't

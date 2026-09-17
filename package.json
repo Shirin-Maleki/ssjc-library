@@ -19,7 +19,8 @@
     "db:seed": "tsx src/db/seed.ts",
     "db:reset": "tsx src/db/reset.ts",
     "db:check": "drizzle-kit check",
-    "embeddings:generate": "tsx scripts/embeddings/generate.ts"
+    "embeddings:generate": "tsx scripts/embeddings/generate.ts",
+    "search:rebuild-text": "tsx scripts/search/rebuildSearchText.ts"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.23",

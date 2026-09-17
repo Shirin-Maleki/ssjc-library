@@ -54,6 +54,12 @@ against an actual Postgres instance, never a mocked Drizzle client.
 | `embeddings/fakeProvider.test.ts` (Phase 5) | Deterministic (same text → same vector), different text → different vector, correct dimensionality, L2-normalization, `embedDocuments` matching `embedQuery` per-text |
 | `embeddings/index.test.ts` (Phase 5) | `getConfiguredEmbeddingProvider()` returns `undefined` (never throws) with no `GEMINI_API_KEY`, returns a real `GeminiEmbeddingProvider` when one is set |
 | `search/hybridScore.test.ts` (Phase 5) | Each retrieval signal's contribution in isolation (exact/FTS/trgm/semantic), the full-text/semantic contribution caps relative to `exactTitle`, a vector distance at or beyond the meaningful ceiling contributing nothing, an exact deterministic match outranking a purely semantic match on an unrelated book, threshold filtering (never pads), deterministic alphabetical tie-break |
+| `search/intent.test.ts` (Phase 5 correction pass) | Direct audit of `parseSearchIntent` against every documented phrasing: an age-range midpoint ("2 to 5"), an explicit age, a duration range not colliding with the age-range regex, "real photos" vs. bare "realistic", "watercolor"/"collage" illustration styles, a catalog language name, an explicit minute count, and a query with no recognizable structured signal |
+| `search/rank.test.ts` (extended, Phase 5 correction pass) | Fiction/nonfiction, format-name, and category-name keyword matching — the soft/strong structured-fit signals `docs/SEARCH.md` §2's hard/strong/soft table documents — plus confirmation that an unrecorded format/fiction status never fabricates a match |
+| `search/normalize.test.ts` (extended, Phase 5 correction pass) | `normalizeTitle` — the one canonical title normalizer now shared by both the storage side (`seed.ts`) and the query side (`searchRepository.ts`'s exact-match condition) — strips a leading article, and a query retyped WITH its article normalizes to the same value as one without |
+| `search/autocompleteAction.test.ts` (Phase 5 correction pass) | `autocompleteAction`'s own ordering logic (prefix-first, then the documented type priority, then alphabetical) with `searchRepository.autocomplete` mocked — including topic and language rows passing through untouched |
+| `embeddings/geminiProvider.test.ts` (Phase 5 correction pass) | The asymmetric retrieval input contract actually reaches the network request: `embedQuery` wraps its input as `"task: search result \| query: …"`, `embedDocuments` wraps each input as `"title: none \| text: …"`, and the two differ for identical underlying text — `fetch` is mocked, so this proves the contract is applied, never real semantic quality |
+| `components/SearchInput.autocomplete.test.tsx` (Phase 5 correction pass) | A topic suggestion renders with the "Topic" type label and a language suggestion with the "Language" label — UI-level proof that `AutocompleteRow`'s always-declared types actually reach the screen |
 
 Environment note: tests run with `environment: "node"`, not `jsdom` — an early attempt to use
 `jsdom` caused `jose`'s WebCrypto key handling to see cross-realm `Uint8Array` instances and
@@ -73,20 +79,28 @@ result; every assertion is a real round-trip to a real running Postgres instance
 | `db/migrations.test.ts` | The committed migrations actually produce all 23 tables; a handful of specific columns/constraints/indexes exist as designed (the `books_isbn13_unique` partial index, the age check constraints, the `book_field_provenance` current-row partial unique index) |
 | `db/bookRepository.test.ts` | `DrizzleBookRepository` against real seeded data: correct book count, contributor ordering via `array_agg(... order by sort_order)`, multi-value `visual_media_type` arrays round-tripping correctly, `copyCount` matching a real `count(*)` on `book_copies`; (Phase 4 correction pass) the multilingual seed book's `additionalLanguageCodes` projected by the repository itself — not merely visible via a raw `book_languages` query — including "de" (outside the original six fixture languages), and a single-language book's `additionalLanguageCodes` staying `undefined` |
 | `db/readingListRepository.test.ts` | Full CRUD, idempotent `addBook` via the composite primary key, and the mandated **two-independent-connection acceptance test**: a list created and populated through one `DrizzleReadingListRepository` instance (its own separate Postgres connection) is immediately visible, with the same data, through a second, completely independent instance/connection — the actual proof that Reading Lists are genuinely shared, not just that one repository method returns the right object; (Phase 4 correction pass) `createWithBook` as one atomic transaction (the new list already contains the book; both rows persist; a nonexistent book fails the *entire* operation and leaves no orphan list), typed domain errors (`ReadingListNotFoundError`/`BookNotFoundError`/`InvalidIdError`) instead of raw foreign-key/UUID-syntax exceptions, and malformed ids treated as a safe no-result for `getById`/`delete` |
-| `db/searchRepository.test.ts` (Phase 5) | Catalog visibility (pending/archived books never appear in candidates, facet rows, or autocomplete, active/incomplete-metadata books still do); exact/near-exact matching (author full name, exact title); full-text OR-semantics (a multi-word descriptive query returns real results; a filler query returns none — the "read"-label regression); trigram floor (a real typo is a candidate, an unrelated query isn't); language hard-filtering via primary+additional; incomplete metadata never producing an invented format/realism/duration value; **structured intent producing real SQL candidates, not just a ranking bonus** (the age-phrase regression — see `docs/SEARCH.md` §2); vector storage/distance retrieval (a stored embedding is retrievable by cosine distance; a book with no embedding never receives a fabricated distance; omitting a query embedding never touches the vector column at all) |
+| `db/searchRepository.test.ts` (Phase 5, extended in the correction pass) | Catalog visibility (pending/archived books never appear in candidates, facet rows, or autocomplete, active/incomplete-metadata books still do); exact/near-exact matching (author full name, exact title); full-text OR-semantics (a multi-word descriptive query returns real results; a filler query returns none — the "read"-label regression); trigram floor (a real typo is a candidate, an unrelated query isn't); language hard-filtering via primary+additional; incomplete metadata never producing an invented format/realism/duration value; structured intent producing real SQL candidates, not just a ranking bonus; vector storage/distance retrieval; **topic/tag and language autocomplete** (a real tag/language autocompletes, one used only by a `pending_review` book never does, and one used only as an ADDITIONAL language on an active book still does) |
+| `db/migrationUpgrade.test.ts` (Phase 5 correction pass) | The exact scenario `docs/SEARCH.md` §4 describes: a fresh database is brought to precisely the Phase 4 (migration `0000`) schema state with real relational data inserted directly, the real Phase 5 migrations (`0001`/`0002`) are applied via drizzle's own `migrate()` — not a stripped-down copy of the migrations folder — confirming `search_text`/`search_vector` are NULL/empty immediately after (reproducing the bug), then correctly backfilled (title, contributor, publisher, category, tag, and additional-language content, each independently verified as full-text-searchable), backfilling twice is a no-op (idempotent), the book's id/copy count/Reading List reference all survive unchanged, and editing the book's metadata afterward both updates conventional search and makes a previously-stored embedding's source hash detectably stale |
+| `db/boundedPagination.test.ts` (Phase 5 correction pass) | 300 synthetic active books sharing one category (substantially more than any candidate-retrieval limit elsewhere in this codebase) — `findVisibleBookIdsPage` never returns more than `limit + 1` rows regardless of the real total, returns deterministic `sort_title` order, `countVisibleBooks` returns the exact real total (not a capped candidate-pool size), `hasMore` is `false` once `limit` reaches the true total, and (the actual proof, via `vi.spyOn(bookRepository, "getBooksByIds")`) a 5-result and a 15-result ("Show More") page each project only that many books, never all 300 |
 
-## Search evaluation (Phase 5) — `tests/evaluation/`
+## Search evaluation (Phase 5, expanded in the correction pass) — `tests/evaluation/`
 
 Run with `npm run evaluate:search`, against `TEST_DATABASE_URL` (same seeded database as the
-integration suite). A committed, human-readable dataset (`tests/evaluation/dataset.ts`) of
-known-item, structured, exploratory, and safety/correctness cases, run through the real
-`SearchService` and reported as recall / top-1 accuracy / prohibited-result violations — see
-`docs/SEARCH.md` §11. This is a *report* as much as a test: a genuine regression fails it loudly
-rather than being tuned away, and it is what caught the structured-intent regression above
-before it shipped. **13/13 recall, 2/2 top-1, 0 prohibited-result violations** as of this
-writing. The report also states honestly that no real embedding provider is configured in this
-environment, so every case ran through conventional retrieval only — no hybrid-vs-conventional
-comparison with a real semantic signal has been performed.
+integration suite). A committed, human-readable dataset (`tests/evaluation/dataset.ts`, **41
+cases** across known_item/structured/safety/exploratory — expanded from an initial 13) run
+through the real `SearchService` and reported as recall / top-1 / **top-5** / prohibited-result
+violations, broken down **per category**, not just one aggregate number — see `docs/SEARCH.md`
+§11 for the full case inventory. Two development-only evaluation fixtures ("Back Before You Know
+It," "My First Day at Oakwood") are inserted and removed by the evaluation harness itself, never
+part of `src/db/seed.ts`, for the two exploratory themes the real 48-book catalog has no credible
+match for. This is a *report* as much as a test: a genuine regression fails it loudly rather than
+being tuned away, and it is what caught the structured-intent-candidate regression (§2) before it
+shipped in the original Phase 5 work. **41/41 cases pass** as of this writing (37 recall checks,
+9 top-1 checks, 1 top-5 check, 0 prohibited-result violations). The report also states honestly
+that no real embedding provider is configured in this environment, so every case ran through
+conventional retrieval only — no hybrid-vs-conventional comparison with a real semantic signal
+has been performed; deterministic fake embeddings elsewhere in this codebase prove storage/
+retrieval/scoring mechanics only, never cited as semantic-quality evidence.
 
 ## E2E tests (Playwright) — `tests/e2e/`
 
@@ -311,6 +325,40 @@ session with many backgrounded/interrupted test runs.
    age-appropriate seeded books) after. Full writeup in `docs/SEARCH.md` §2. This is exactly the
    kind of regression the evaluation harness exists to catch, and it worked.
 
+### Real bugs and gaps this suite caught — Phase 5 correction pass
+
+1. **A material data-safety gap, not caught by any test until this pass specifically looked for
+   it**: migration `0001` added `search_text` as nullable but nothing ever backfilled it for
+   pre-existing rows — every test up to this point only ever exercised a from-zero
+   migrate-then-seed database, which never exposed this. Found by deliberately writing
+   `tests/integration/db/migrationUpgrade.test.ts` to simulate an *already-populated* Phase 4
+   database. Fixed by folding an automatic backfill into `db:migrate` itself. See
+   `docs/SEARCH.md` §4 and `docs/DECISIONS.md`.
+2. **A title-normalization mismatch**: `normalizeTitle()` (article-stripping, diacritic-
+   stripping) was only ever applied when *writing* `normalized_title` at seed time — the
+   exact-match query compared a bare `trimmed.toLowerCase()` against it, so a query still
+   carrying its own leading article never matched. Found by auditing the exact-match code path
+   directly, not by a failing test (there was no test covering this at all). Fixed by exporting
+   and reusing the one canonical function on both sides. See `tests/unit/search/normalize.test.ts`.
+3. **A report/implementation mismatch**: `AutocompleteRow`'s type always declared "topic" and
+   "language" as real suggestion types, and the original Phase 5 report described autocomplete
+   as covering them — but `SearchRepository.autocomplete()` never actually queried for either.
+   Found by a reviewer comparing the report's claims against the actual query list. Fixed by
+   adding both, with visibility-scoped, additional-language-aware queries.
+4. **The original evaluation dataset (13 cases) covered only a fraction of the documented
+   pipeline** — no ISBN cases (the fixture catalog had never recorded any ISBN at all), no
+   diacritics case, no per-category reporting, no top-5 metric, and no case proving hard filters
+   dominate thematic relevance. Expanded to 41 cases across four reported categories; two real
+   ISBNs were added to two real fixture books (`src/lib/catalog/fixtures.ts`) specifically to
+   make the ISBN cases possible without fabricating a synthetic book.
+5. **The Gemini adapter sent identical, unlabeled text through both `embedQuery` and
+   `embedDocuments`** — Google's own retrieval guidance is that a document being indexed and a
+   query searching for one should be formatted differently. Found by an explicit audit requested
+   for this pass, not a failing test (no real provider exists in this environment to fail
+   against). Fixed with `gemini-embedding-2`'s documented asymmetric text-prefix contract; the
+   embedding composition version was bumped so any hypothetical existing embedding is detectably
+   stale. **Not independently verified against a live API call.**
+
 ## Query performance evidence at realistic scale (Phase 5)
 
 The 48–51-row dev/test/e2e seed is too small to expose real index-usage problems, so
@@ -370,6 +418,15 @@ comes from an actual `EXPLAIN ANALYZE` run, not an estimate.
   results. The "Book With Incomplete Metadata" seed row was visually confirmed rendering
   "Age not specified · Not specified · Not specified" in a real result card, not just asserted
   by a test. No visual defects requiring a fix were found at any of the four widths.
+- Phase 5 correction pass: captured and inspected real desktop screenshots (via another
+  throwaway, deleted Playwright script) of the tag/topic autocomplete dropdown ("Topic" label
+  renders correctly), the language autocomplete dropdown ("Language" label renders correctly),
+  the filter-only browse page before and after "Show More" (confirmed the exact real total —
+  "12 matches" — and that the button's own remaining-count label, e.g. "Show more (7 more)",
+  matches the true total minus what's shown, with every result visible and no button left after
+  showing all 12), Book Detail navigated to from a filtered search and back (the return context
+  correctly preserved the original query), the zero-results state, and the incomplete-metadata
+  book's real-card rendering. No visual defects found.
 
 ## What's not tested yet (by design)
 
