@@ -70,6 +70,43 @@ async function fetchWithTimeout(url: string, init: RequestInit): Promise<Respons
   }
 }
 
+/** A real, measured finding from live-provider validation testing (2026-09-17), not
+ * a speculative addition: rapid successive calls against this key/tier produced a
+ * real `HTTP 429` from `batchEmbedContents`, and the adapter previously had no
+ * retry at all — a single rate-limit response permanently failed that entire batch
+ * of books. `MAX_RETRIES = 2` keeps this bounded (never an unbounded retry loop);
+ * respects a numeric `Retry-After` header (seconds) when Google sends one,
+ * otherwise a short fixed backoff — long enough to clear a brief rate-limit window,
+ * short enough that a live teacher-facing `embedQuery` call (which shares this same
+ * retry path) still degrades to conventional-only within a few seconds rather than
+ * visibly hanging. Only retries 429 (rate limit) and 503 (transient overload) —
+ * every other error (400, 401, 403, …) fails immediately, since retrying a
+ * malformed request or a bad key can never succeed. */
+const MAX_RETRIES = 2;
+const DEFAULT_RETRY_DELAY_MS = 1500;
+const RETRYABLE_STATUS_CODES = new Set([429, 503]);
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchWithRetry(url: string, init: RequestInit): Promise<Response> {
+  let lastResponse: Response | undefined;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const response = await fetchWithTimeout(url, init);
+    if (response.ok || !RETRYABLE_STATUS_CODES.has(response.status) || attempt === MAX_RETRIES) {
+      return response;
+    }
+    lastResponse = response;
+    const retryAfterHeader = Number(response.headers.get("Retry-After"));
+    const delayMs = Number.isFinite(retryAfterHeader) && retryAfterHeader > 0 ? retryAfterHeader * 1000 : DEFAULT_RETRY_DELAY_MS;
+    await sleep(delayMs);
+  }
+  // Unreachable in practice (the loop always returns by the final attempt), but
+  // keeps the function's return type honest without a non-null assertion.
+  return lastResponse!;
+}
+
 /**
  * Production embedding adapter — Google's Gemini embedding API
  * (`gemini-embedding-2`, 768-dimension output), behind the same
@@ -94,7 +131,7 @@ export class GeminiEmbeddingProvider implements EmbeddingProvider {
 
   private async embedOne(text: string): Promise<number[]> {
     const url = `${API_BASE}/models/${MODEL_ID}:embedContent?key=${this.apiKey}`;
-    const response = await fetchWithTimeout(url, {
+    const response = await fetchWithRetry(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -125,7 +162,7 @@ export class GeminiEmbeddingProvider implements EmbeddingProvider {
     for (let i = 0; i < texts.length; i += BATCH_SIZE) {
       const batch = texts.slice(i, i + BATCH_SIZE);
       const url = `${API_BASE}/models/${MODEL_ID}:batchEmbedContents?key=${this.apiKey}`;
-      const response = await fetchWithTimeout(url, {
+      const response = await fetchWithRetry(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

@@ -1,26 +1,31 @@
 # Implementation Status
 
-Last updated: 2026-09-17 (Phase 5 correction pass, in progress). This document is continuity
+Last updated: 2026-09-17 (Phase 5 real-provider validation pass). This document is continuity
 insurance — it should always let another coding agent open this repository cold and know
 exactly where things stand. Keep it current at the end of every phase.
 
 ## Current phase
 
-**Phase 5 — Real search architecture: correction pass complete, Phase 5 itself still not
-approved.** Phase 4 (real database) is complete and approved as of commit `8b128f0`. The initial
-Phase 5 work (commit `d5648e3`) built a real, bounded, database-backed hybrid search pipeline —
-PostgreSQL full-text search + trigram fuzzy matching + structured SQL filters + optional
-pgvector semantic retrieval, combined by a transparent hybrid scorer, on top of the unchanged
-deterministic Phase 2–4 ranking engine (see `docs/SEARCH.md`) — but a review of that commit found
-four material acceptance gaps (an unsafe migration path for an already-populated database,
-unbounded queryless-browse pagination, incomplete autocomplete, and a thin evaluation suite) plus
-two adjacent issues (a title-normalization mismatch, an unlabeled Gemini retrieval contract).
-This correction pass fixes all six — see "Completed work (Phase 5 correction pass)" below.
-**Honestly incomplete as of this writing:** real semantic-quality validation has still not been
-performed — no `GEMINI_API_KEY` exists in this environment, so no real embedding has ever been
-generated. This is the one genuinely open gap keeping Phase 5 from being marked complete; every
-other requirement in the original brief and this correction pass has been built, tested against
-real PostgreSQL, and documented.
+**Phase 5 — Real search architecture: real-provider validation complete.** Phase 4 (real
+database) is complete and approved as of commit `8b128f0`. The initial Phase 5 work (commit
+`d5648e3`) built a real, bounded, database-backed hybrid search pipeline — PostgreSQL full-text
+search + trigram fuzzy matching + structured SQL filters + optional pgvector semantic retrieval,
+combined by a transparent hybrid scorer, on top of the unchanged deterministic Phase 2–4 ranking
+engine (see `docs/SEARCH.md`) — but a review of that commit found four material acceptance gaps
+(an unsafe migration path for an already-populated database, unbounded queryless-browse
+pagination, incomplete autocomplete, and a thin evaluation suite) plus two adjacent issues (a
+title-normalization mismatch, an unlabeled Gemini retrieval contract). A correction pass
+(`b4de027`) fixed all six. **This pass (2026-09-17) performed the one item that correction pass
+left open: real semantic-quality validation against a live `GEMINI_API_KEY`.** It generated real
+embeddings for the full 49-book development catalog, ran the live provider through its full
+contract (asymmetric query/document formatting, timeout/error handling), ran the real evaluation
+suite in both conventional-only and real-hybrid mode, and manually verified the running product
+with real embeddings present. That real evidence found and fixed three concrete bugs — a
+too-loose semantic-distance ceiling (twice recalibrated from measured evidence), a generic-word
+substring collision ("very" inside "every"/"everyday"), and no rate-limit handling for the live
+provider — documented in full in `docs/SEARCH.md` §5/§9 and `docs/DECISIONS.md`. Every other
+requirement in the original brief and both correction passes has been built, tested against real
+PostgreSQL, and documented.
 
 ## Full phase plan (for reference — do not execute ahead of approval)
 
@@ -249,8 +254,7 @@ version. Starting commit: `8b128f0` (approved Phase 4 correction pass).
   `FakeEmbeddingProvider` for tests), graceful degradation on any embedding failure/absence, a
   deterministic embedding-document builder, and a controlled backfill script
   (`npm run embeddings:generate`, missing/stale/all modes, dry-run, batch-tolerant).
-  **`GEMINI_API_KEY` is not set in this environment — no real embedding has ever been
-  generated, and real semantic-quality validation has not been performed.**
+  **Real semantic-quality validation performed 2026-09-17** — see the dedicated section below.
 - **Server-side bounded autocomplete and facets**, replacing full-catalog client-side
   derivation; **real re-search pagination** ("Show More" re-queries with a larger `?n=` bound,
   not a client-side slice of an already-fetched array).
@@ -352,6 +356,75 @@ redesign. Full detail in `docs/SEARCH.md`, `docs/DECISIONS.md`, and `docs/CHANGE
    E2E (unchanged, all still passing). Full quality gate (typecheck, lint, `db:check`, unit,
    integration, evaluation, build, E2E both projects) re-run clean.
 
+## Completed work (Phase 5 real-provider validation, 2026-09-17)
+
+With a real `GEMINI_API_KEY` available in the local environment for the first time, this pass
+performed the validation the correction pass above could not: live provider testing, real
+embedding generation, real hybrid evaluation, and manual product verification. **No secret was
+ever printed, logged, or committed** — only its presence was confirmed (`grep -c`, never the
+value), and `.env.local` was independently confirmed gitignored and untracked throughout.
+
+1. **Live provider contract, confirmed against a real API call.** `embedContent` and
+   `batchEmbedContents` both succeed; every embedding has exactly 768 finite values; the
+   asymmetric query/document prefix contract (documented but previously unverified) is genuinely
+   accepted, confirmed by a real 0.98 cosine similarity between the two formattings of the same
+   underlying text (related but not identical, as intended). No adapter contract change was
+   needed — only a new robustness gap the live testing itself exposed: real, reproducible
+   `HTTP 429` responses under repeated calls, fixed with bounded retry-with-backoff
+   (`fetchWithRetry`, `geminiProvider.ts`; 4 new unit tests).
+2. **Real embeddings generated for the full active development catalog**: 49/49 succeeded
+   (composition version 2), correct metadata verified per row (model/dimension/version/hash/
+   timestamp), pending/archived books confirmed untouched, a repeated run is a clean no-op, and a
+   live edit → rebuild → restore cycle on one book correctly flagged it stale and then correctly
+   cleared once restored.
+3. **Real hybrid evaluation.** The evaluation harness's own `beforeAll` now generates real
+   embeddings for that run's seeded+fixture books when a key is present; at least one fully clean
+   run (0 embedding failures, before the two ranking fixes below) reproduced the full 34/34
+   recall, 9/9 top-1, 1/1 top-5, 0/41 violations result under genuine real-hybrid conditions —
+   proving the real-embeddings-in-the-loop mechanism itself works end to end, not merely that the
+   harness's code compiles. **A real, sustained provider rate limit** (most likely a daily quota
+   exhausted by this session's own cumulative live-call testing — an 8-minute wait produced no
+   improvement) prevented obtaining one further fully-clean automated run *after* the two ranking
+   fixes below; those fixes are instead independently validated by direct SQL cosine-distance
+   measurement against the real, persisted development-catalog embeddings, by unit tests, and by
+   live product screenshots (below) — real evidence, just from a different source than the
+   harness's own regenerated run.
+4. **Two real product bugs found from live evidence and fixed:**
+   - The semantic meaningful-distance ceiling (`MAX_MEANINGFUL_VECTOR_DISTANCE`,
+     `hybridScore.ts`) went from the inert placeholder `1` → `0.36` (from one query's real
+     distances) → **`0.30`** (from three real queries' distances, after `0.36` was itself caught
+     letting 31/49 catalog books clear it for a known-item query — visible directly as "35
+     matches" for a single-title lookup).
+   - "very" (a substring of "every"/"everyday") was falsely triggering tag/description keyword
+     matches — fixed by adding it to `STOP_WORDS`, the same fix class as the pre-existing "age"
+     (inside "courage"). A related "day" (inside "everyday") collision, specific to
+     category/format matching, was fixed with a new whole-word matcher used only for those two
+     fields.
+   Full measurement and rationale: `docs/SEARCH.md` §5/§9, `docs/DECISIONS.md`.
+5. **Manual product verification** with real embeddings present, at desktop (1440×900) and mobile
+   (390×844): a known-item query now returns exactly its one correct match with zero semantic
+   noise; a structured multi-constraint query (animals + age 4) returns genuinely on-topic
+   results; three exploratory queries (winter atmosphere, gentle goodbye, starting-school anxiety)
+   return grounded, teacher-readable explanations with no AI/vector/embedding language anywhere in
+   the UI; autocomplete triggers zero calls to the embedding provider while typing (verified via
+   network-request interception); zero browser console errors on both viewports. The
+   starting-school-anxiety query is honestly weaker — the real development catalog has no
+   genuinely on-theme book for it (only the evaluation harness's own fixture data does), so its
+   real top results are weak, generic-word-driven matches, not fabricated as a false success.
+   Screenshots: `docs/screenshots/real-provider-validation/`.
+6. A pre-existing, unrelated React hydration-mismatch warning was observed intermittently in
+   Next.js's dev-mode overlay, traced to `SearchInput.tsx`'s voice-button conditional
+   (`showVoiceButton`, depending on `useVoiceSearch()`'s client-only feature detection) — present
+   since Phase 3 (commit `ca33303`), unrelated to search/embeddings, and not touched by this pass;
+   noted here rather than silently ignored.
+7. Test counts: 238 unit (was 231, +7: 4 retry-on-429 cases, 1 hybrid-score boundary case, 2
+   substring-collision regression cases), 68 integration (unchanged), 41 evaluation cases
+   (unchanged count, now genuinely exercised in real-hybrid mode when a key is present), 103 E2E
+   (unchanged count; one test's locator was tightened to `exact: true` after real embeddings
+   changed result ordering enough to expose a pre-existing selector ambiguity — not a product
+   bug). Full quality gate re-run clean: `db:check`, typecheck, lint, unit, integration, build,
+   E2E (both projects).
+
 ## In-progress / not yet done for Phase 5
 
 - Final git commit and push for this work.
@@ -370,9 +443,11 @@ only (erased at build, zero runtime code); all 27 `sql` template usages in
 
 ## Blocked work
 
-None outright, but **real semantic-quality validation is blocked on a real `GEMINI_API_KEY`**,
-which does not exist in this environment. Conventional search (structured filters + exact/FTS/
-trigram matching) is fully independent of this and works completely without it.
+None. Real semantic-quality validation (previously blocked on a real `GEMINI_API_KEY`) was
+performed 2026-09-17 — see "Completed work (Phase 5 real-provider validation, 2026-09-17)" above.
+Conventional search (structured filters + exact/FTS/trigram matching) remains fully independent
+of the embedding provider and works completely without it, including when the key is later
+removed or the provider fails at request time.
 
 ## Deferred work
 
@@ -441,7 +516,14 @@ client-side update — the latter was a test-timing fix, not a product bug), one
 search evaluation harness (structured intent producing no reachable candidates for a query with
 no keyword overlap), and one caught by `EXPLAIN ANALYZE` at a realistic synthetic scale (trigram
 fuzzy matching never actually using its own GIN index). All four are fixed and covered by
-regression tests. No known open bugs.
+regression tests.
+
+The 2026-09-17 real-provider validation pass found and fixed three more real bugs — a too-loose
+semantic-distance ceiling (recalibrated twice from real measured evidence), a generic-word
+substring collision ("very" inside "every"/"everyday"), and no rate-limit handling for the live
+Gemini provider — plus tightened one pre-existing E2E locator ambiguity exposed once real
+embeddings changed result ordering enough to make it visible. Full detail above and in
+`docs/DECISIONS.md`. No known open bugs.
 
 ## Environment variables
 
@@ -451,8 +533,10 @@ Phase 1's four (`STAFF_PASSWORD_HASH`, `ADMIN_PASSWORD_HASH`, `SESSION_SECRET`, 
 `docs/DATABASE_SETUP.md` and `.env.example`; no values recorded here. **Phase 5 adds one
 optional variable: `GEMINI_API_KEY`** — activates real semantic retrieval and embedding
 generation when present; every part of search works completely without it (conventional
-retrieval has no dependency on it at all). **Not set in this environment.** Voice search still
-uses only the browser's own Web Speech API (no server-side key).
+retrieval has no dependency on it at all). **Present in this environment as of 2026-09-17**
+(confirmed present, value never displayed/logged/committed — see "Completed work (Phase 5
+real-provider validation)" above). Voice search still uses only the browser's own Web Speech API
+(no server-side key).
 
 ## Migrations
 
@@ -480,18 +564,20 @@ A local, disposable PostgreSQL 16 instance (three databases: dev/test/e2e), now 
 `vector` and `pg_trgm` extensions enabled — still not actually external (see
 `docs/DATABASE_SETUP.md`). Voice search still talks only to the browser's own built-in speech
 recognition. **Optionally, Google's Gemini embedding API** (`gemini-embedding-2`) when
-`GEMINI_API_KEY` is configured — not configured in this environment; search works completely
-without it. No Supabase, Drive/Sheets, or other AI service is connected.
+`GEMINI_API_KEY` is configured — configured in this environment as of 2026-09-17 and live-tested
+(see "Completed work (Phase 5 real-provider validation)" above); search still works completely
+without it if the key is removed. No Supabase, Drive/Sheets, or other AI service is connected.
 
 ## Git status
 
 Repository is linked to `github.com/Shirin-Maleki/ssjc-library` (`origin`, `main`). The initial
-Phase 5 work was reviewed at commit `d5648e3`. This correction pass's work is not yet committed/
-pushed as of this writing — see the correction report for the exact commit SHA once it is.
+Phase 5 work was reviewed at commit `d5648e3`; the correction pass was reviewed at commit
+`b4de027`. This real-provider validation pass's work is committed and pushed on top of
+`b4de027` — see the final validation report for the exact commit SHA.
 
 ## Next recommended task
 
-Commit and push this correction pass, then await review. Phase 6 (Google Drive connection) must
-not begin until Phase 5 — correction pass included — is explicitly approved. If the review finds
-Phase 5 otherwise complete, the only remaining open item is real semantic-quality validation,
-which requires a real `GEMINI_API_KEY` this environment does not have.
+Await review of this real-provider validation pass. Phase 6 (Google Drive connection) must not
+begin until Phase 5 is explicitly approved — this pass did not start any Phase 6 work. With real
+semantic-quality validation now performed, there is no remaining open item known at this time;
+the review may of course find otherwise.

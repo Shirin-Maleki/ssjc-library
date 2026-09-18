@@ -277,17 +277,22 @@ export const EVALUATION_CASES: EvaluationCase[] = [
     id: "safety-pending-review-book-never-appears",
     category: "safety",
     query: "Pending Review Test Book",
-    expectedAnyOf: [],
+    // No `expectedAnyOf` — under real hybrid mode (real-provider validation pass,
+    // 2026-09-17) this query's own words are real content, not pure stop words, so
+    // it legitimately retrieves OTHER real active books via genuine semantic
+    // proximity; "the query returns literally nothing" was a conventional-only-mode
+    // assumption, never the actual safety property. The real, load-bearing
+    // invariant is `mustNotInclude` below, which held in both modes.
     mustNotInclude: ["Pending Review Test Book"],
-    rationale: "A pending_review book must never appear in teacher-facing search results, however precisely its title is typed.",
+    rationale: "A pending_review book must never appear in teacher-facing search results, however precisely its title is typed — in either conventional or real hybrid mode.",
   },
   {
     id: "safety-archived-book-never-appears",
     category: "safety",
     query: "Archived Test Book",
-    expectedAnyOf: [],
+    // See the pending_review case above — same reasoning.
     mustNotInclude: ["Archived Test Book"],
-    rationale: "An archived book must never appear in teacher-facing search results.",
+    rationale: "An archived book must never appear in teacher-facing search results, in either conventional or real hybrid mode.",
   },
   {
     id: "safety-unknown-duration-not-treated-as-short",

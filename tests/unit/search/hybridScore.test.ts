@@ -79,6 +79,26 @@ describe("combineScores", () => {
     expect(scored.reasons.some((r) => r.type === "semantic")).toBe(false);
   });
 
+  it("the meaningful-distance ceiling is a real, evidence-based value (0.30), not the placeholder '1' it used to be", () => {
+    // Real-provider validation finding (2026-09-17): with the old ceiling of 1, a
+    // live manual product check returned 49/49 catalog books as "matches" for a
+    // real exploratory query, because every book's real cosine distance (0.32-0.43)
+    // was comfortably under 1. A first correction to 0.36 was re-measured against a
+    // known-item query and still let 31/49 catalog books (almost the whole
+    // catalog, none thematically related) clear the ceiling. Distances measured
+    // across three distinct real queries (one known-item, two exploratory) showed
+    // genuinely strong matches at 0.17-0.28 and a dense, near-universal noise floor
+    // starting around 0.30-0.32 regardless of actual relevance. See
+    // docs/DECISIONS.md and hybridScore.ts's own comment for the full measurement.
+    const book = makeBook({ id: "a", title: "Totally Unrelated Title" });
+    const justUnderCeiling = combineScores(book, "query", signals({ vectorDistance: 0.29 }));
+    const atCeiling = combineScores(book, "query", signals({ vectorDistance: 0.3 }));
+    expect(justUnderCeiling.score).toBeGreaterThan(0);
+    expect(justUnderCeiling.reasons.some((r) => r.type === "semantic")).toBe(true);
+    expect(atCeiling.score).toBe(0);
+    expect(atCeiling.reasons.some((r) => r.type === "semantic")).toBe(false);
+  });
+
   it("a real deterministic exact-title match still outranks a purely semantic/fuzzy match on an unrelated book", () => {
     const exactTitleBook = makeBook({ id: "a", title: "Dinosaur Adventure" });
     const semanticOnlyBook = makeBook({ id: "b", title: "Totally Unrelated Title" });

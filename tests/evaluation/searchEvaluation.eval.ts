@@ -16,6 +16,34 @@ const { DrizzleCategoryRepository } = await import("@/db/repositories/categoryRe
 const { SearchService } = await import("@/lib/search/searchService");
 const { EVALUATION_CASES, EMPTY_FILTERS } = await import("./dataset");
 const schema = await import("@/db/schema");
+const { generateEmbeddings } = await import("@/lib/embeddings/generation");
+const { GeminiEmbeddingProvider } = await import("@/lib/embeddings/geminiProvider");
+
+/**
+ * Real semantic-quality validation pass (2026-09-17): whenever a real
+ * `GEMINI_API_KEY` is present, this harness generates real embeddings for its own
+ * (just-seeded) database before running — the same `generateEmbeddings()` function
+ * `scripts/embeddings/generate.ts` uses, so there's one implementation, not two.
+ * This can't be "run the CLI script separately first" the way a human operator
+ * would for a real deployment: this file's own `globalSetup`
+ * (`vitest.evaluation.config.ts`) truncate-reseeds `TEST_DATABASE_URL` at the start
+ * of every `npm run evaluate:search` invocation, which would wipe any
+ * pre-generated embeddings before the test body ever runs. Constructing
+ * `GeminiEmbeddingProvider` directly (not `getConfiguredEmbeddingProvider()`) for
+ * the same `server-only`-avoidance reason documented throughout this codebase.
+ * When no key is present, this is a no-op and every case below runs conventional-
+ * only — exactly `SearchService.tryEmbedQuery()`'s own real production behavior,
+ * not a special evaluation-only code path.
+ */
+function getRealEmbeddingProviderForEvaluation() {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return undefined;
+  try {
+    return new GeminiEmbeddingProvider(apiKey);
+  } catch {
+    return undefined;
+  }
+}
 
 const hasTestDb = (() => {
   try {
@@ -56,6 +84,8 @@ describe.skipIf(!hasTestDb)("Search evaluation", () => {
   let service: InstanceType<typeof SearchService>;
   const insertedBookIds: string[] = [];
   const insertedTagIds: string[] = [];
+  let hybridMode = false;
+  let embeddingGenerationSummary = "";
 
   beforeAll(async () => {
     if (!hasTestDb) return;
@@ -104,6 +134,22 @@ describe.skipIf(!hasTestDb)("Search evaluation", () => {
         }
       }
     }
+
+    const provider = getRealEmbeddingProviderForEvaluation();
+    if (provider) {
+      hybridMode = true;
+      const result = await generateEmbeddings(db, provider, { mode: "missing" });
+      embeddingGenerationSummary = `Generated ${result.succeeded} embedding(s) for this run's seeded+fixture books (${result.failed.length} failed).`;
+      if (result.failed.length > 0) {
+        // Surface the real reason, not just a count — a batch failure (rate limit,
+        // timeout, transient network error) must be diagnosable from the report
+        // itself, not silently swallowed into "N failed."
+        const uniqueErrors = [...new Set(result.failed.map((f) => f.error))];
+        embeddingGenerationSummary += ` Error(s): ${uniqueErrors.join(" | ")}`;
+      }
+    } else {
+      embeddingGenerationSummary = "No GEMINI_API_KEY configured — running conventional-only.";
+    }
   });
 
   afterAll(async () => {
@@ -124,6 +170,14 @@ describe.skipIf(!hasTestDb)("Search evaluation", () => {
   });
 
   it("reports recall/top-1/top-5/prohibited-violations across the committed dataset, broken down by category", async () => {
+    // Real-provider validation finding (2026-09-17): in real-hybrid mode, this
+    // single test issues one live query-embedding call per dataset case (41 total)
+    // in a tight loop — something no real user search pattern does — which
+    // legitimately exceeds the default 30s test timeout on realistic network
+    // latency alone, and can trip the provider's rate limit under repeated
+    // back-to-back evaluation runs (mitigated but not eliminated by
+    // geminiProvider.ts's retry-with-backoff). 120s gives real calls, including
+    // retries, realistic room without masking a genuine hang.
     const rows: {
       id: string;
       category: string;
@@ -195,16 +249,25 @@ describe.skipIf(!hasTestDb)("Search evaluation", () => {
       }
     }
 
-    console.log(
-      "\nConventional-vs-hybrid comparison: no embedding provider is configured in this environment " +
-        "(no GEMINI_API_KEY), so every case above — including the 'safety-provider-absence-preserves-" +
-        "conventional-results' case specifically added to make this explicit — ran through conventional " +
-        "retrieval only (structured filters + exact/FTS/trigram matching); the semantic/vector signal " +
-        "never contributed to any result. This is reported honestly, not claimed as a hybrid-vs-" +
-        "conventional comparison; see docs/SEARCH.md §5 and §11, and docs/IMPLEMENTATION_STATUS.md. " +
-        "Deterministic fake embeddings elsewhere in this codebase (tests/unit/embeddings/) prove storage/" +
-        "retrieval/scoring MECHANICS only — never cited here as semantic-quality evidence."
-    );
+    console.log(`\nMode: ${hybridMode ? "REAL HYBRID (Gemini embeddings present)" : "conventional-only (no provider)"}. ${embeddingGenerationSummary}`);
+    if (hybridMode) {
+      console.log(
+        "Every case above ran through the full pipeline with real Gemini embeddings available — " +
+          "structured filters + exact/FTS/trigram matching + real semantic retrieval, combined by " +
+          "the unchanged hybrid scorer. This is genuine real-provider evidence, not a fake-embedding " +
+          "mechanics test. See docs/SEARCH.md §5/§11 and docs/IMPLEMENTATION_STATUS.md for the full " +
+          "validation report this run fed into."
+      );
+    } else {
+      console.log(
+        "No embedding provider is configured in this environment (no GEMINI_API_KEY), so every case " +
+          "above — including the 'safety-provider-absence-preserves-conventional-results' case " +
+          "specifically added to make this explicit — ran through conventional retrieval only " +
+          "(structured filters + exact/FTS/trigram matching); the semantic/vector signal never " +
+          "contributed to any result. This is reported honestly, not claimed as a hybrid-vs-" +
+          "conventional comparison; see docs/SEARCH.md §5 and §11, and docs/IMPLEMENTATION_STATUS.md."
+      );
+    }
 
     // A real regression must fail this test, not be silently excluded from the report.
     expect(violations, `Prohibited-result violations: ${violations.map((v) => v.id).join(", ")}`).toHaveLength(0);
@@ -214,5 +277,5 @@ describe.skipIf(!hasTestDb)("Search evaluation", () => {
     ).toBe(recallCases.length);
     expect(top1Correct, `Top-1 misses: ${top1Cases.filter((r) => !r.top1Correct).map((r) => r.id).join(", ")}`).toBe(top1Cases.length);
     expect(top5Correct, `Top-5 misses: ${top5Cases.filter((r) => !r.top5Correct).map((r) => r.id).join(", ")}`).toBe(top5Cases.length);
-  });
+  }, 120_000);
 });

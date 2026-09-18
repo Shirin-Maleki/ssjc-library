@@ -1657,3 +1657,75 @@ category and uses `vi.spyOn(bookRepository, "getBooksByIds")` to assert a 5-resu
 **Relevant files:** `src/db/repositories/searchRepository.ts` (`findVisibleBookIdsPage`,
 `countVisibleBooks`); `src/lib/search/searchService.ts` (`browseByFiltersOnly`);
 `tests/integration/db/boundedPagination.test.ts`; `docs/SEARCH.md` §7.
+
+---
+
+## Real-provider validation exposed rate limits and a genuinely too-loose semantic ceiling — both fixed from measured evidence
+
+**Date:** 2026-09-17 · **Status:** Locked.
+
+**Context:** With a real `GEMINI_API_KEY` available for the first time, this pass ran the full
+Phase 5 real-search validation: live provider contract checks, real embedding generation for the
+49-book development catalog, real hybrid evaluation runs, and manual product verification with
+screenshots. Every earlier claim in `docs/SEARCH.md` that semantic quality was "unvalidated" was
+a genuine, honest gap, not a hedge — this pass closed it, and found two real bugs doing so.
+
+**Finding 1 — rate limits are real, not hypothetical.** Repeated live calls within this single
+validation session (smoke tests, dev-catalog generation, multiple evaluation runs, diagnostic
+scripts) reproducibly triggered `HTTP 429` from Gemini's `batchEmbedContents`. **Fix:** both
+`embedOne` and `embedDocuments` in `geminiProvider.ts` now go through `fetchWithRetry` — up to 2
+retries, honoring a numeric `Retry-After` header or a 1.5s default, only for `429`/`503`. This
+does not eliminate rate limits (a sustained, heavy burst can still exhaust them faster than 2
+retries can absorb — observed directly during this same validation pass, where several
+evaluation runs still failed to generate real embeddings even after multi-minute waits), but it
+absorbs the ordinary transient case and never masks a real, non-retryable error.
+
+**Finding 2 — the semantic meaningful-distance ceiling (`hybridScore.ts`) was still too loose
+after one correction.** The original value, `1`, was a placeholder that never gated anything
+(49/49 catalog books "matched" a real exploratory query in a live check). A first correction to
+`0.36`, based on that query's own distance measurements, still let 31/49 books — almost the whole
+catalog — clear the ceiling for a *different* query (a plain known-item title lookup), visible
+directly as "35 matches" in a product screenshot and in the evaluation harness's own top-3 for
+`known-item-exact-title`. Measuring three distinct real queries' full distance distributions (one
+known-item, two exploratory) side by side showed *why* one query's evidence wasn't enough:
+genuinely strong matches cluster at 0.17–0.28 for every query type, but a dense, near-universal
+noise floor starts around 0.30–0.32 regardless of a book's actual relevance — a property of this
+embedding model and this catalog's small scale (~49 books), not of any one query. **Fix:** the
+ceiling is now `0.30`, chosen to sit below that shared noise floor rather than calibrated to any
+single query's gap.
+
+**Finding 3 — a second, unrelated real bug the same live testing surfaced: "very" is a substring
+of "every"/"everyday".** The known-item query "The Very Hungry Caterpillar" was falsely boosting
+an unrelated book via its "everyday life" tag and via description text containing "every" — not a
+semantic issue at all, but the tag/description matchers' intentionally loose substring rule
+(kept loose deliberately, for real plural/typo tolerance — "animal" must still match "animals")
+colliding with a generic word that happens to be embedded inside common English words. **Fix:**
+added "very" to `STOP_WORDS` (`lib/search/normalize.ts`) — the same fix class, and same file, as
+the pre-existing "age" (inside "courage") entries. A related but distinct collision — "day" inside
+"everyday" specifically for *category and format* matching — was fixed in the same pass with a
+new `containsAnyWholeWordToken()` helper (`rank.ts`), used only for those two small, fixed-vocabulary
+fields, deliberately not applied to tag/title/description matching.
+
+**Why keep tuning targeted like this instead of one bigger architectural change (an ANN index, a
+separate vector store, an LLM query interpreter)?** None of those would have fixed either finding
+— the noise-floor problem is inherent to this embedding model and catalog scale, not a retrieval-
+speed or storage problem, and neither the rate-limit nor the substring-collision finding has
+anything to do with retrieval architecture at all. The calibration rules for this validation pass
+were explicit: tune only from evidence, keep exact/deterministic signals dominant, and never
+introduce that additional complexity without a measurement that justifies it. None of these three
+fixes changes `EMBEDDING_COMPOSITION_VERSION` (none change what gets embedded or how) or the
+overall five-layer architecture.
+
+**Consequences:** A regression test exists for each: `tests/unit/embeddings/geminiProvider.test.ts`
+(retry-on-429, 4 new cases), `tests/unit/search/hybridScore.test.ts` (the 0.30 boundary),
+`tests/unit/search/rank.test.ts` (both substring-collision cases). The real evaluation run and
+manual product screenshots taken after all three fixes show the known-item query correctly
+returning exactly its one exact match with no semantic noise, and exploratory queries (winter,
+gentle-goodbye) still returning genuinely on-theme results. See `docs/IMPLEMENTATION_STATUS.md`
+for the full validation report this fed into.
+
+**Relevant files:** `src/lib/embeddings/geminiProvider.ts`; `src/lib/embeddings/generation.ts`;
+`src/lib/search/hybridScore.ts`; `src/lib/search/rank.ts`; `src/lib/search/normalize.ts`;
+`tests/unit/embeddings/geminiProvider.test.ts`; `tests/unit/search/hybridScore.test.ts`;
+`tests/unit/search/rank.test.ts`; `tests/evaluation/searchEvaluation.eval.ts`; `docs/SEARCH.md`
+§5/§9/§11.

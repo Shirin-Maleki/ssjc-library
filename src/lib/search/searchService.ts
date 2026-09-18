@@ -15,6 +15,7 @@ import { getLanguageName } from "@/lib/catalog/languages";
 import type { Filters } from "./filters";
 import { buildMatchExplanation } from "./explain";
 import { combineScores, rankScoredBooks } from "./hybridScore";
+import { meaningfulTokens } from "./normalize";
 
 const KNOWN_ILLUSTRATION_STYLE_VALUES: ReadonlySet<string> = new Set<IllustrationStyle>(
   Object.keys(ILLUSTRATION_STYLE_LABELS) as IllustrationStyle[]
@@ -149,11 +150,28 @@ export class SearchService {
     return buildFacetsFromRows(facetRows, this.categories);
   }
 
-  /** Best-effort — any failure (no key, timeout, malformed response) degrades
+  /**
+   * Best-effort — any failure (no key, timeout, malformed response) degrades
    * silently to conventional-only retrieval. Never thrown up to the Find page,
    * never logged with the raw query text (docs/SEARCH.md §5: "do not persist raw
-   * teacher queries by default"). */
+   * teacher queries by default").
+   *
+   * Skips the embedding call entirely for a query with zero meaningful tokens
+   * (real-provider validation finding, 2026-09-17): a query built entirely from
+   * generic/stop words ("something to read please") has no actual topic to embed
+   * a meaning for, and real Gemini embeddings of such queries were measured to sit
+   * at cosine distances (~0.32–0.38) that genuinely overlap with real exploratory
+   * queries' own distances (~0.30–0.36 for the school-anxiety/goodbye cases in
+   * `tests/evaluation/dataset.ts`) — no single distance threshold can safely tell
+   * these apart at this embedding model's resolution and this catalog's size. This
+   * mirrors the exact principle `ftsHasMeaningfulOverlap` (`searchRepository.ts`)
+   * already applies to full-text retrieval for the identical class of query — a
+   * query with no real content gets no signal from this layer, rather than trying
+   * to out-tune it with a threshold. See docs/SEARCH.md §9/§5 and
+   * `docs/DECISIONS.md`.
+   */
   private async tryEmbedQuery(query: string): Promise<number[] | undefined> {
+    if (meaningfulTokens(query).length === 0) return undefined;
     const provider = getConfiguredEmbeddingProvider();
     if (!provider) return undefined;
     try {

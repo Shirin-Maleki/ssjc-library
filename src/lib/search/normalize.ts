@@ -52,6 +52,17 @@ export const STOP_WORDS = new Set([
   "olds",
   "minute",
   "minutes",
+  // Generic intensifier with no search-relevant meaning of its own, and — like
+  // "age"/"courage" above — a real substring-collision hazard: "very" is
+  // literally embedded in "every", "everyday", and "everybody". Real-provider
+  // validation finding (2026-09-17): the known-item query "The Very Hungry
+  // Caterpillar" was falsely boosting unrelated books via their "everyday life"
+  // tag and via description text containing "every" — through the tag/
+  // description matchers' intentionally loose substring rule, not a bug in that
+  // rule itself. Stop-wording the generic word (matching the "age" precedent)
+  // fixes it without narrowing tag/description matching's real plural/typo
+  // tolerance.
+  "very",
 ]);
 
 /** Strips diacritics (é→e, ö→o, å→a, ñ→n, …) via Unicode decomposition — enough to

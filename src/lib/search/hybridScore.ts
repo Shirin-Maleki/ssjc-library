@@ -3,11 +3,43 @@ import type { CandidateSignals } from "@/db/repositories/searchRepository";
 import { scoreBook, type MatchReason, type ScoredBook } from "./rank";
 import { MINIMUM_MEANINGFUL_SCORE, RETRIEVAL_SIGNAL_WEIGHTS } from "./rankingConfig";
 
-/** A cosine distance this high or greater contributes nothing — without a ceiling,
- * a barely-related book would still add a small positive number and could nudge a
- * zero-deterministic-signal book above the meaningful-result threshold on pure
- * noise. Real matches in practice score well under 1. */
-const MAX_MEANINGFUL_VECTOR_DISTANCE = 1;
+/**
+ * A cosine distance this high or greater contributes nothing — without a real
+ * ceiling, a barely-related book still adds a small positive number and clears
+ * `MINIMUM_MEANINGFUL_SCORE` (0) on pure noise.
+ *
+ * Real-provider validation finding (2026-09-17, revised same day): the original
+ * value here, `1`, was a placeholder that never gated anything in practice — see
+ * docs/DECISIONS.md for that first finding (49/49 books "matched" a real
+ * exploratory query in a live product check). An initial correction to `0.36` was
+ * itself re-measured against a *known-item* query ("The Very Hungry Caterpillar")
+ * with real embeddings for the full 49-book dev catalog, which exposed the same
+ * failure mode from a different angle: 31 of 49 books — almost the entire
+ * catalog, none thematically related — still cleared `0.36` and appeared as
+ * semantic "matches" ahead of/alongside the correct exact-title result, visible
+ * directly in a product screenshot ("35 matches" for a single-title lookup) and
+ * confirmed in the evaluation harness's own top-3 for `known-item-exact-title`.
+ *
+ * Cross-referencing three distinct real queries' full distance distributions (a
+ * known-item title, and two exploratory themes) showed the same shape every time:
+ * a small number of genuinely strong matches at 0.17–0.28, then a dense,
+ * near-universal "noise floor" starting around 0.30–0.32 that most of the catalog
+ * falls into regardless of actual relevance — because short children's-book
+ * descriptions embed into a tight region of this model's space at this catalog's
+ * scale. `0.30` is chosen as the ceiling: it sits just below that noise floor and
+ * excludes it, while an exploratory query's few genuinely strong hits survive.
+ * This does trade away the *weakest* semantic-only hits for exploratory queries
+ * that have no better catalog answer (e.g. a book with only a 0.32 distance and no
+ * deterministic keyword/tag overlap will no longer surface) — an accepted
+ * limitation, not a bug: exact/deterministic signals dominate ranking by design,
+ * and a query's genuinely relevant results in this catalog have consistently
+ * carried real deterministic overlap (category, tag, or description keyword) in
+ * addition to a strong semantic score, so they are not lost by this tightening.
+ * Not a perfect separator — see docs/DECISIONS.md for the full measurement and
+ * why no single threshold fully resolves this at this embedding model and catalog
+ * scale.
+ */
+const MAX_MEANINGFUL_VECTOR_DISTANCE = 0.3;
 
 /**
  * Combines the existing deterministic free-text/intent score (`scoreBook`,

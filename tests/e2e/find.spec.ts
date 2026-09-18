@@ -48,7 +48,11 @@ test.describe("Find a Book", () => {
     // book that merely mentions photography in its description could legitimately
     // appear as a weak trailing match — but the single best match must genuinely be
     // real photography, which is what "this requirement must genuinely work" means.
-    await expect(rows.first().getByText("Real photography")).toBeVisible();
+    // exact: true targets the visual-realism metadata badge specifically — the
+    // grounded explanation sentence below it can legitimately also contain the
+    // words "Real photography" as prose, which a loose text match would also
+    // (ambiguously) match.
+    await expect(rows.first().getByText("Real photography", { exact: true })).toBeVisible();
   });
 
   test("Flow 4 — multilingual: filtering to Swedish shows only Swedish results", async ({ page }) => {

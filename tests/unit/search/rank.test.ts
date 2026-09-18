@@ -102,6 +102,45 @@ describe("scoreBook", () => {
     expect(scoreBook(otherCategoryBook, "animals books").score).not.toBeLessThan(0);
   });
 
+  it("never credits a category/format match from a query word that is merely a SUBSTRING of a category/format word (real-provider validation finding)", () => {
+    // A live manual product check with real Gemini embeddings found "day" (from a
+    // real exploratory query, "...for the day") falsely matching the
+    // "everyday-life-play" category via plain substring containment — "day" is
+    // literally inside "everyday". The exact same class of bug as "age" inside
+    // "courage" (docs/SEARCH.md), in a new field. Category/format matching must
+    // require a whole-word match, not a substring one.
+    const everydayBook = makeBook({ id: "a", title: "Music Time", tags: [], physicalCategory: "everyday-life-play" });
+    const result = scoreBook(everydayBook, "a story for the day");
+    expect(result.reasons.some((r) => r.type === "category")).toBe(false);
+
+    // Format matching has the identical risk (e.g. a query token that's a
+    // substring of a format label like "board book" or "early reader") — verified
+    // with a word that genuinely IS one of the format label's own words, to prove
+    // the fix didn't also break real whole-word format matches.
+    const boardBook = makeBook({ id: "b", title: "Counting Blocks", tags: [], format: "board_book" });
+    expect(scoreBook(boardBook, "a board book about counting").reasons.some((r) => r.type === "format")).toBe(true);
+  });
+
+  it("does not credit 'very' as a meaningful token — it's a substring of 'every'/'everyday' (real-provider validation finding)", () => {
+    // A live evaluation run found the known-item query "The Very Hungry
+    // Caterpillar" falsely boosting an unrelated book via its "everyday life" tag
+    // and via description text containing "every" — "very" is literally embedded
+    // in both words, and tag/description matching intentionally stays
+    // substring-based (docs/SEARCH.md, for real plural/typo tolerance like
+    // "animal" -> "animals"). The fix is stop-wording "very" itself (like "age"),
+    // not narrowing tag/description matching.
+    const book = makeBook({
+      id: "a",
+      title: "Mi Familia y Yo",
+      tags: ["family", "love", "everyday life"],
+      description: "A toddler introduces every member of a warm household.",
+    });
+    const result = scoreBook(book, "The Very Hungry Caterpillar");
+    expect(result.reasons.some((r) => r.type === "tag")).toBe(false);
+    expect(result.reasons.some((r) => r.type === "description")).toBe(false);
+    expect(result.score).toBe(0);
+  });
+
   it("an unrecorded format/fiction status never fabricates a match", () => {
     const unknownFormatBook = makeBook({ id: "a", title: "Mystery Book", tags: ["mystery"], format: undefined, fictionType: undefined });
     const result = scoreBook(unknownFormatBook, "mystery picture book fiction");

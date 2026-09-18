@@ -1,12 +1,8 @@
 import "../../src/db/loadEnv";
 import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
-import { eq } from "drizzle-orm";
 import * as schema from "../../src/db/schema";
-import { books } from "../../src/db/schema";
-import { DrizzleBookRepository } from "../../src/db/repositories/bookRepository";
-import { DrizzleCategoryRepository } from "../../src/db/repositories/categoryRepository";
-import { buildEmbeddingDocument } from "../../src/lib/embeddings/document";
+import { generateEmbeddings } from "../../src/lib/embeddings/generation";
 import { GeminiEmbeddingProvider } from "../../src/lib/embeddings/geminiProvider";
 import type { EmbeddingProvider } from "../../src/lib/embeddings/provider";
 
@@ -32,7 +28,10 @@ function getConfiguredEmbeddingProvider(): EmbeddingProvider | undefined {
  * Controlled, idempotent embedding generation/backfill — `npm run embeddings:generate`
  * (docs/SEARCH.md §5). This is a standalone script, never run automatically during a
  * request or a migration: generating embeddings makes a real, rate-limited network
- * call per book, and must happen on a schedule/trigger a human controls.
+ * call per book, and must happen on a schedule/trigger a human controls. The actual
+ * generation logic lives in `lib/embeddings/generation.ts`, shared with the
+ * evaluation harness (`tests/evaluation/searchEvaluation.eval.ts`) so there's one
+ * implementation, not two.
  *
  * Modes (`--mode=`, default `missing`):
  *   missing  — only books with no stored embedding at all (the common case).
@@ -40,6 +39,13 @@ function getConfiguredEmbeddingProvider(): EmbeddingProvider | undefined {
  *              hash no longer matches what `buildEmbeddingDocument` would produce
  *              today (the book's data changed, or the composition itself changed).
  *   all      — every book, regardless of current state (a full, deliberate re-embed).
+ *
+ * Scoped to `review_status = 'active'` books only (validation pass correction,
+ * 2026-09-17) — semantic retrieval is never used for a `pending_review`/`archived`
+ * book (`docs/SEARCH.md` §1, visibility scoping), so spending a real, metered API
+ * call to embed one would be pure waste, not "stored but not retrievable" by
+ * design. If a book is later approved to `active`, it becomes a `missing` candidate
+ * on the next run.
  *
  * `--dry-run` reports what would be generated without calling the provider or
  * writing anything.
@@ -58,7 +64,6 @@ const MODE = (() => {
   return value as "missing" | "stale" | "all";
 })();
 const DRY_RUN = process.argv.includes("--dry-run");
-const BATCH_SIZE = 50;
 
 async function main() {
   const provider = getConfiguredEmbeddingProvider();
@@ -76,115 +81,23 @@ async function main() {
   const db = drizzle(client, { schema });
 
   try {
-    const bookRepository = new DrizzleBookRepository(db);
-    const categoryRepository = new DrizzleCategoryRepository(db);
+    const result = await generateEmbeddings(db, provider, { mode: MODE, dryRun: DRY_RUN });
 
-    const [allBooks, categories, embeddingRows] = await Promise.all([
-      bookRepository.listBooks(),
-      categoryRepository.listCategories(),
-      db
-        .select({
-          id: books.id,
-          hasEmbedding: books.embedding,
-          embeddingCompositionVersion: books.embeddingCompositionVersion,
-          embeddingSourceHash: books.embeddingSourceHash,
-        })
-        .from(books),
-    ]);
-
-    const categoryLabelBySlug = new Map(categories.map((c) => [c.slug, c.label]));
-    const embeddingStateById = new Map(embeddingRows.map((r) => [r.id, r]));
-
-    const candidates = allBooks
-      .map((book) => {
-        const document = buildEmbeddingDocument({
-          title: book.title,
-          subtitle: book.subtitle,
-          description: book.description,
-          authors: book.authors,
-          illustrators: book.illustrators,
-          publisher: book.publisher,
-          imprint: book.imprint,
-          categoryLabel: categoryLabelBySlug.get(book.physicalCategory),
-          tags: book.tags,
-          languageCode: book.languageCode,
-          additionalLanguageCodes: book.additionalLanguageCodes,
-          fictionType: book.fictionType,
-          format: book.format,
-          illustrationStyles: book.illustrationStyles,
-          visualRealism: book.visualRealism,
-          ageMinMonths: book.ageMinMonths,
-          ageMaxMonths: book.ageMaxMonths,
-          readAloudMinutes: book.readAloudMinutes,
-        });
-        return { book, document };
-      })
-      .filter(({ book, document }) => {
-        const state = embeddingStateById.get(book.id);
-        if (!state) return false;
-        if (MODE === "all") return true;
-        if (MODE === "missing") return state.hasEmbedding == null;
-        // stale: has an embedding, but it no longer matches what we'd generate today.
-        if (state.hasEmbedding == null) return false;
-        return (
-          state.embeddingCompositionVersion !== document.version || state.embeddingSourceHash !== document.sourceHash
-        );
-      });
-
-    console.log(
-      `Mode: ${MODE}. ${allBooks.length} total books, ${candidates.length} need embedding generation.`
-    );
     if (DRY_RUN) {
-      for (const { book } of candidates) console.log(`  would generate: ${book.title} (${book.id})`);
+      console.log(`Mode: ${MODE}. ${result.considered} book(s) would be generated.`);
+      for (const book of result.candidates ?? []) console.log(`  would generate: ${book.title} (${book.id})`);
       return;
     }
-    if (candidates.length === 0) return;
 
-    let succeeded = 0;
-    const failed: { id: string; title: string; error: string }[] = [];
-
-    for (let i = 0; i < candidates.length; i += BATCH_SIZE) {
-      const batch = candidates.slice(i, i + BATCH_SIZE);
-      try {
-        const vectors = await provider.embedDocuments(batch.map((c) => c.document.text));
-        await Promise.all(
-          batch.map(async ({ book, document }, index) => {
-            const vector = vectors[index];
-            await db
-              .update(books)
-              .set({
-                embedding: vector,
-                embeddingModel: provider.modelId,
-                embeddingDimension: provider.dimensions,
-                embeddingCompositionVersion: document.version,
-                embeddingSourceHash: document.sourceHash,
-                embeddingGeneratedAt: new Date(),
-              })
-              .where(eq(books.id, book.id));
-            succeeded += 1;
-          })
-        );
-      } catch (error) {
-        // One batch failing must never abort the whole run — every other batch still
-        // gets its chance, and every failure is named in the final summary rather
-        // than silently swallowed.
-        for (const { book } of batch) {
-          failed.push({ id: book.id, title: book.title, error: error instanceof Error ? error.message : String(error) });
-        }
-      }
-    }
-
-    console.log(`Done. Succeeded: ${succeeded}. Failed: ${failed.length}.`);
-    if (failed.length > 0) {
+    console.log(`Mode: ${MODE}. ${result.considered} book(s) needed embedding generation.`);
+    console.log(`Done. Succeeded: ${result.succeeded}. Failed: ${result.failed.length}.`);
+    if (result.failed.length > 0) {
       console.log("Failed books:");
-      for (const f of failed) console.log(`  ${f.title} (${f.id}): ${f.error}`);
+      for (const f of result.failed) console.log(`  ${f.title} (${f.id}): ${f.error}`);
     }
-
-    // Sanity check — every id we intended to update should be one of the ones we
-    // actually touched or explicitly reported as failed, never silently dropped.
-    const accountedFor = succeeded + failed.length;
-    if (accountedFor !== candidates.length) {
-      console.warn(`Warning: ${candidates.length} candidates but only ${accountedFor} accounted for in the summary.`);
+    const accountedFor = result.succeeded + result.failed.length;
+    if (accountedFor !== result.considered) {
+      console.warn(`Warning: ${result.considered} candidates but only ${accountedFor} accounted for in the summary.`);
     }
   } finally {
     await client.end();

@@ -316,15 +316,24 @@ interface (`modelId`, `dimensions`, `embedDocuments`, `embedQuery`) with three t
   used — the real title already appears as the first line of `buildEmbeddingDocument()`'s own
   composed text); a search query is sent as `"task: search result | query: {content}"`. Sourced
   from `ai.google.dev/gemini-api/docs/embeddings` and Google's "Gemini Embedding 2" model
-  announcement — **not independently verified against a live API call**, since no
-  `GEMINI_API_KEY` exists in this environment; re-confirm against Google's current documentation
-  before relying on this in a real deployment. This formatting change is what a real Gemini call
-  actually embeds, even though `buildEmbeddingDocument()`'s own output text and `sourceHash` are
-  unchanged — `EMBEDDING_COMPOSITION_VERSION` was bumped 1 → 2 specifically so any embedding
-  generated before this change is detectably stale. See `tests/unit/embeddings/geminiProvider.test.ts`
-  (proves the two paths send genuinely different request bodies, with a mocked `fetch` — this
-  cannot and does not claim a real semantic-quality improvement, only that the documented
-  contract is actually applied).
+  announcement. **Live-provider validated (2026-09-17)** against a real `GEMINI_API_KEY`: both
+  `embedContent` (single query) and `batchEmbedContents` (document batch) succeed, return exactly
+  768 finite values per input, and a direct cosine-similarity check between the two input
+  formattings of the same underlying text (0.98, not 1.0) confirms the asymmetric prefixes are
+  genuinely accepted and produce related-but-different embeddings — the documented contract, as
+  implemented, matches the live API. This formatting change is what a real Gemini call actually
+  embeds, even though `buildEmbeddingDocument()`'s own output text and `sourceHash` are unchanged
+  — `EMBEDDING_COMPOSITION_VERSION` was bumped 1 → 2 specifically so any embedding generated
+  before this change is detectably stale. See `tests/unit/embeddings/geminiProvider.test.ts`
+  (proves the two paths send genuinely different request bodies, with a mocked `fetch`) and
+  `docs/DECISIONS.md` for the live-call evidence itself.
+
+  **Rate-limit handling (added during real-provider validation, 2026-09-17).** Live testing
+  produced real, reproducible `HTTP 429` responses from Gemini under repeated calls in a short
+  window. Both `embedOne` and `embedDocuments` now retry through `fetchWithRetry` — up to 2
+  retries, honoring a numeric `Retry-After` header when present or falling back to 1.5s, and only
+  for `429`/`503` — before surfacing the real HTTP error. See
+  `tests/unit/embeddings/geminiProvider.test.ts` ("retry on rate limit / transient overload").
 - `FakeEmbeddingProvider` (`lib/embeddings/fakeProvider.ts`) — a deterministic, SHA-256-seeded,
   L2-normalized pseudo-embedding provider, **test-only**. It is never wired into
   `getConfiguredEmbeddingProvider()` and never produces a real search result; it exists purely
@@ -359,14 +368,22 @@ changed since the last embedding" (hash mismatch), and "composition changed sinc
 embedding" (version mismatch) apart. Snapshot-tested (`tests/unit/embeddings/document.test.ts`)
 for byte-identical output given identical input.
 
-**Real semantic-quality validation status: not performed.** No `GEMINI_API_KEY` exists in this
-development/CI environment (`env | grep -i gemini` returns nothing). Every part of the semantic
-layer — schema, provider interface, Gemini adapter, embedding document, graceful degradation,
-scoring integration — is built and covered by tests using the fake provider, but genuine
-semantic *relevance quality* (does a real Gemini embedding actually retrieve the right books for
-a paraphrased or exploratory query) has not been measured against a real embedding and must not
-be reported or assumed as validated. This is an explicit, honestly-reported gap, not an
-oversight — see `docs/IMPLEMENTATION_STATUS.md`.
+**Real semantic-quality validation: performed (2026-09-17), with real evidence and real limits.**
+With a real `GEMINI_API_KEY`, all 49 active development-catalog books were embedded
+(`npm run embeddings:generate`, composition version 2) — 49/49 succeeded, metadata
+(model/dimension/version/hash/timestamp) verified per row, a repeated run against the same data
+is a clean no-op, and a live edit→rebuild→restore cycle on one book's description correctly
+flagged exactly that book as stale and then correctly cleared once restored. Pending/archived
+books were confirmed untouched. See `docs/IMPLEMENTATION_STATUS.md` and `docs/DECISIONS.md` for
+the full validation report, exploratory-query findings, and two ranking corrections this pass
+made from that real evidence (the meaningful-distance ceiling, and a stop-word fix) — see §9.
+This is genuine measured evidence, not a claim that the semantic layer is now perfect: at this
+embedding model and this catalog's scale (~49 books), a query's real cosine distances against
+the whole catalog cluster tightly enough that "the closest available real answer" and "generic
+noise" overlap, and no single distance threshold perfectly separates every case (§9). Deterministic
+fake embeddings elsewhere in this codebase still exist and still prove storage/retrieval/scoring
+*mechanics* only — the distinction documented here is between that and this section's real
+semantic-*quality* evidence.
 
 ## §6 — Autocomplete
 
@@ -479,13 +496,48 @@ score (`scoreBook()`, `rank.ts`) with additive, capped SQL-retrieval-signal bonu
 | `exactRetrievalMatch` | 100 | Matches `exactTitle`'s weight deliberately — exists for cases (e.g. a bare ISBN) where the deterministic free-text pass has no field to compare a digit string against, so retrieval is the *only* place this signal exists. |
 | `fullTextRank` | 30 (scaled/clamped) | `ts_rank` is small and unbounded above; scaled (`× 3`) and clamped so even an unusually high rank can't approach `exactTitle`. |
 | `trigramSimilarity` | 25 | `similarity()` is already 0–1; used directly. |
-| `semanticSimilarity` | 20 | `1 − cosine distance`, clamped to distances under 1; deliberately the smallest weight — semantic retrieval is additive, never a substitute for a real keyword/structured signal. |
+| `semanticSimilarity` | 20 | `1 − cosine distance`, clamped to distances under `MAX_MEANINGFUL_VECTOR_DISTANCE` (0.30); deliberately the smallest weight — semantic retrieval is additive, never a substitute for a real keyword/structured signal. |
 
 Every component is named and independently inspectable — there is no single opaque blended
 number. Absence of a signal (not an FTS/trgm/vector candidate) contributes exactly 0, never a
 fabricated placeholder. `rankScoredBooks()` filters to `score > MINIMUM_MEANINGFUL_SCORE`
 (`rankingConfig.ts`) and sorts by score descending with a deterministic alphabetical
 (`sortTitle`) tie-break — identical inputs always produce identical output ordering.
+
+**The meaningful-distance ceiling, calibrated from real evidence (2026-09-17).** A cosine distance
+at or above `MAX_MEANINGFUL_VECTOR_DISTANCE` contributes nothing at all — without a real ceiling
+here, a barely-related book still adds a small positive number and clears
+`MINIMUM_MEANINGFUL_SCORE` on pure noise. This value went through two real-provider corrections
+in one validation pass:
+1. The original placeholder, `1`, never actually gated anything — a live manual product check
+   returned 49/49 catalog books as "matches" for a real exploratory query.
+2. A first correction to `0.36` (from real cross-query distance measurements) was itself
+   re-measured against a *known-item* title query and found to still let 31/49 books — almost the
+   whole catalog, none thematically related — clear the ceiling, visible directly in a product
+   screenshot ("35 matches" for a single-title lookup).
+3. Cross-referencing three distinct real queries' full distance distributions (one known-item
+   title, two exploratory themes) showed the same shape every time: a small number of genuinely
+   strong matches at 0.17–0.28, then a dense, near-universal noise floor starting around 0.30–0.32
+   that most of the catalog falls into regardless of actual relevance, because short
+   children's-book descriptions embed into a tight region of this model's space at this catalog's
+   scale. **`0.30`** is the current value — chosen to sit just below that noise floor. See
+   `hybridScore.ts`'s own comment and `docs/DECISIONS.md` for the full measurement, and the
+   accepted trade-off it reflects: an exploratory query whose only real catalog answer is a weak,
+   semantic-only match (no deterministic keyword/tag overlap) may now surface fewer results, or
+   none — not a bug, since exact/deterministic signals are designed to dominate, and every
+   genuinely relevant result found during validation also carried real deterministic overlap.
+
+**A second, independent real bug found during the same validation pass: a generic-word substring
+collision.** The word "very" (not previously a stop word) is a literal substring of "every" and
+"everyday" — real Gemini embeddings surfaced this concretely when the known-item query "The Very
+Hungry Caterpillar" was falsely boosted by an unrelated book's "everyday life" tag and by
+description text containing "every", through the tag/description matchers' intentionally loose
+substring rule (§ below). Fixed by adding "very" to `STOP_WORDS`
+(`lib/search/normalize.ts`) — the same fix class as "age" (inside "courage") and "day" (inside
+"everyday", found and fixed for category/format matching specifically in the same pass, via a new
+`containsAnyWholeWordToken()` helper used only for category/format, where a small fixed
+vocabulary makes whole-word matching safe without losing tag/title/description's intentional
+plural/typo tolerance — e.g. "animal" → "animals").
 
 **Exact-known-item dominance and no padding.** An `exactRetrievalMatch` (100) or a strong
 deterministic exact-title match already dominates any purely fuzzy/semantic signal by
@@ -535,16 +587,25 @@ categories:
   starting-school anxiety — themes the real 48-book catalog has no credible match for.
 
 Reported per-category (recall, prohibited violations) and in aggregate (recall, top-1, **top-5**,
-prohibited violations) — not one aggregate recall number alone. Results are reported honestly,
-including whenever real semantic-quality testing was not performed (§5): the report's own final
-line states explicitly that every case ran conventional-only in this environment, and that
-deterministic fake embeddings elsewhere in this codebase prove storage/retrieval/scoring
-mechanics only, never semantic-quality evidence. A genuine regression fails this suite loudly —
-cases are not adjusted to make a run pass; every fix in this correction pass to a genuinely wrong
-expected value (e.g. an alphabetical-tie assumption that didn't match the real top-10) is
-recorded in the case's own comment, distinct from a case that exposed a real product bug (the
-structured-intent-candidate regression this suite caught before it shipped in the original Phase
-5 work).
+prohibited violations) — not one aggregate recall number alone. Results are reported honestly:
+the harness's own `beforeAll` (2026-09-17 real-provider validation) now checks for a real
+`GEMINI_API_KEY` and, when present, generates real embeddings for that run's own seeded+fixture
+books before the cases run, printing which mode actually ran (`REAL HYBRID` vs.
+`conventional-only`) in the report's final line — never silently claimed. When no key is
+configured, every case still runs conventional-only and is reported as such, and deterministic
+fake embeddings elsewhere in this codebase still prove storage/retrieval/scoring mechanics only,
+never semantic-quality evidence. **This test issues one live query-embedding call per dataset
+case (41 total) in a tight loop, and its own document-embedding generation is a further ~50-book
+batch call — real API usage far denser than any real user's search pattern, and it has visibly
+hit provider rate limits under repeated back-to-back runs during validation** (mitigated, not
+eliminated, by `geminiProvider.ts`'s retry-with-backoff); the test's own timeout was raised to
+120s to give real calls, including retries, realistic room. A genuine regression fails this suite
+loudly — cases are not adjusted to make a run pass; every fix in this correction pass to a
+genuinely wrong expected value (e.g. an alphabetical-tie assumption that didn't match the real
+top-10) is recorded in the case's own comment, distinct from a case that exposed a real product
+bug (the structured-intent-candidate regression this suite caught before it shipped in the
+original Phase 5 work, and the meaningful-distance-ceiling / "very"-stop-word bugs the real-provider
+validation pass caught — §9).
 
 ## Multilingual parity
 

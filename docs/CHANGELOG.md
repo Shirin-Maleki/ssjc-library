@@ -4,7 +4,34 @@ A simple, phase-level record of what actually shipped — not a verbose release 
 Entries are dated by when the work was completed; see `docs/IMPLEMENTATION_STATUS.md` for the
 current state and `docs/DECISIONS.md` for the reasoning behind any of these.
 
-## Phase 5 correction pass — 2026-09-17 (in progress)
+## Phase 5 real-provider validation — 2026-09-17
+
+With a real `GEMINI_API_KEY` available for the first time, performed the one item the correction
+pass below could not: live provider testing, real embedding generation for the full 49-book
+development catalog, real hybrid evaluation, and manual product verification. No secret was ever
+printed, logged, or committed.
+
+- **Live provider contract confirmed** against a real API call (768-dimension output, asymmetric
+  query/document prefixes genuinely accepted — 0.98 real cosine similarity between the two
+  formattings of the same text). Added bounded retry-with-backoff after live testing reproduced
+  real `HTTP 429` rate-limit responses.
+- **Real embeddings generated**: 49/49 active development-catalog books, correct metadata
+  verified, idempotent re-runs, live edit→rebuild→restore staleness detection confirmed,
+  pending/archived books untouched.
+- **Two real ranking bugs found from live evidence and fixed**: the semantic meaningful-distance
+  ceiling was still letting most of the catalog through even after one correction (`1` → `0.36` →
+  `0.30`, each step backed by real measured cosine distances); "very" (a substring of
+  "every"/"everyday") was falsely triggering tag/description keyword matches, fixed by
+  stop-wording it — the same fix class as the pre-existing "age"/"courage" and "day"/"everyday"
+  collisions.
+- **Manual product verification** with real embeddings present, at desktop and mobile widths:
+  known-item precision restored, exploratory queries return grounded, jargon-free explanations,
+  autocomplete never calls the embedding provider, zero console errors.
+- Test counts: 238 unit (was 231), 68 integration (unchanged), 41 evaluation cases (unchanged
+  count, now genuinely exercised in real-hybrid mode), 103 E2E (unchanged count; one pre-existing
+  locator ambiguity tightened after real embeddings changed result ordering enough to expose it).
+
+## Phase 5 correction pass — 2026-09-17
 
 A bounded correction pass over four material Phase 5 acceptance gaps a reviewer found (real
 Postgres integration tests pass, typecheck/lint/unit all pass, but real gaps remained), plus two

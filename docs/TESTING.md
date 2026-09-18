@@ -1,7 +1,7 @@
 # Testing
 
-Status: reflects what's actually built and run through Phase 5 (in progress) — every command
-below was executed against the real project, not just written.
+Status: reflects what's actually built and run through the Phase 5 real-provider validation pass
+— every command below was executed against the real project, not just written.
 
 ## Running the suite
 
@@ -53,12 +53,12 @@ against an actual Postgres instance, never a mocked Drizzle client.
 | `embeddings/document.test.ts` (Phase 5) | `buildEmbeddingDocument` determinism (byte-identical output, stable `sourceHash`), tag alphabetical sorting, omitting undefined fields entirely (never `undefined`/`null`/`NaN` in the output text), multilingual primary+additional language names; `buildSearchIndexText` never contains structural label words (the "Read-aloud length" regression), still contains every real content value |
 | `embeddings/fakeProvider.test.ts` (Phase 5) | Deterministic (same text → same vector), different text → different vector, correct dimensionality, L2-normalization, `embedDocuments` matching `embedQuery` per-text |
 | `embeddings/index.test.ts` (Phase 5) | `getConfiguredEmbeddingProvider()` returns `undefined` (never throws) with no `GEMINI_API_KEY`, returns a real `GeminiEmbeddingProvider` when one is set |
-| `search/hybridScore.test.ts` (Phase 5) | Each retrieval signal's contribution in isolation (exact/FTS/trgm/semantic), the full-text/semantic contribution caps relative to `exactTitle`, a vector distance at or beyond the meaningful ceiling contributing nothing, an exact deterministic match outranking a purely semantic match on an unrelated book, threshold filtering (never pads), deterministic alphabetical tie-break |
+| `search/hybridScore.test.ts` (Phase 5; extended in the real-provider validation pass) | Each retrieval signal's contribution in isolation (exact/FTS/trgm/semantic), the full-text/semantic contribution caps relative to `exactTitle`, a vector distance at or beyond the meaningful ceiling contributing nothing, an exact deterministic match outranking a purely semantic match on an unrelated book, threshold filtering (never pads), deterministic alphabetical tie-break; plus (real-provider validation) the exact 0.30 boundary is a real, evidence-based value, not the placeholder `1` it used to be |
 | `search/intent.test.ts` (Phase 5 correction pass) | Direct audit of `parseSearchIntent` against every documented phrasing: an age-range midpoint ("2 to 5"), an explicit age, a duration range not colliding with the age-range regex, "real photos" vs. bare "realistic", "watercolor"/"collage" illustration styles, a catalog language name, an explicit minute count, and a query with no recognizable structured signal |
-| `search/rank.test.ts` (extended, Phase 5 correction pass) | Fiction/nonfiction, format-name, and category-name keyword matching — the soft/strong structured-fit signals `docs/SEARCH.md` §2's hard/strong/soft table documents — plus confirmation that an unrecorded format/fiction status never fabricates a match |
+| `search/rank.test.ts` (extended, Phase 5 correction pass; extended again in the real-provider validation pass) | Fiction/nonfiction, format-name, and category-name keyword matching — the soft/strong structured-fit signals `docs/SEARCH.md` §2's hard/strong/soft table documents — plus confirmation that an unrecorded format/fiction status never fabricates a match; plus (real-provider validation) a category/format match is never credited from a query word that's merely a substring of a category/format word (the "day"/"everyday" collision), and "very" is never credited as a meaningful token via tag/description matching (the "very"/"every" collision) |
 | `search/normalize.test.ts` (extended, Phase 5 correction pass) | `normalizeTitle` — the one canonical title normalizer now shared by both the storage side (`seed.ts`) and the query side (`searchRepository.ts`'s exact-match condition) — strips a leading article, and a query retyped WITH its article normalizes to the same value as one without |
 | `search/autocompleteAction.test.ts` (Phase 5 correction pass) | `autocompleteAction`'s own ordering logic (prefix-first, then the documented type priority, then alphabetical) with `searchRepository.autocomplete` mocked — including topic and language rows passing through untouched |
-| `embeddings/geminiProvider.test.ts` (Phase 5 correction pass) | The asymmetric retrieval input contract actually reaches the network request: `embedQuery` wraps its input as `"task: search result \| query: …"`, `embedDocuments` wraps each input as `"title: none \| text: …"`, and the two differ for identical underlying text — `fetch` is mocked, so this proves the contract is applied, never real semantic quality |
+| `embeddings/geminiProvider.test.ts` (Phase 5 correction pass; extended in the real-provider validation pass) | The asymmetric retrieval input contract actually reaches the network request: `embedQuery` wraps its input as `"task: search result \| query: …"`, `embedDocuments` wraps each input as `"title: none \| text: …"`, and the two differ for identical underlying text — `fetch` is mocked, so this proves the contract is applied, never real semantic quality; plus (real-provider validation) retry-on-429 behavior: retries once then succeeds, respects a numeric `Retry-After` header, gives up after `MAX_RETRIES` and surfaces the real HTTP error, never retries a 400 |
 | `components/SearchInput.autocomplete.test.tsx` (Phase 5 correction pass) | A topic suggestion renders with the "Topic" type label and a language suggestion with the "Language" label — UI-level proof that `AutocompleteRow`'s always-declared types actually reach the screen |
 
 Environment note: tests run with `environment: "node"`, not `jsdom` — an early attempt to use
@@ -95,12 +95,21 @@ It," "My First Day at Oakwood") are inserted and removed by the evaluation harne
 part of `src/db/seed.ts`, for the two exploratory themes the real 48-book catalog has no credible
 match for. This is a *report* as much as a test: a genuine regression fails it loudly rather than
 being tuned away, and it is what caught the structured-intent-candidate regression (§2) before it
-shipped in the original Phase 5 work. **41/41 cases pass** as of this writing (37 recall checks,
-9 top-1 checks, 1 top-5 check, 0 prohibited-result violations). The report also states honestly
-that no real embedding provider is configured in this environment, so every case ran through
-conventional retrieval only — no hybrid-vs-conventional comparison with a real semantic signal
-has been performed; deterministic fake embeddings elsewhere in this codebase prove storage/
-retrieval/scoring mechanics only, never cited as semantic-quality evidence.
+shipped in the original Phase 5 work, and (2026-09-17) the too-loose semantic-distance ceiling
+and the "very" substring collision before either reached the live product's default configuration
+— see `docs/DECISIONS.md`. **41/41 cases pass** as of this writing (34 recall checks, 9 top-1
+checks, 1 top-5 check, 0 prohibited-result violations). **When a real `GEMINI_API_KEY` is
+present, the harness's own `beforeAll` now generates real embeddings for that run's
+seeded+fixture books before the cases run**, and the report's own final line states plainly which
+mode actually ran (`REAL HYBRID` vs. conventional-only) — never silently assumed either way. At
+least one fully clean real-hybrid run (0 embedding failures) reproduced this same 34/34, 9/9,
+1/1, 0-violation result under genuine real-hybrid conditions. This test issues one live
+query-embedding call per case (41 total) plus one bulk document-embedding call in a tight loop —
+denser real API usage than any real user's search pattern — and has visibly hit the provider's
+own rate limit under repeated back-to-back runs during validation (its timeout was raised to
+120s accordingly). When no key is configured, every case still runs conventional retrieval only,
+reported as such; deterministic fake embeddings elsewhere in this codebase still prove
+storage/retrieval/scoring mechanics only, never cited as semantic-quality evidence.
 
 ## E2E tests (Playwright) — `tests/e2e/`
 
@@ -359,6 +368,39 @@ session with many backgrounded/interrupted test runs.
    embedding composition version was bumped so any hypothetical existing embedding is detectably
    stale. **Not independently verified against a live API call.**
 
+### Real bugs this pass caught — Phase 5 real-provider validation (2026-09-17)
+
+1. **`HTTP 429` from Gemini's `batchEmbedContents`, reproduced live**, not hypothesized — repeated
+   calls within one validation session (smoke tests, dev-catalog generation, multiple evaluation
+   runs) reliably triggered it. Fixed with bounded retry-with-backoff (`fetchWithRetry`,
+   `geminiProvider.ts`); a sustained, heavy burst can still exceed 2 retries (observed directly:
+   several later evaluation runs still failed to generate embeddings even after multi-minute
+   waits) — not eliminated, but the ordinary transient case is now absorbed. 4 new unit tests
+   (`tests/unit/embeddings/geminiProvider.test.ts`).
+2. **The semantic meaningful-distance ceiling (`hybridScore.ts`) was still too loose after its
+   first correction.** `1` (never gated anything) → `0.36` (from one query's real distances) →
+   **`0.30`** (from three real queries' distances, after `0.36` was itself caught letting 31/49
+   catalog books clear it for an unrelated known-item query — visible directly as "35 matches" in
+   a product screenshot for a single-title lookup, and in the evaluation harness's own top-3 for
+   `known-item-exact-title`). Full measurement in `docs/DECISIONS.md`.
+3. **"very" (a literal substring of "every"/"everyday") was falsely triggering tag/description
+   keyword matches** — the known-item query "The Very Hungry Caterpillar" boosted an unrelated
+   book via its "everyday life" tag. Fixed by stop-wording "very" (`normalize.ts`), the same fix
+   class as the pre-existing "age" (inside "courage"). A related, distinct collision — "day"
+   inside "everyday", specific to category/format matching — was fixed with a new whole-word
+   matcher used only for those two fields.
+4. **A pre-existing E2E locator ambiguity, exposed (not caused) by real embeddings changing
+   result ordering**: `find.spec.ts`'s "Flow 3" asserted `getByText("Real photography")` on the
+   top result row, which now also legitimately matches that text inside the row's own grounded
+   explanation sentence ("Matches the title, the 'animals' topic, and Real photography") — a
+   genuine strict-mode selector ambiguity, not a ranking regression (the actual top result did
+   have `visual_realism: real_photography`, exactly as required). Fixed with `{ exact: true }` to
+   target the metadata badge specifically.
+
+All four are fixed and covered by regression tests (unit tests for 1–3; the corrected E2E
+assertion for 4). Full detail and the underlying measurements: `docs/SEARCH.md` §5/§9,
+`docs/DECISIONS.md`.
+
 ## Query performance evidence at realistic scale (Phase 5)
 
 The 48–51-row dev/test/e2e seed is too small to expose real index-usage problems, so
@@ -427,6 +469,20 @@ comes from an actual `EXPLAIN ANALYZE` run, not an estimate.
   showing all 12), Book Detail navigated to from a filtered search and back (the return context
   correctly preserved the original query), the zero-results state, and the incomplete-metadata
   book's real-card rendering. No visual defects found.
+- Phase 5 real-provider validation (2026-09-17): captured and inspected real desktop (1440×900)
+  and mobile (390×844) screenshots — via another throwaway, deleted Playwright script — with real
+  Gemini embeddings present in the development database: a known-item query ("The Very Hungry
+  Caterpillar"), a structured multi-constraint query (animals + age 4), three exploratory queries
+  (winter atmosphere, gentle goodbye, starting-school anxiety), and the autocomplete dropdown.
+  Confirmed: the known-item query returns exactly its one correct match with zero semantic noise
+  (post-fix); grounded explanations never use AI/vector/embedding language; autocomplete triggers
+  zero requests to `generativelanguage.googleapis.com` while typing (verified via network-request
+  interception); zero browser console errors on either viewport. An intermittent Next.js
+  dev-overlay hydration-mismatch warning was observed and traced to a pre-existing, unrelated
+  Phase 3 pattern (`SearchInput.tsx`'s voice-button conditional, depending on client-only feature
+  detection) — not touched by this pass. Screenshots:
+  `docs/screenshots/real-provider-validation/` (local, not committed, same convention as prior
+  phases).
 
 ## What's not tested yet (by design)
 

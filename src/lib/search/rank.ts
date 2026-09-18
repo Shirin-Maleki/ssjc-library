@@ -43,6 +43,34 @@ function containsAnyToken(normalizedText: string, tokens: string[]): boolean {
 }
 
 /**
+ * Whole-word variant of `containsAnyToken` — a query token must equal one of the
+ * target text's own words exactly, not merely appear as a substring somewhere
+ * inside a longer word. Used only for category and format matching (both small,
+ * fixed label vocabularies where substring tolerance buys no real plural/typo
+ * benefit but carries real false-positive risk), never for title/tag/description
+ * matching, which intentionally keep the looser substring rule (docs/SEARCH.md:
+ * "animal" should match the tag "animals").
+ *
+ * Real-provider validation finding (2026-09-17): a live manual product check with
+ * real Gemini embeddings showed "A Little Bit of Music and Movement" and "Kitchen
+ * Helpers" — both tagged/categorized "Everyday Life & Play" — ranking above
+ * genuinely relevant books for the query "a gentle story about saying goodbye to a
+ * parent for the day", because the token "day" is a literal substring of
+ * "everyday" and `containsAnyToken`'s plain substring check doesn't respect word
+ * boundaries. The exact same class of bug the "age"/"courage" fix
+ * (`docs/SEARCH.md`) already documents, in a new field — but here stop-wording the
+ * one colliding word ("day" is a genuinely meaningful word in other queries, e.g.
+ * "a snowy day," unlike "age"/"year"/"minute," which are pure scaffolding already
+ * redundantly extracted by the age/duration intent parser) would throw away real
+ * signal, so the fix is word-boundary matching at the two call sites where a fixed,
+ * small label vocabulary makes it safe.
+ */
+function containsAnyWholeWordToken(normalizedText: string, tokens: string[]): boolean {
+  const words = new Set(normalizedText.split(" ").filter(Boolean));
+  return tokens.some((token) => words.has(token));
+}
+
+/**
  * For named entities (author/illustrator/publisher) specifically: requires every word
  * of the entity's own name to appear among the query's tokens, not just any single
  * shared word. Without this, "books by Eric Carle" also matched "Eric Hill" on the
@@ -105,7 +133,7 @@ export function scoreBook(book: Book, query: string): ScoredBook {
       reasons.push({ type: "publisher", value: book.imprint });
     }
 
-    if (containsAnyToken(normalizeSearchText(book.physicalCategory), tokens)) {
+    if (containsAnyWholeWordToken(normalizeSearchText(book.physicalCategory), tokens)) {
       score += RANKING_WEIGHTS.physicalCategory;
       reasons.push({ type: "category", value: book.physicalCategory });
     }
@@ -120,7 +148,7 @@ export function scoreBook(book: Book, query: string): ScoredBook {
     // matched, never scored (Phase 5 correction pass).
     if (book.format) {
       const formatLabel = normalizeSearchText(FORMAT_LABELS[book.format]);
-      if (containsAnyToken(formatLabel, tokens)) {
+      if (containsAnyWholeWordToken(formatLabel, tokens)) {
         score += RANKING_WEIGHTS.formatOrFictionType;
         reasons.push({ type: "format", value: book.format });
       }

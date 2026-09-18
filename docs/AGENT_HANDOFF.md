@@ -75,17 +75,21 @@ of acceptance gaps) are all complete. **Phase 5 (real search architecture) has h
 correction pass (2026-09-17) closing four material acceptance gaps a review found — migration
 safety for an already-populated database, unbounded queryless-browse pagination, incomplete
 autocomplete, and a thin evaluation suite — plus two adjacent fixes (title-normalization
-mismatch, an unlabeled Gemini retrieval contract). Phase 5 overall is still not marked
-complete/approved** — see `docs/IMPLEMENTATION_STATUS.md`; the one genuinely open item is real
-semantic-quality validation, which needs a real `GEMINI_API_KEY` this environment doesn't have.
-Find a Book now runs a real, bounded, database-backed hybrid search pipeline (structured SQL
-filters, full-text + trigram + optional semantic retrieval, `docs/SEARCH.md`) instead of loading
-the whole catalog into Node and filtering in memory; Reading Lists are genuinely shared across
-every staff member/device via authenticated Server Actions; the Library Guide is real content.
-pgvector and `pg_trgm` are enabled and `books.embedding` exists, but **no real `GEMINI_API_KEY`
-exists in this environment** — real semantic-quality validation has not been performed, and
-conventional search works completely without it. Still no Google Drive/Sheets integration. The
-full brand system (name, palette, typography, logo) is real — nothing placeholder remains
+mismatch, an unlabeled Gemini retrieval contract) — and then a real-provider validation pass
+(2026-09-17, same day) that performed the one item the correction pass left open: real
+semantic-quality validation against a live `GEMINI_API_KEY`.** That pass generated real
+embeddings for the full development catalog, ran the live provider through its full contract, ran
+the evaluation suite in real-hybrid mode, and manually verified the running product — finding and
+fixing three real bugs along the way (a too-loose semantic-distance ceiling recalibrated twice
+from measured evidence, a generic-word substring collision, and missing rate-limit handling). See
+`docs/IMPLEMENTATION_STATUS.md` for the authoritative current state. Find a Book now runs a real,
+bounded, database-backed hybrid search pipeline (structured SQL filters, full-text + trigram +
+optional semantic retrieval, `docs/SEARCH.md`) instead of loading the whole catalog into Node and
+filtering in memory; Reading Lists are genuinely shared across every staff member/device via
+authenticated Server Actions; the Library Guide is real content. pgvector and `pg_trgm` are
+enabled, `books.embedding` is populated for the development catalog, and conventional search
+still works completely without a configured provider. Still no Google Drive/Sheets integration.
+The full brand system (name, palette, typography, logo) is real — nothing placeholder remains
 there. See `docs/IMPLEMENTATION_STATUS.md` for the authoritative, continuously updated detail —
 this file only orients you to the process, not the current state, since state changes every
 phase and duplicating it here would drift.
@@ -257,6 +261,52 @@ if the test harness touches the same platform behavior the app does.
   changed between model generations even though the underlying goal (asymmetric retrieval) didn't.
   When no real API credential exists to test against, say so explicitly rather than asserting the
   contract is correct.
+
+### Additional lessons from the Phase 5 real-provider validation pass (2026-09-17)
+
+- **A distance threshold calibrated from one query's real embeddings is not enough — measure
+  several structurally different queries before trusting the gap you saw.** The first correction
+  (`1` → `0.36`) used one exploratory query's real distances and looked well-justified in
+  isolation; a completely different query type (a plain known-item title lookup) immediately
+  exposed that `0.36` still let almost the entire small catalog through, because the "noise
+  floor" for this embedding model at this catalog's scale (~49 books) turned out to sit lower
+  (~0.30-0.32) than the gap the first query happened to show. If you're calibrating a distance/
+  similarity threshold from real embeddings, measure a known-item query, a structured query, and
+  at least one exploratory query — not just the query type the bug report happened to mention.
+- **A small catalog makes "the closest available real answer" and "generic noise" genuinely
+  overlap in embedding-distance space — this is a real, inherent limit of the approach at this
+  scale, not a bug to keep chasing with a tighter threshold.** Tightening further trades away the
+  weakest exploratory queries' only available (if imperfect) answer; loosening lets noise back
+  in for precise queries. The right response was picking a defensible trade-off point from real
+  evidence and documenting the limitation honestly, not iterating toward an illusory "perfect"
+  threshold.
+- **A generic word can independently collide with the *tag/description* substring-matching rule
+  in a completely different way than it collides with the *category/format* rule** — "very"
+  (inside "every"/"everyday") and "day" (also inside "everyday") are two distinct real
+  collisions found in the same query, requiring two different fixes (a stop-word addition for
+  "very," since tag/description matching's looseness is intentional and shouldn't be narrowed; a
+  whole-word matcher for "day," scoped only to category/format, a small fixed vocabulary where
+  losing substring tolerance costs nothing real). Finding one substring-collision bug in a query
+  doesn't mean you've found all of them in that same query — check every matcher the query's
+  tokens could reach.
+- **Rate limits from a real provider are not hypothetical once you're actually calling it
+  repeatedly in one session** — smoke tests, embedding generation, and repeated evaluation runs
+  in quick succession reliably triggered real `HTTP 429`s, and a real wait (even 8+ minutes) does
+  not reliably clear it if the underlying quota is a daily one rather than per-minute. Build
+  bounded retry-with-backoff before doing any repeated real-provider testing, and budget real
+  calls conservatively across a validation session — a diagnostic script that queries already-
+  stored embeddings via SQL (one API call for a query embedding, then a plain `<=>` distance
+  query) is far cheaper than re-running a full evaluation harness that re-embeds an entire
+  catalog just to inspect one query's distance distribution.
+- **When manually running the dev server with a throwaway override for a secret you don't know
+  the real value of (e.g. `STAFF_PASSWORD_HASH`), escape every `$` in the hash as `\$`, or it will
+  be silently mangled the moment any `.env.local` file exists in the project** — this is not a
+  new bug, it's the exact pre-existing platform quirk `docs/SECURITY.md`/`docs/DECISIONS.md`
+  already document and already fixed inside `scripts/hash-password.mjs`/`playwright.config.ts`;
+  it just doesn't protect an ad hoc manual override you type yourself. Diagnose a login that
+  "should work" but doesn't (a fast, ~3ms response, a generic "password didn't work" error) by
+  temporarily logging the actual `process.env` value the running server sees, not by re-guessing
+  the shell quoting.
 
 ## Practical lessons from Phase 3 (worth knowing before touching voice or Reading Lists code)
 

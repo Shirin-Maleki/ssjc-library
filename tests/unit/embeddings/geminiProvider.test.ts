@@ -69,3 +69,78 @@ describe("GeminiEmbeddingProvider — asymmetric retrieval input contract", () =
     expect(queryBody.content.parts[0].text).not.toBe(documentBody.requests[0].content.parts[0].text);
   });
 });
+
+/**
+ * Real-provider validation finding (2026-09-17): rapid successive calls in live
+ * testing produced a genuine `HTTP 429` from Gemini's `batchEmbedContents`, and the
+ * adapter had no retry at all — a single rate-limit response permanently failed an
+ * entire batch. These tests use fake timers so the retry backoff never actually
+ * delays the test suite.
+ */
+describe("GeminiEmbeddingProvider — retry on rate limit / transient overload", () => {
+  const originalFetch = global.fetch;
+
+  beforeEach(() => {
+    global.fetch = vi.fn();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    vi.useRealTimers();
+  });
+
+  it("retries once after an HTTP 429 and succeeds on the second attempt", async () => {
+    const fetchMock = vi.mocked(global.fetch);
+    fetchMock
+      .mockResolvedValueOnce(new Response("rate limited", { status: 429 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(fakeEmbedContentResponse()), { status: 200 }));
+
+    const provider = new GeminiEmbeddingProvider("fake-key");
+    const resultPromise = provider.embedQuery("caterpillar");
+    await vi.runAllTimersAsync();
+    const result = await resultPromise;
+
+    expect(result).toHaveLength(EMBEDDING_DIMENSIONS);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("respects a numeric Retry-After header instead of the default backoff", async () => {
+    const fetchMock = vi.mocked(global.fetch);
+    fetchMock
+      .mockResolvedValueOnce(new Response("rate limited", { status: 429, headers: { "Retry-After": "5" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(fakeEmbedContentResponse()), { status: 200 }));
+
+    const provider = new GeminiEmbeddingProvider("fake-key");
+    const resultPromise = provider.embedQuery("caterpillar");
+    await vi.advanceTimersByTimeAsync(4999);
+    expect(fetchMock).toHaveBeenCalledTimes(1); // hasn't retried yet — still waiting out Retry-After
+    await vi.advanceTimersByTimeAsync(2);
+    await resultPromise;
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("gives up after MAX_RETRIES and surfaces the real HTTP error", async () => {
+    const fetchMock = vi.mocked(global.fetch);
+    fetchMock.mockResolvedValue(new Response("rate limited", { status: 429 }));
+
+    const provider = new GeminiEmbeddingProvider("fake-key");
+    const resultPromise = provider.embedQuery("caterpillar").catch((e) => e);
+    await vi.runAllTimersAsync();
+    const error = await resultPromise;
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("HTTP 429");
+    // 1 initial attempt + MAX_RETRIES (2) retries = 3 total calls, never unbounded.
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("never retries a non-retryable error (e.g. 400 bad request)", async () => {
+    const fetchMock = vi.mocked(global.fetch);
+    fetchMock.mockResolvedValueOnce(new Response("bad request", { status: 400 }));
+
+    const provider = new GeminiEmbeddingProvider("fake-key");
+    await expect(provider.embedQuery("caterpillar")).rejects.toThrow("HTTP 400");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});

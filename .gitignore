@@ -62,3 +62,5 @@ tmp/
 *.png
 *.heic
 !public/brand/**
+
+.env.local
