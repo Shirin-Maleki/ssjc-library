@@ -1,17 +1,20 @@
 # Testing
 
-Status: reflects what's actually built and run through the Phase 5 real-provider validation pass
-— every command below was executed against the real project, not just written.
+Status: reflects what's actually built and run through Phase 6 — every command below was
+executed against the real project, not just written.
 
 ## Running the suite
 
 ```
 npm run typecheck        # tsc --noEmit
 npm run lint             # eslint
-npm run test             # vitest run — unit tests, no database
+npm run test             # vitest run — unit tests, no database (includes Google Drive mocked tests)
 npm run test:integration # vitest run against a real Postgres database (see docs/DATABASE_SETUP.md)
 npm run test:e2e         # playwright test — E2E, against a real production build + real Postgres
 npm run build            # next build
+
+# Opt-in, requires real Google OAuth credentials — never part of the above, never CI:
+npm run google:smoke     # a real, bounded, self-cleaning round trip against the configured Drive folder
 ```
 
 `npm run test:e2e` builds and starts the app itself (`playwright.config.ts`'s `webServer`)
@@ -110,6 +113,47 @@ own rate limit under repeated back-to-back runs during validation (its timeout w
 120s accordingly). When no key is configured, every case still runs conventional retrieval only,
 reported as such; deterministic fake embeddings elsewhere in this codebase still prove
 storage/retrieval/scoring mechanics only, never cited as semantic-quality evidence.
+
+## Google Drive unit tests (Phase 6) — `tests/unit/googleDrive/`
+
+All mocked at the HTTP boundary (`fetch`) — never real network calls, never dependent on
+real credentials, always part of the normal `npm test` run. See
+`docs/GOOGLE_INTEGRATION.md` for the architecture these tests cover.
+
+| File | Covers |
+|---|---|
+| `config.test.ts` | Missing client id/secret/refresh token/root folder id (individually and all at once); a whitespace-only value treated as missing; configuration errors never contain a real secret value; `isDriveConfigured()` never throws. |
+| `validation.test.ts` | Every allowed source-cover MIME type accepted, an unsupported one rejected; size validation (valid, zero, negative, `NaN`, `Infinity`, over the 25 MiB limit); filename normalization (path separators replaced, control characters/null bytes stripped, whitespace collapsed, throws `invalid_file` when nothing survives). |
+| `retry.test.ts` | Immediate success (no retry); retries a 429 and a transient 503 then succeeds; honors a numeric `Retry-After` header; gives up after the bounded maximum (4 total attempts) and returns the last real response; never retries 400/401/403/404; retries then recovers from a network-level failure; rethrows after exhausting retries on a persistent network failure. |
+| `rootContainment.test.ts` | The root itself, a direct child, and a multi-level nested descendant are all contained; a file entirely outside the root is denied; an inaccessible parent denies safely without throwing; a cycle in the ancestry graph terminates and correctly denies (even a cycle that *also* has a branch reaching the root still resolves correctly); a chain longer than `MAX_ANCESTRY_DEPTH` is denied, one within it succeeds; multiple parents are contained if any one path reaches the root. |
+| `oauthClient.test.ts` | Successful token exchange; the refresh token/client id/secret are actually sent to Google's token endpoint; expiry parsing and in-memory reuse before expiry; refresh triggered again once within the expiry safety margin, not before; `invalid_grant` mapped to `authorization_revoked_or_invalid`; 401 → `authorization_required`; 429 → `rate_limited`; a persistent 5xx → `transient_provider_failure`, a transient one recovers on retry; a thrown error never contains the real client secret or refresh token used in the test; `configuration_missing` is thrown without ever calling `fetch` at all. |
+| `googleDriveProvider.test.ts` | `verifyConnection` for both a My Drive-style and a Shared Drive-style root, and its failure mappings (missing/trashed/not-a-folder root → `root_folder_missing`; revoked credential → `authorization_required`); bounded `listChildren` (page-size cap, pagination token round-trip, parent-scoped/trashed-excluded query, Shared Drive compatibility flags, denies a folder outside the root); `getFileMetadata` normalization (a rename doesn't change `id`, missing-file/permission-denied mappings, a malformed non-JSON response); `downloadSource` (real byte return, refuses a folder/trashed file/no-download-capability file); `initiateResumableUpload` (returns the `Location` header as `sessionUri`, `upload_failed` when Google omits it, pre-Drive-call rejection of an unsupported MIME type or oversized file *before* any network call, an invalid or outside-root parent, the session URI never appearing in a thrown message); `confirmUploadedFile` (a valid match; parent/MIME/size mismatches — including a mismatched-but-still-in-root parent, which is a business-rule failure, not a security one; outside-root; missing file); a dedicated secret-safety test across a realistic `verifyConnection` failure. |
+
+**Real Google connectivity is never exercised by these tests or by `npm test`/CI** — see
+"Real Google smoke test" below.
+
+## Real Google smoke test (Phase 6, opt-in, requires real credentials) — `npm run google:smoke`
+
+**Not part of `npm test`, `npm run test:integration`, or any CI gate.** Requires real
+`GOOGLE_OAUTH_CLIENT_ID`/`GOOGLE_OAUTH_CLIENT_SECRET`/`GOOGLE_OAUTH_REFRESH_TOKEN`/
+`GOOGLE_DRIVE_ROOT_FOLDER_ID` (`docs/GOOGLE_SETUP.md`) — exits with a clear
+`configuration_missing` message and a non-zero exit code when they aren't present, rather
+than silently skipping or fabricating a result.
+
+Performs, against the real configured Drive folder: (A) OAuth token refresh + root
+verification; (B) a bounded listing of the root's immediate children plus a tiny bounded
+metadata sample from up to three child folders — no download, no processing, no
+renaming; (C) generates a real, valid, tiny PNG entirely in memory (constructed
+chunk-by-chunk with real CRC32s via `scripts/google/smoke.ts`'s own `generateTinySyntheticPng()`,
+never a binary asset committed to the repository) and uploads it through the real
+resumable-upload implementation — the same code path the future Phase 7 upload flow will
+use, not a shortcut; (D) confirms the resulting file server-side; (E) downloads it back
+and verifies a byte-for-byte match; (F) trashes only that exact disposable file, after
+independently re-checking its id, filename prefix, and root containment; (G) lists the
+root again and confirms every pre-existing child id survived unchanged, printing
+`existing library assets modified: NO` only when that's genuinely demonstrated. See
+`docs/IMPLEMENTATION_STATUS.md` for whether this has actually been run against real
+credentials in this environment, and its result if so.
 
 ## E2E tests (Playwright) — `tests/e2e/`
 

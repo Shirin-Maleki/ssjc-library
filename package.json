@@ -20,7 +20,9 @@
     "db:reset": "tsx src/db/reset.ts",
     "db:check": "drizzle-kit check",
     "embeddings:generate": "tsx scripts/embeddings/generate.ts",
-    "search:rebuild-text": "tsx scripts/search/rebuildSearchText.ts"
+    "search:rebuild-text": "tsx scripts/search/rebuildSearchText.ts",
+    "google:authorize": "tsx scripts/google/authorize.ts",
+    "google:smoke": "tsx scripts/google/smoke.ts"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.23",

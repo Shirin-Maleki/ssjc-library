@@ -4,6 +4,42 @@ A simple, phase-level record of what actually shipped — not a verbose release 
 Entries are dated by when the work was completed; see `docs/IMPLEMENTATION_STATUS.md` for the
 current state and `docs/DECISIONS.md` for the reasoning behind any of these.
 
+## Phase 6 — Google Drive connection — 2026-09-18
+
+Establishes secure, real Google Drive infrastructure for future cover-photo storage
+(Phase 7 intake, Phase 10 bulk import) — no Add Book UI, no image AI, no processing of the
+existing ~1,500-photo collection. Implementation complete; real Google validation
+(`npm run google:smoke`) awaits user OAuth Cloud setup — see `docs/GOOGLE_SETUP.md`.
+
+- **`CoverStorageProvider` abstraction + `GoogleDriveCoverStorageProvider`**
+  (`src/lib/googleDrive/`), mirroring the `src/lib/embeddings/` provider-boundary pattern
+  already proven in this codebase. Methods: connection verification, bounded/paginated
+  listing, metadata lookup, source download, resumable-upload initiation, upload
+  confirmation, test-only cleanup.
+- **OAuth 2.0 Web Server authorization** with one SSJC Workspace account and offline
+  refresh access — not a service account (the existing photo hierarchy would need
+  reorganizing to support one cleanly) and not teacher Google login (SSJC staff
+  authentication is completely unchanged). Two narrow scopes only: `drive.readonly` +
+  `drive.file`.
+- **Root-folder security boundary**: every operation is proven to reach
+  `GOOGLE_DRIVE_ROOT_FOLDER_ID` or a real descendant of it via an ancestry walk
+  (cycle-guarded, depth-bounded) before it may proceed — an accessible-but-unrelated Drive
+  ID can never become reachable through this application.
+- **Resumable-upload infrastructure** for the future Phase 7 browser-upload flow: the
+  server validates and initiates the upload, returns only the resumable session URI (never
+  an OAuth credential) to the browser, then independently re-verifies the completed upload
+  from Drive before trusting it.
+- **`npm run google:authorize`** (local, interactive, one-time OAuth setup) and
+  **`npm run google:smoke`** (real, opt-in, self-cleaning end-to-end connectivity proof) —
+  both CLI-only, never a production route.
+- **No database migration** — `books.cover_drive_*`/`ingestion_items.drive_file_id` already
+  existed from the Phase 0 schema review. No OAuth/token table; credentials live in
+  environment/deployment secrets only.
+- **No regression to Phase 5** — search, Reading Lists, Book Detail, voice search, and
+  authentication are all untouched.
+- Test counts: 325 unit (was 238, +87 across 6 new files, all mocked at the HTTP boundary),
+  68 integration (unchanged), 41 evaluation cases (unchanged), 103 E2E (unchanged).
+
 ## Phase 5 real-provider validation — 2026-09-17
 
 With a real `GEMINI_API_KEY` available for the first time, performed the one item the correction

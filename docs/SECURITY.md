@@ -178,14 +178,72 @@ generally, not just for this codebase.
 - **No child/student data is involved anywhere in Phase 5** — search operates only on catalog
   metadata (titles, authors, descriptions, tags) and a teacher's own transient query text.
 
-## What's explicitly out of scope through Phase 5
+## Google Drive integration (Phase 6)
+
+Full architecture in `docs/GOOGLE_INTEGRATION.md`; setup in `docs/GOOGLE_SETUP.md`. Security
+posture specifically:
+
+- **The OAuth refresh token is a high-value infrastructure secret** — it grants standing
+  access (via `drive.readonly`/`drive.file`) to the configured Drive folder for as long as
+  it isn't revoked. It lives only in `.env.local` / deployment secret configuration, never
+  PostgreSQL, never a log line, never a thrown error message
+  (`tests/unit/googleDrive/oauthClient.test.ts` asserts this directly against a mocked
+  failure carrying a real-looking secret value).
+- **The OAuth client secret remains server-side always** — read only in
+  `src/lib/googleDrive/config.ts`/`oauthClient.ts`, both imported only by
+  `src/lib/googleDrive/index.ts` (`import "server-only"`) in production code, plus the two
+  local-only CLI scripts (`scripts/google/authorize.ts`, `scripts/google/smoke.ts`), which
+  never run as part of the deployed app or in CI.
+- **Access tokens remain server-side and in-memory only** — never persisted anywhere,
+  never sent to a browser, cached only in `oauthClient.ts`'s own module-level variable
+  until shortly before expiry.
+- **The resumable upload session URI is ephemeral capability data, not a credential in
+  the OAuth sense — but still sensitive.** It is the ONE Google-related value ever allowed
+  to cross the server/browser boundary (the future Phase 7 upload flow), because it grants
+  only the narrow ability to complete one specific, already-server-validated upload
+  (exact filename/MIME/size/parent), not standing Drive access. It is never logged, never
+  put in analytics, never included in a thrown error message
+  (`tests/unit/googleDrive/googleDriveProvider.test.ts` asserts this).
+- **No teacher Google login exists or is planned for this integration.** SSJC staff
+  authenticate exactly as before (shared password + signed session cookie, above) —
+  configuring or removing Drive credentials has zero effect on staff/admin
+  authentication.
+- **The configured Drive root folder is a hard boundary, enforced in code, not just by
+  convention.** `src/lib/googleDrive/rootContainment.ts`'s ancestry walk rejects any
+  file/folder outside `GOOGLE_DRIVE_ROOT_FOLDER_ID` — the authorized account's broader
+  Drive access (whatever else it can technically reach) is never reachable through this
+  application. See `docs/GOOGLE_INTEGRATION.md`, "Root-folder security boundary," and
+  `tests/unit/googleDrive/rootContainment.test.ts` for the cycle/depth/inaccessible-parent
+  cases this specifically guards against.
+- **No whole-Drive traversal or search.** Every listing is scoped by an explicit parent
+  folder id (already-known configuration); nothing performs a Drive-wide `corpora=allDrives`
+  query to "find" the SSJC content.
+- **No secrets or image bytes in logs.** The only logging Phase 6 code performs is a
+  handful of safe structured fields (operation, category, file id) in
+  `scripts/google/smoke.ts`'s own terminal output — never a token, never raw image data,
+  never a resumable session URI.
+- **No Google credentials in PostgreSQL, ever.** `books.cover_drive_file_id` and friends
+  store a Drive file *id* (public-ish metadata, not a secret) — never a token, never a
+  session URI.
+- **Rotation/revocation**: see `docs/GOOGLE_SETUP.md` §10 — revoke at
+  [myaccount.google.com/permissions](https://myaccount.google.com/permissions), or rotate
+  by re-running `npm run google:authorize` (Google always issues a fresh refresh token
+  under `prompt=consent`).
+- **Privacy rule for the photo collection itself**: cover photographs only — the existing
+  and future collections this integration reaches are photographs of book covers, never
+  children or staff. Phase 6 does not process, view, or alter any existing photo's
+  content; this rule is a standing constraint for whoever does capture future photos, not
+  something Phase 6's own code enforces (it has no way to inspect image *content*).
+
+## What's explicitly out of scope through Phase 6
 
 - The rate limiter is still in-memory, not backed by the now-real `login_attempts` table (see
   above).
 - No file uploads yet, so upload validation (type/size allowlisting) isn't implemented —
-  lands with the Add-a-Book flow in Phase 7.
-- No Google Drive/Sheets credentials exist yet, so there's nothing to scope least-privilege for
-  yet on that front.
+  lands with the Add-a-Book flow in Phase 7. Phase 6 builds the *provider-level* validation
+  (`src/lib/googleDrive/validation.ts`) that Phase 7 will call into; there is still no
+  teacher-facing upload UI.
+- No Google Sheets credentials exist yet — Phase 9 owns that decision.
 
 ## Verified, not assumed
 

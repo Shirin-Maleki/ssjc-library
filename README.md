@@ -16,18 +16,23 @@ exactly what exists right now versus what is planned.
 
 ## Project status
 
-**Current phase: Phase 5 — Real search architecture (in progress).** Phase 4 (real database) is
-complete and approved. Find a Book now runs a real, bounded, database-backed hybrid search
-pipeline — structured SQL filters, Postgres full-text + trigram fuzzy matching, and optional
-pgvector semantic retrieval, combined by a transparent scorer on top of the unchanged
-deterministic Phase 2–4 ranking engine — instead of loading the whole catalog into Node and
-filtering it in memory. Reading Lists (genuinely shared Postgres persistence, Phase 4) and voice
-search (Phase 3) are unaffected. Staff/admin authentication (Phase 1) still gates everything.
-**No real `GEMINI_API_KEY` exists in this environment** — semantic retrieval is fully built and
-tested with a deterministic fake provider, but real semantic-quality validation has not been
-performed; conventional search works completely without any key. See
+**Current phase: Phase 6 — Google Drive connection (implementation complete, real validation
+pending user OAuth setup).** Phase 5 (real search architecture, including real-provider
+validation against a live Gemini API key) is complete and approved. Find a Book runs a real,
+bounded, database-backed hybrid search pipeline — structured SQL filters, Postgres full-text +
+trigram fuzzy matching, and real optional pgvector semantic retrieval, combined by a transparent
+scorer on top of the unchanged deterministic Phase 2–4 ranking engine. Reading Lists (genuinely
+shared Postgres persistence, Phase 4) and voice search (Phase 3) are unaffected. Staff/admin
+authentication (Phase 1) still gates everything and is completely separate from the Google
+account this phase authorizes for Drive infrastructure — no teacher ever signs in with Google.
+Phase 6 builds a `CoverStorageProvider` abstraction, OAuth token management, a root-folder
+security boundary, and resumable-upload infrastructure for a future Add Book flow (Phase 7) —
+see `docs/GOOGLE_INTEGRATION.md`. The real end-to-end connectivity test (`npm run google:smoke`)
+has not yet run because no Google Cloud OAuth client exists in this environment yet — see
+`docs/GOOGLE_SETUP.md` for the remaining non-secret setup steps. See
 `docs/IMPLEMENTATION_STATUS.md` for exactly what's built and what remains, `docs/DATABASE_SETUP.md`
-for the database itself, and `docs/SEARCH.md` for the full search architecture.
+for the database itself, `docs/SEARCH.md` for the full search architecture, and
+`docs/GOOGLE_INTEGRATION.md`/`docs/GOOGLE_SETUP.md` for the Drive integration.
 
 ## Local setup
 
@@ -54,13 +59,16 @@ npm run test:e2e             # end-to-end tests (Playwright, builds its own fixt
 npm run evaluate:search      # search relevance evaluation report (needs TEST_DATABASE_URL)
 npm run embeddings:generate  # backfill semantic embeddings — no-ops cleanly without GEMINI_API_KEY
 npm run search:rebuild-text  # rebuild conventional full-text search after a metadata edit/import
+npm run google:authorize     # one-time local OAuth setup for Google Drive (see docs/GOOGLE_SETUP.md)
+npm run google:smoke         # real, opt-in Google Drive connectivity proof — needs real OAuth config
 ```
 
-No Google Drive/Sheets credentials are needed for anything above — that integration doesn't
-exist yet (Phases 6, 9). An optional `GEMINI_API_KEY` (see
-[`docs/DATABASE_SETUP.md`](docs/DATABASE_SETUP.md)) activates real semantic search retrieval and
-embedding generation; every other feature, including conventional search, works completely
-without it.
+No Google Sheets credentials exist yet — that integration doesn't exist yet (Phase 9). An
+optional `GEMINI_API_KEY` (see [`docs/DATABASE_SETUP.md`](docs/DATABASE_SETUP.md)) activates real
+semantic search retrieval and embedding generation; every other feature, including conventional
+search, works completely without it. An optional Google Drive OAuth setup (see
+[`docs/GOOGLE_SETUP.md`](docs/GOOGLE_SETUP.md)) activates real cover-photo storage
+infrastructure for future phases; nothing currently teacher-facing depends on it.
 
 ## How to read this repository
 
@@ -77,7 +85,10 @@ Phase-specific detail, split out once a subject becomes operationally real (per 
 create placeholder docs" rule): [`docs/SECURITY.md`](docs/SECURITY.md),
 [`docs/ACCESSIBILITY.md`](docs/ACCESSIBILITY.md), [`docs/BRANDING.md`](docs/BRANDING.md),
 [`docs/TESTING.md`](docs/TESTING.md), [`docs/SEARCH.md`](docs/SEARCH.md),
-[`docs/DATABASE_SETUP.md`](docs/DATABASE_SETUP.md).
+[`docs/DATABASE_SETUP.md`](docs/DATABASE_SETUP.md),
+[`docs/GOOGLE_INTEGRATION.md`](docs/GOOGLE_INTEGRATION.md) (architecture),
+[`docs/GOOGLE_SETUP.md`](docs/GOOGLE_SETUP.md) (setup walkthrough),
+[`docs/COSTS.md`](docs/COSTS.md).
 
 ## Non-negotiable product principles (short version)
 

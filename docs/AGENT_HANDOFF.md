@@ -71,28 +71,33 @@ finish it in one pass.
 Phase 0 (architecture), Phase 1 (foundation, design system, staff/admin auth), Phase 2 (mock
 catalog + Find a Book, plus a visual/mobile revision), Phase 3 (voice search, Reading Lists,
 Library Guide), and Phase 4 (the real database, plus a focused correction pass closing a handful
-of acceptance gaps) are all complete. **Phase 5 (real search architecture) has had its own
-correction pass (2026-09-17) closing four material acceptance gaps a review found — migration
-safety for an already-populated database, unbounded queryless-browse pagination, incomplete
-autocomplete, and a thin evaluation suite — plus two adjacent fixes (title-normalization
-mismatch, an unlabeled Gemini retrieval contract) — and then a real-provider validation pass
-(2026-09-17, same day) that performed the one item the correction pass left open: real
-semantic-quality validation against a live `GEMINI_API_KEY`.** That pass generated real
-embeddings for the full development catalog, ran the live provider through its full contract, ran
-the evaluation suite in real-hybrid mode, and manually verified the running product — finding and
-fixing three real bugs along the way (a too-loose semantic-distance ceiling recalibrated twice
-from measured evidence, a generic-word substring collision, and missing rate-limit handling). See
-`docs/IMPLEMENTATION_STATUS.md` for the authoritative current state. Find a Book now runs a real,
-bounded, database-backed hybrid search pipeline (structured SQL filters, full-text + trigram +
-optional semantic retrieval, `docs/SEARCH.md`) instead of loading the whole catalog into Node and
-filtering in memory; Reading Lists are genuinely shared across every staff member/device via
-authenticated Server Actions; the Library Guide is real content. pgvector and `pg_trgm` are
-enabled, `books.embedding` is populated for the development catalog, and conventional search
-still works completely without a configured provider. Still no Google Drive/Sheets integration.
-The full brand system (name, palette, typography, logo) is real — nothing placeholder remains
-there. See `docs/IMPLEMENTATION_STATUS.md` for the authoritative, continuously updated detail —
-this file only orients you to the process, not the current state, since state changes every
-phase and duplicating it here would drift.
+of acceptance gaps) are all complete and approved. **Phase 5 (real search architecture) is
+complete and approved as of commit `88b02752363649c297b6e6f3e38202cee2e51a6a`** — a correction
+pass (2026-09-17) closed four material acceptance gaps a review found, then a real-provider
+validation pass (same day) performed real semantic-quality validation against a live
+`GEMINI_API_KEY`, finding and fixing three real bugs along the way (a too-loose semantic-distance
+ceiling recalibrated twice from measured evidence, a generic-word substring collision, and
+missing rate-limit handling). Find a Book runs a real, bounded, database-backed hybrid search
+pipeline (structured SQL filters, full-text + trigram + optional semantic retrieval,
+`docs/SEARCH.md`); Reading Lists are genuinely shared across every staff member/device via
+authenticated Server Actions; the Library Guide is real content.
+
+**Phase 6 (Google Drive connection) is implementation-complete, blocked only on real Google
+OAuth validation** (2026-09-18) — see `docs/GOOGLE_INTEGRATION.md` for the architecture and
+`docs/IMPLEMENTATION_STATUS.md` for the exact open item. A `CoverStorageProvider` abstraction
+(`src/lib/googleDrive/`) with a concrete Google Drive implementation, server-side OAuth token
+management, a root-folder security boundary (ancestry-walk containment check), bounded/paginated
+listing, resumable-upload infrastructure for the future Phase 7 browser-upload flow, and upload
+completion verification are all built and covered by 87 mocked unit tests. No teacher Google
+login exists or is planned — SSJC staff authentication is completely unchanged. `npm run
+google:smoke`, the real end-to-end connectivity proof, has not yet been run because no real
+Google Cloud OAuth client exists in this environment yet — see `docs/GOOGLE_SETUP.md` for the
+exact non-secret steps a human needs to complete before this can happen. **Do not begin Phase 7
+until Phase 6's real Google validation is complete and the phase is explicitly approved.**
+
+See `docs/IMPLEMENTATION_STATUS.md` for the authoritative, continuously updated detail — this
+file only orients you to the process, not the current state, since state changes every phase and
+duplicating it here would drift.
 
 ## A cross-cutting lesson: bcrypt hashes and `.env` files
 
@@ -307,6 +312,52 @@ if the test harness touches the same platform behavior the app does.
   "should work" but doesn't (a fast, ~3ms response, a generic "password didn't work" error) by
   temporarily logging the actual `process.env` value the running server sees, not by re-guessing
   the shell quoting.
+
+## Practical lessons from Phase 6 (worth knowing before touching the Drive integration or Phase 7)
+
+- **A provider abstraction pattern that's already proven once in a codebase is worth copying
+  file-for-file rather than reinventing, even for a genuinely different vendor.**
+  `src/lib/googleDrive/` mirrors `src/lib/embeddings/`'s exact three-part shape
+  (`provider.ts` interface+errors / concrete implementation, not `server-only` so it stays
+  directly unit-testable / `index.ts` the one `server-only` production factory) — the same
+  reason applies for both: `server-only` throws unconditionally under Vitest, so it can only
+  ever live on the one factory module nothing needs to construct directly in a test.
+- **When a method already fetched a resource's metadata for one reason, check whether a
+  security/boundary check elsewhere in the same method is about to re-fetch the same data —
+  it's a real, easy-to-miss double API call, not just test noise.** Found while writing
+  `googleDriveProvider.test.ts`: the first `assertWithinRoot(fileId)` implementation always
+  re-fetched `fileId`'s own parents via a fresh network call, even in `downloadSource`/
+  `confirmUploadedFile`/`initiateResumableUpload`, all of which had already fetched that
+  exact file's full metadata (parents included) moments earlier for an unrelated check
+  (isFolder/trashed/capabilities). `assertMetadataWithinRoot` fixed this by starting the
+  ancestry walk from metadata already in hand. The tell was mocked tests needing more queued
+  HTTP responses than the number of *logical* Drive operations the method performed — when
+  that mismatch shows up, look for a redundant re-fetch before assuming the test's mock
+  sequencing is simply wrong.
+- **A security-boundary algorithm (root/ancestry containment) is much more thoroughly
+  testable as a pure function taking an injected data-source callback than as a method that
+  always makes real calls.** `rootContainment.ts`'s `isWithinRoot(candidateId, root,
+  getParents)` let `tests/unit/googleDrive/rootContainment.test.ts` build in-memory fake
+  ancestry graphs (cycles, dead ends, multi-parent branches, depth past the bound) without
+  any HTTP mocking at all — the real provider supplies the actual network-backed callback
+  separately. Worth reaching for this shape whenever a traversal/graph algorithm needs to be
+  proven correct independent of where its data actually comes from.
+- **Google's resumable-upload `Location` header, not a JSON response body, carries the
+  session URI** — a detail easy to get wrong by assuming every Drive API response is JSON.
+  `initiateResumableUpload()` reads `response.headers.get("Location")`, not
+  `response.json()`, and treats a missing header as `upload_failed` rather than crashing on
+  a JSON-parse of what might be an empty body.
+- **When a script needs to build a real binary asset for a smoke test (a tiny PNG, here),
+  construct it programmatically with a verifiable format rather than hand-typing a base64
+  constant you can't fully verify by inspection.** `scripts/google/smoke.ts`'s
+  `generateTinySyntheticPng()` builds real PNG chunks (IHDR/IDAT/IEND) with real CRC32s via
+  Node's built-in `zlib.crc32`/`zlib.deflateSync` — its validity follows from the PNG format
+  itself being correctly assembled, not from trusting an opaque byte string was transcribed
+  correctly.
+- **A local-only OAuth setup helper (`scripts/google/authorize.ts`) still needs the exact
+  same `\$`-escaping discipline as `scripts/hash-password.mjs`** when writing a token
+  containing `$` into `.env.local` — reused that established convention directly rather than
+  discovering the bug again the hard way for a new credential type.
 
 ## Practical lessons from Phase 3 (worth knowing before touching voice or Reading Lists code)
 

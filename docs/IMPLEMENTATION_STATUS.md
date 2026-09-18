@@ -1,31 +1,32 @@
 # Implementation Status
 
-Last updated: 2026-09-17 (Phase 5 real-provider validation pass). This document is continuity
-insurance — it should always let another coding agent open this repository cold and know
-exactly where things stand. Keep it current at the end of every phase.
+Last updated: 2026-09-18 (Phase 6). This document is continuity insurance — it should always
+let another coding agent open this repository cold and know exactly where things stand. Keep
+it current at the end of every phase.
 
 ## Current phase
 
-**Phase 5 — Real search architecture: real-provider validation complete.** Phase 4 (real
-database) is complete and approved as of commit `8b128f0`. The initial Phase 5 work (commit
-`d5648e3`) built a real, bounded, database-backed hybrid search pipeline — PostgreSQL full-text
-search + trigram fuzzy matching + structured SQL filters + optional pgvector semantic retrieval,
-combined by a transparent hybrid scorer, on top of the unchanged deterministic Phase 2–4 ranking
-engine (see `docs/SEARCH.md`) — but a review of that commit found four material acceptance gaps
-(an unsafe migration path for an already-populated database, unbounded queryless-browse
-pagination, incomplete autocomplete, and a thin evaluation suite) plus two adjacent issues (a
-title-normalization mismatch, an unlabeled Gemini retrieval contract). A correction pass
-(`b4de027`) fixed all six. **This pass (2026-09-17) performed the one item that correction pass
-left open: real semantic-quality validation against a live `GEMINI_API_KEY`.** It generated real
-embeddings for the full 49-book development catalog, ran the live provider through its full
-contract (asymmetric query/document formatting, timeout/error handling), ran the real evaluation
-suite in both conventional-only and real-hybrid mode, and manually verified the running product
-with real embeddings present. That real evidence found and fixed three concrete bugs — a
-too-loose semantic-distance ceiling (twice recalibrated from measured evidence), a generic-word
-substring collision ("very" inside "every"/"everyday"), and no rate-limit handling for the live
-provider — documented in full in `docs/SEARCH.md` §5/§9 and `docs/DECISIONS.md`. Every other
-requirement in the original brief and both correction passes has been built, tested against real
-PostgreSQL, and documented.
+**Phase 6 — Google Drive connection: IMPLEMENTATION COMPLETE — REAL GOOGLE VALIDATION BLOCKED
+ON USER OAUTH SETUP.** Phase 5 (real search architecture, including its real-provider
+validation pass) is complete and approved as of commit `88b02752363649c297b6e6f3e38202cee2e51a6a`.
+
+Phase 6 establishes the OAuth-authorized Google Drive infrastructure that later phases (7:
+Add Book intake; 10: bulk import) will build on — see `docs/GOOGLE_INTEGRATION.md` for the
+full architecture and `docs/GOOGLE_SETUP.md` for setup. Everything that can be built and
+proven without a real Google OAuth credential has been: the `CoverStorageProvider`
+abstraction and its concrete `GoogleDriveCoverStorageProvider`, server-side OAuth token
+management, the root-folder security boundary, bounded/paginated listing, resumable-upload
+infrastructure, upload-completion verification, and 87 mocked unit tests across 6 files
+proving all of the above against a simulated Drive/OAuth HTTP boundary (`tests/unit/googleDrive/`).
+
+**What is NOT yet done, and cannot be done without user action**: no real Google Cloud
+project/OAuth client exists yet in this environment, so `npm run google:authorize` has not
+been run, `GOOGLE_OAUTH_REFRESH_TOKEN` is empty, and `npm run google:smoke` — the real,
+end-to-end connectivity proof the phase brief requires before final completion — has not
+been executed against a real Drive account. `GOOGLE_DRIVE_ROOT_FOLDER_ID` is the one Phase 6
+variable already set locally (the user supplied the real root folder id; it is in
+`.env.local` only, never committed). See "User inputs needed" below for the exact remaining
+steps — all non-secret actions the user (not this agent) must perform.
 
 ## Full phase plan (for reference — do not execute ahead of approval)
 
@@ -36,8 +37,8 @@ PostgreSQL, and documented.
 | 2 | Mock library + Find a Book | Complete (approved), visual/mobile revision 2026-09-14 |
 | 3 | Voice + reading lists + guide | Complete (approved) |
 | 4 | Real database | Complete (approved) |
-| 5 | Real search architecture | **In progress — see "Current phase"** |
-| 6 | Google Drive connection | Not started |
+| 5 | Real search architecture | Complete (approved), real-provider validation 2026-09-17 |
+| 6 | Google Drive connection | **Implementation complete — see "Current phase" for the one open item (real Google validation)** |
 | 7 | Single Add-a-Book flow | Not started |
 | 8 | Admin review + taxonomy | Not started |
 | 9 | Google Sheets | Not started |
@@ -425,36 +426,95 @@ value), and `.env.local` was independently confirmed gitignored and untracked th
    bug). Full quality gate re-run clean: `db:check`, typecheck, lint, unit, integration, build,
    E2E (both projects).
 
-## In-progress / not yet done for Phase 5
+## Completed work (Phase 6, 2026-09-18)
 
-- Final git commit and push for this work.
+See `docs/GOOGLE_INTEGRATION.md` for the full architecture and `docs/DECISIONS.md` for the
+OAuth-vs-service-account and provider-boundary reasoning. Starting commit:
+`88b02752363649c297b6e6f3e38202cee2e51a6a` (approved Phase 5).
 
-Everything else originally listed here is now done: manual visual/accessibility verification at
-320/390/tablet/desktop with actual screenshots (`docs/screenshots/phase-5/`, `docs/TESTING.md`),
-`EXPLAIN ANALYZE` evidence at a realistic ~2,551-row scale (`docs/SEARCH.md` §3,
-`docs/TESTING.md`), and a standalone security review pass — verified directly, not assumed: no
-`console.log`/`error`/`warn` calls anywhere in the new search files (no raw query logging);
-`GEMINI_API_KEY` never appears as a literal anywhere in source, only in comments/error message
-text; `server-only` present on `searchService.ts` and `embeddings/index.ts`;
-`autocompleteAction.ts` independently calls `requireStaffSession()`; every client component
-importing from `@/db/repositories/*` or `@/lib/search/searchService` does so via `import type`
-only (erased at build, zero runtime code); all 27 `sql` template usages in
-`searchRepository.ts` are Drizzle-parameterized, none string-concatenated.
+1. **`CoverStorageProvider` abstraction + `GoogleDriveCoverStorageProvider`**
+   (`src/lib/googleDrive/`) — mirrors `src/lib/embeddings/`'s already-proven three-part shape
+   (`provider.ts` interface+errors, `googleDriveProvider.ts` concrete implementation,
+   `index.ts` the one `server-only` production factory). Methods: `verifyConnection`,
+   `listChildren` (bounded, paginated), `getFileMetadata`, `downloadSource`,
+   `initiateResumableUpload`, `confirmUploadedFile`, `trashFile` (test/smoke-only cleanup).
+2. **Server-side OAuth token management** (`oauthClient.ts`) — exchanges the durable refresh
+   token for short-lived access tokens, caches in memory until shortly before expiry,
+   transparently refreshes, works correctly across serverless cold starts. Never persists an
+   access token anywhere but memory.
+3. **Root-folder security boundary** (`rootContainment.ts`) — a pure, independently-testable
+   ancestry-walk algorithm (cycle-guarded, depth-bounded at 20 levels) proving any candidate
+   file/folder is the configured `GOOGLE_DRIVE_ROOT_FOLDER_ID` or a real descendant of it
+   before any operation may touch it. Enforced by every provider method that accepts a
+   folder/file id.
+4. **My Drive / Shared Drive compatibility** — every relevant request sends
+   `supportsAllDrives=true`; listing also sends `includeItemsFromAllDrives=true`.
+   `verifyConnection()` reports whether the root belongs to a Shared Drive. No
+   `corpora=allDrives` broad search anywhere — the root id is known configuration, never
+   discovered by searching.
+5. **Resumable upload infrastructure for the future Phase 7 browser-upload flow** —
+   `initiateResumableUpload()` validates MIME type/size/filename/parent server-side, then
+   returns only the resumable session URI (never OAuth credentials) for a future browser to
+   upload bytes to directly. `confirmUploadedFile()` always re-fetches from Drive to verify
+   parent/MIME/size/filename before the caller may treat an upload as complete — never trusts
+   caller-supplied metadata.
+6. **Normalized error model** — one `DriveProviderError` class with a `category` discriminant
+   covering all 13 categories the phase brief specifies (`configuration_missing` through
+   `unexpected_provider_failure`). No thrown message ever contains a token, client secret, or
+   raw Google response body — asserted directly by dedicated secret-safety tests.
+7. **Bounded retry with backoff** (`retry.ts`) — retries only 429/500/502/503/504 and
+   network-level failures, up to 3 retries with jittered exponential backoff, honoring a
+   numeric `Retry-After` header. A deliberately separate helper from
+   `embeddings/geminiProvider.ts`'s own retry logic (different timing needs, not a shared
+   abstraction forced to fit both).
+8. **Source-cover validation** (`validation.ts`) — the 5 documented storage MIME types
+   (`image/jpeg`/`png`/`webp`/`heic`/`heif`), a 25 MiB size ceiling, and filename
+   normalization that strips path separators/control characters without ever renaming an
+   *existing* Drive photo.
+9. **`npm run google:authorize`** (`scripts/google/authorize.ts`) — a local, interactive,
+   one-time OAuth setup helper: starts a temporary localhost callback server, generates and
+   validates a random `state`, exchanges the authorization code for a refresh token, and
+   saves it into `.env.local` without ever printing it. Never a production route.
+10. **`npm run google:smoke`** (`scripts/google/smoke.ts`) — the real, opt-in, credential-gated
+    connectivity proof (steps A–G of the phase brief): connection, bounded metadata listing,
+    a disposable synthetic-PNG upload (generated in memory, real CRC32-correct PNG chunks,
+    never a committed binary), server-side confirmation, download + byte-for-byte comparison,
+    self-cleanup (trashes only its own file, after re-verifying id/filename-prefix/root), and
+    a final re-listing proving every pre-existing child id survived unchanged.
+11. **No database migration** — `books.cover_drive_*`/`ingestion_items.drive_file_id` already
+    existed from the Phase 0 schema review; Phase 6 introduces no new table and no
+    OAuth/token table (credentials live in environment/deployment secret configuration only).
+12. **No regression to Phase 5** — search scoring, query parsing, FTS, trigram, pgvector,
+    Gemini embeddings, autocomplete, Find UI, voice search, Book Detail, and Reading Lists are
+    untouched; the full existing quality gate was re-run clean (see "Testing performed" in the
+    phase report).
+13. Test counts: 87 new unit tests across 6 files (`tests/unit/googleDrive/`), all mocked at
+    the HTTP boundary — 325 unit total (was 238), 68 integration (unchanged), 41 evaluation
+    cases (unchanged), 103 E2E (unchanged).
+
+## In-progress / not yet done for Phase 6
+
+- **Real Google OAuth setup and `npm run google:smoke`** — blocked on the user performing the
+  non-secret setup steps in `docs/GOOGLE_SETUP.md` (Cloud project, OAuth consent screen,
+  Web Application client, then `npm run google:authorize`). See "User inputs needed" below
+  for the exact remaining steps. Until this runs successfully, Phase 6 cannot be marked fully
+  complete per its own acceptance criteria — see "Current phase" above.
+- Final git commit and push for this work (see "Git status" below for what was actually done).
 
 ## Blocked work
 
-None. Real semantic-quality validation (previously blocked on a real `GEMINI_API_KEY`) was
-performed 2026-09-17 — see "Completed work (Phase 5 real-provider validation, 2026-09-17)" above.
-Conventional search (structured filters + exact/FTS/trigram matching) remains fully independent
-of the embedding provider and works completely without it, including when the key is later
-removed or the provider fails at request time.
+**Real Google Drive validation is blocked on the user completing OAuth Cloud setup** — see
+`docs/GOOGLE_SETUP.md` and "User inputs needed" below. Everything that does not require a
+real Google credential (the provider abstraction, OAuth token management, root-boundary
+enforcement, bounded listing, resumable-upload infrastructure, and all 87 mocked unit tests)
+is built, tested, and not blocked.
 
 ## Deferred work
 
-Everything in Phases 6–13, by design: Google/Sheets/Drive integration, a single Add-a-Book
-flow, Admin Review + taxonomy tooling, bulk import, and the school's final physical taxonomy
-(still the 8 provisional development categories — see `docs/PRODUCT_SPEC.md` and
-`src/lib/catalog/categories.ts`, seed-only source material).
+Everything in Phases 7–13, by design: a single Add-a-Book flow (Phase 7 will consume Phase 6's
+resumable-upload infrastructure), Admin Review + taxonomy tooling, Google Sheets, bulk import,
+and the school's final physical taxonomy (still the 8 provisional development categories — see
+`docs/PRODUCT_SPEC.md` and `src/lib/catalog/categories.ts`, seed-only source material).
 
 ## Pending user inputs
 
@@ -464,15 +524,32 @@ discrepancy between the logo's actual pixels and the documented official palette
 a genuine open question (which should be the "true" reference) rather than resolved by
 assumption. Branding is now fully real end to end — nothing placeholder remains.
 
-None of these block Phase 5:
+**Resolved 2026-09-18: the real Google Drive root folder ID was supplied** and is set locally
+in `.env.local` as `GOOGLE_DRIVE_ROOT_FOLDER_ID` (never committed, never appears in source or
+documentation per the phase brief's own instruction).
 
-- **Google Drive folder — link received 2026-09-14** (three sub-folders of scanned book
-  covers). Not yet inspected: the Google Drive connector isn't authorized in-session yet, and
-  per the approved roadmap this isn't needed until Phase 6 regardless. The actual link is
-  intentionally not recorded in this repo (Phase 0 treats private Drive identifiers like
-  credentials) — it's tracked outside the repo for when Phase 6 begins.
+**USER INPUT REQUIRED to complete Phase 6** (none of these are secrets to paste into chat —
+see `docs/GOOGLE_SETUP.md` for the full walkthrough of each step):
+
+1. Create/select a Google Cloud project belonging to the SSJC Workspace organization.
+2. Enable the Google Drive API for that project.
+3. Configure the Google Auth Platform / OAuth consent screen with audience = Internal, and
+   add the two scopes (`drive.readonly`, `drive.file`).
+4. Create an OAuth 2.0 **Web Application** client with redirect URI exactly
+   `http://127.0.0.1:53682/oauth2/callback`.
+5. Place the resulting client ID/secret into local `.env.local`
+   (`GOOGLE_OAUTH_CLIENT_ID`/`GOOGLE_OAUTH_CLIENT_SECRET`).
+6. Run `npm run google:authorize` and complete consent in the browser, signed in as the
+   intended SSJC Workspace account.
+7. Run `npm run google:smoke` and confirm it passes.
+8. Report the result (or the exact safe failure category, if any) so this phase's real
+   validation section can be completed — see `docs/IMPLEMENTATION_STATUS.md`'s "Current phase."
+
+None of these block anything else:
+
 - Google Sheet for the teacher catalog projection (Phase 9).
-- Which AI provider(s) you hold API/billing access to.
+- Which AI provider(s) you hold API/billing access to, beyond the Gemini key already
+  configured for Phase 5.
 - **Supabase project credentials — still not provided.** Phase 4 used a local, disposable
   PostgreSQL 16 instance instead (`docs/DATABASE_SETUP.md`); nothing in the schema or
   application code is Supabase-specific, so this remains a pure connection-string swap
@@ -523,20 +600,29 @@ semantic-distance ceiling (recalibrated twice from real measured evidence), a ge
 substring collision ("very" inside "every"/"everyday"), and no rate-limit handling for the live
 Gemini provider — plus tightened one pre-existing E2E locator ambiguity exposed once real
 embeddings changed result ordering enough to make it visible. Full detail above and in
-`docs/DECISIONS.md`. No known open bugs.
+`docs/DECISIONS.md`.
+
+Phase 6 found and fixed one real bug during its own mocked-test-writing: the first
+implementation of the root-containment check re-fetched a file's own parents even when its
+full metadata (including `parents`) had already been fetched moments earlier for another
+reason (`downloadSource`, `confirmUploadedFile`, `initiateResumableUpload`'s parent-folder
+check) — silently doubling real Drive API calls in production, not just a test artifact.
+Fixed with `assertMetadataWithinRoot`, which starts the ancestry walk from metadata already
+in hand. See `docs/DECISIONS.md`. No known open bugs.
 
 ## Environment variables
 
 Phase 1's four (`STAFF_PASSWORD_HASH`, `ADMIN_PASSWORD_HASH`, `SESSION_SECRET`, optional
-`SESSION_COOKIE_SECURE`) and Phase 4's four database variables (`DATABASE_URL`,
-`DATABASE_MIGRATION_URL`, `TEST_DATABASE_URL`, `E2E_DATABASE_URL`) are unchanged — documented in
-`docs/DATABASE_SETUP.md` and `.env.example`; no values recorded here. **Phase 5 adds one
-optional variable: `GEMINI_API_KEY`** — activates real semantic retrieval and embedding
-generation when present; every part of search works completely without it (conventional
-retrieval has no dependency on it at all). **Present in this environment as of 2026-09-17**
-(confirmed present, value never displayed/logged/committed — see "Completed work (Phase 5
-real-provider validation)" above). Voice search still uses only the browser's own Web Speech API
-(no server-side key).
+`SESSION_COOKIE_SECURE`), Phase 4's four database variables (`DATABASE_URL`,
+`DATABASE_MIGRATION_URL`, `TEST_DATABASE_URL`, `E2E_DATABASE_URL`), and Phase 5's
+`GEMINI_API_KEY` are unchanged — documented in `docs/DATABASE_SETUP.md` and `.env.example`; no
+values recorded here. **Phase 6 adds four optional variables**: `GOOGLE_OAUTH_CLIENT_ID`,
+`GOOGLE_OAUTH_CLIENT_SECRET`, `GOOGLE_OAUTH_REFRESH_TOKEN`, `GOOGLE_DRIVE_ROOT_FOLDER_ID` — see
+`docs/GOOGLE_SETUP.md`. **Current state in this environment**: `GOOGLE_DRIVE_ROOT_FOLDER_ID` is
+set (the user supplied the real value 2026-09-18); the other three are still empty pending the
+user's OAuth Cloud setup (see "User inputs needed" above). Nothing else in the app depends on
+any of these four — every existing feature works identically whether or not Drive is
+configured.
 
 ## Migrations
 
@@ -555,8 +641,11 @@ at `ReadingListsProvider`'s single construction point, exactly as Phase 3 design
 `search_text` index). The approved Phase 4 migration (`0000_...`) is untouched by either. The
 correction pass adds no third migration file — an existing-database upgrade's `search_text`
 backfill is instead handled by a script folded into `db:migrate` itself, a deliberate choice
-explained in `docs/DECISIONS.md`. See `docs/DATABASE_SETUP.md` for the full command reference,
-including pgvector-capable local setup.
+explained in `docs/DECISIONS.md`. **Phase 6 adds no migration at all** — `books.cover_drive_*`
+and `ingestion_items.drive_file_id` already existed from the Phase 0 schema review; OAuth
+credentials live in environment/deployment secrets, never PostgreSQL. See
+`docs/DATABASE_SETUP.md` for the full command reference, including pgvector-capable local
+setup.
 
 ## External services
 
@@ -566,18 +655,21 @@ A local, disposable PostgreSQL 16 instance (three databases: dev/test/e2e), now 
 recognition. **Optionally, Google's Gemini embedding API** (`gemini-embedding-2`) when
 `GEMINI_API_KEY` is configured — configured in this environment as of 2026-09-17 and live-tested
 (see "Completed work (Phase 5 real-provider validation)" above); search still works completely
-without it if the key is removed. No Supabase, Drive/Sheets, or other AI service is connected.
+without it if the key is removed. **Phase 6 adds the Google Drive API** as a connected external
+service, once OAuth setup completes (`docs/GOOGLE_SETUP.md`) — not yet live-validated in this
+environment; see "Current phase" above and `docs/COSTS.md` for the cost picture. No Supabase or
+Sheets service is connected.
 
 ## Git status
 
-Repository is linked to `github.com/Shirin-Maleki/ssjc-library` (`origin`, `main`). The initial
-Phase 5 work was reviewed at commit `d5648e3`; the correction pass was reviewed at commit
-`b4de027`. This real-provider validation pass's work is committed and pushed on top of
-`b4de027` — see the final validation report for the exact commit SHA.
+Repository is linked to `github.com/Shirin-Maleki/ssjc-library` (`origin`, `main`). Phase 5 —
+including its real-provider validation pass — is approved as of commit
+`88b02752363649c297b6e6f3e38202cee2e51a6a`. This Phase 6 work is committed and pushed on top of
+that commit — see the final phase report for the exact commit SHA and push confirmation.
 
 ## Next recommended task
 
-Await review of this real-provider validation pass. Phase 6 (Google Drive connection) must not
-begin until Phase 5 is explicitly approved — this pass did not start any Phase 6 work. With real
-semantic-quality validation now performed, there is no remaining open item known at this time;
-the review may of course find otherwise.
+Complete the "User inputs needed" checklist above (Google Cloud OAuth setup), then run
+`npm run google:smoke` and report the result so Phase 6's real-validation section can be
+completed. Phase 7 (single Add-a-Book flow) must not begin until Phase 6 — including real
+Google validation — is explicitly approved.

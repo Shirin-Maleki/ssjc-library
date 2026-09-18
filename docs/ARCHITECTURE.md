@@ -131,26 +131,31 @@ the first draft") — now have a real column list, also in `docs/DATA_MODEL.md` 
 
 ## 6. Google Drive integration
 
-Unchanged from the first draft in strategy; the original-vs-display-cover distinction below
-is sharpened per review.
+**Phase 6 as-built status (2026-09-18): implemented, with two deliberate deviations from
+this section's original Phase 0 draft** — see `docs/GOOGLE_INTEGRATION.md` for the full
+architecture and `docs/DECISIONS.md` for the reasoning. The original-vs-display-cover
+distinction in §7 below is unchanged and still accurate.
 
-**Authentication (recommended, confirmed in Phase 6):** OAuth 2.0 acting on behalf of the
-school's designated Google account via the Google Picker API for least-privilege, per-folder
-access — see [`docs/DECISIONS.md`](DECISIONS.md) for the full reasoning and the
-service-account alternative.
+**Authentication, as actually built**: OAuth 2.0 Web Server authorization with one SSJC
+Workspace account and offline refresh access — not the Google Picker API this section's
+first draft proposed. The real, already-existing photo collection lives under one known
+Drive root folder (`GOOGLE_DRIVE_ROOT_FOLDER_ID`, runtime configuration, never
+hard-coded/committed); a fixed, pre-authorized backend credential scoped to that folder
+(and its descendants, enforced by `rootContainment.ts`'s ancestry check) is simpler and
+sufficient for this project's actual shape — a single school, one Drive collection, no
+per-teacher folder-picking need. The Picker API's per-user "let this specific person pick
+a folder each time" model doesn't fit an unattended server integration; see
+`docs/GOOGLE_INTEGRATION.md` for the full authentication rationale.
 
-**Folder structure:**
-
-```
-Library Catalog/
-  Incoming/         new teacher-captured photos awaiting processing
-  Book Covers/      archived originals for confirmed books
-  Needs Review/      images that couldn't be auto-processed
-  Import Archive/    reference to the pre-existing bulk-import source folder
-```
-
-The pre-existing ~1,500 photos are referenced in place (by Drive file ID), not physically
-reorganized.
+**Folder structure, as actually built**: the real root folder already contains three
+subfolders, one per person who photographed a section of the physical library. Phase 6
+**preserves these exactly as they are** — same names, same contents, same organization,
+nothing renamed or moved — rather than the speculative `Incoming/`/`Book Covers/`/
+`Needs Review/`/`Import Archive/` structure this section originally proposed. Any future
+folder structure for teacher-captured photos (Phase 7) or bulk-import organization
+(Phase 10) is a decision for those phases, made once their real requirements are known,
+not imposed speculatively now. The pre-existing ~1,500 photos are referenced in place (by
+Drive file ID), never physically reorganized — this part of the original draft holds.
 
 ## 7. Original capture vs. display cover
 
@@ -518,7 +523,10 @@ connection profile suited to a long-lived process rather than serverless bursts.
 ## 23. External services & approximate costs
 
 Unchanged from the first draft — see the cost table there; still estimates to verify at
-implementation time, not invented figures.
+implementation time, not invented figures. **As of Phase 6**, the Google Drive API is a
+real, connected external service (`docs/GOOGLE_INTEGRATION.md`) — see `docs/COSTS.md` for
+the measured/documented cost picture, not repeated here to avoid drift between two cost
+sources.
 
 ## 24. Technical risks
 
@@ -555,7 +563,8 @@ explicit standalone-worker design, not merely mitigated.
 - Concrete AI provider(s) for vision/LLM/embeddings
 - Confidence thresholds, category-health thresholds, search ranking weights
   (`system_settings`)
-- Google Drive auth strategy detail — pending real folder inspection in Phase 6
+- ~~Google Drive auth strategy detail — pending real folder inspection in Phase 6~~ **Resolved
+  in Phase 6**: OAuth 2.0 Web Server authorization with one SSJC Workspace account — see §6.
 - Display-cover fallback priority order — a sensible default is set (§7), but overridable via
   `system_settings`
 - Ingestion batch sizes and retry limits

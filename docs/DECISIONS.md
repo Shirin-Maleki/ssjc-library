@@ -1729,3 +1729,90 @@ for the full validation report this fed into.
 `tests/unit/embeddings/geminiProvider.test.ts`; `tests/unit/search/hybridScore.test.ts`;
 `tests/unit/search/rank.test.ts`; `tests/evaluation/searchEvaluation.eval.ts`; `docs/SEARCH.md`
 §5/§9/§11.
+
+---
+
+## Phase 6: OAuth over a service account, and a narrow Drive boundary over a general storage abstraction
+
+**Date:** 2026-09-18 · **Status:** Locked.
+
+**Problem:** Phase 6 needed real Google Drive access to (a) the existing ~1,500-photo
+collection, already organized in ordinary Drive folders owned by real people, and (b)
+future application-created uploads — while never requiring a teacher to sign in with
+Google, never reorganizing the existing collection, and never letting the integration
+reach anything outside one configured folder.
+
+**Chosen approach — OAuth 2.0 Web Server flow, one SSJC Workspace account, offline
+refresh access.** A service account was considered and rejected: it cannot cleanly own or
+write into an *existing* Drive hierarchy that real Workspace users already created,
+without either migrating that hierarchy into a Shared Drive the service account owns, or
+domain-wide delegation impersonating a real user — both meaningfully more complex than
+this project's actual need. A real OAuth-authorized Workspace account can read and write
+the existing folders exactly as they already exist, and a refresh token gives the same
+unattended-server capability a service account would have (works on Vercel/serverless,
+no interactive sign-in per request) without either extra complexity. This is
+infrastructure authorization, not teacher identity — SSJC staff continue authenticating
+through the existing shared-password/session system regardless (`docs/SECURITY.md`).
+
+**Scopes — `drive.readonly` + `drive.file`, not the broad `drive` scope.** These two cover
+every real Phase 6 operation (enumerate/inspect/download existing files; create and
+manage files this application itself creates) without granting the ability to modify or
+delete a file this application didn't create — a real least-privilege boundary, not a
+formality. Real testing (`google:smoke`, once real credentials are available) is the
+proof this combination is actually sufficient; if it weren't, the brief's own instruction
+was to stop and document the exact failure rather than silently broadening to `drive`.
+
+**Provider boundary shape — mirrors `src/lib/embeddings/` exactly, deliberately.** This
+codebase already has a proven three-part pattern for "one vendor-specific integration,
+one narrow interface, one server-only factory": `provider.ts` (interface + errors),
+`geminiProvider.ts` (concrete implementation, NOT `server-only` because it needs direct
+mocked unit tests), `index.ts` (the one production entry point, `import "server-only"`).
+`src/lib/googleDrive/` reuses this shape file-for-file
+(`provider.ts`/`googleDriveProvider.ts`/`index.ts`) rather than inventing a different
+structure — a second, subtly different pattern in the same codebase would cost future
+maintainers more than the small stylistic gain of doing it differently. The one addition
+Drive's own shape needed: `oauthClient.ts` (token management) and `rootContainment.ts`
+(the security boundary walk) as their own files, since — unlike Gemini's single API-key
+credential — Drive's credential lifecycle (refresh → access token) and its root-boundary
+check are both substantial enough, and independently testable enough, to deserve their
+own modules rather than living inside `googleDriveProvider.ts` itself.
+
+**A single `DriveProviderError` class with a `category` field, not thirteen subclasses.**
+`embeddings/provider.ts` uses one class per error type, but it only has three. Thirteen
+categories as thirteen classes would be import-list noise for no real benefit — a
+`category` discriminant is exactly as narrowable (`error.category === "rate_limited"`)
+and keeps the one HTTP-status-to-category mapping table
+(`googleDriveProvider.ts`'s `mapDriveHttpError`) in one place instead of scattered across
+thirteen constructors.
+
+**Root-containment algorithm is a pure function taking an injected `getParents` callback,
+not a method that always makes real Drive calls.** This is what makes cycle handling,
+depth-bounding, and "inaccessible parent" behavior directly unit-testable with an
+in-memory fake ancestry graph
+(`tests/unit/googleDrive/rootContainment.test.ts`) — proving these edge cases doesn't
+require a real (or even mocked-at-the-HTTP-level) Drive account, just the traversal logic
+itself. The real provider supplies the actual network-backed callback.
+
+**A file whose metadata (and thus its own `parents` array) was already fetched for
+another reason skips a redundant containment re-fetch.** `downloadSource`,
+`confirmUploadedFile`, and `initiateResumableUpload`'s parent-folder check all call
+`getFileMetadata`/equivalent before the containment check anyway (to verify
+isFolder/trashed/capabilities); `assertMetadataWithinRoot` starts the ancestry walk from
+that already-known `parents` array instead of re-fetching the same file's own parents a
+second time via `getParentsForContainment`. Found and fixed during this pass's own mocked
+test-writing — the first implementation called `assertWithinRoot(fileId)` unconditionally,
+which silently doubled the real Drive API calls these three methods would make in
+production, not just an artifact of the tests.
+
+**Consequences:** `tests/unit/googleDrive/` (87 tests across 6 files) covers config
+validation, OAuth refresh (including secret-safety assertions), metadata normalization,
+root containment (cycles/depth/inaccessible parents), bounded listing/pagination, retry
+behavior, upload/download validation, and upload confirmation — all against mocked HTTP
+boundaries. No database migration was needed (`books.cover_drive_*` and
+`ingestion_items.drive_file_id` already existed from the Phase 0 schema review). Real
+Google validation (`npm run google:smoke`) is a separate, opt-in, credential-gated step —
+see `docs/IMPLEMENTATION_STATUS.md` for whether it has been run in this environment.
+
+**Relevant files:** `src/lib/googleDrive/*`; `scripts/google/authorize.ts`;
+`scripts/google/smoke.ts`; `tests/unit/googleDrive/*`; `docs/GOOGLE_INTEGRATION.md`;
+`docs/GOOGLE_SETUP.md`.
