@@ -127,7 +127,8 @@ real credentials, always part of the normal `npm test` run. See
 | `retry.test.ts` | Immediate success (no retry); retries a 429 and a transient 503 then succeeds; honors a numeric `Retry-After` header; gives up after the bounded maximum (4 total attempts) and returns the last real response; never retries 400/401/403/404; retries then recovers from a network-level failure; rethrows after exhausting retries on a persistent network failure. |
 | `rootContainment.test.ts` | The root itself, a direct child, and a multi-level nested descendant are all contained; a file entirely outside the root is denied; an inaccessible parent denies safely without throwing; a cycle in the ancestry graph terminates and correctly denies (even a cycle that *also* has a branch reaching the root still resolves correctly); a chain longer than `MAX_ANCESTRY_DEPTH` is denied, one within it succeeds; multiple parents are contained if any one path reaches the root. |
 | `oauthClient.test.ts` | Successful token exchange; the refresh token/client id/secret are actually sent to Google's token endpoint; expiry parsing and in-memory reuse before expiry; refresh triggered again once within the expiry safety margin, not before; `invalid_grant` mapped to `authorization_revoked_or_invalid`; 401 → `authorization_required`; 429 → `rate_limited`; a persistent 5xx → `transient_provider_failure`, a transient one recovers on retry; a thrown error never contains the real client secret or refresh token used in the test; `configuration_missing` is thrown without ever calling `fetch` at all. |
-| `googleDriveProvider.test.ts` | `verifyConnection` for both a My Drive-style and a Shared Drive-style root, and its failure mappings (missing/trashed/not-a-folder root → `root_folder_missing`; revoked credential → `authorization_required`); bounded `listChildren` (page-size cap, pagination token round-trip, parent-scoped/trashed-excluded query, Shared Drive compatibility flags, denies a folder outside the root); `getFileMetadata` normalization (a rename doesn't change `id`, missing-file/permission-denied mappings, a malformed non-JSON response); `downloadSource` (real byte return, refuses a folder/trashed file/no-download-capability file); `initiateResumableUpload` (returns the `Location` header as `sessionUri`, `upload_failed` when Google omits it, pre-Drive-call rejection of an unsupported MIME type or oversized file *before* any network call, an invalid or outside-root parent, the session URI never appearing in a thrown message); `confirmUploadedFile` (a valid match; parent/MIME/size mismatches — including a mismatched-but-still-in-root parent, which is a business-rule failure, not a security one; outside-root; missing file); a dedicated secret-safety test across a realistic `verifyConnection` failure. |
+| `googleDriveProvider.test.ts` | `verifyConnection` for both a My Drive-style and a Shared Drive-style root, and its failure mappings (missing/trashed/not-a-folder root → `root_folder_missing`; revoked credential → `authorization_required`); bounded `listChildren` (page-size cap, pagination token round-trip, parent-scoped/trashed-excluded query, Shared Drive compatibility flags, denies a folder outside the root); `getFileMetadata` normalization (a rename doesn't change `id`, missing-file/permission-denied mappings, a malformed non-JSON response) **and (2026-09-20 correction) root-scoping**: succeeds for a direct child, a nested descendant, and the configured root itself; rejects an accessible-but-outside-root id with `outside_configured_root`; a compile-time-only check (`@ts-expect-error`, verified by `npm run typecheck`) that the private raw-metadata fetch never reaches the public `CoverStorageProvider` interface; `verifyConnection` continuing to work correctly (not circular); `downloadSource` (real byte return, refuses a folder/trashed file/no-download-capability file); `initiateResumableUpload` (returns the `Location` header as `sessionUri`, `upload_failed` when Google omits it, pre-Drive-call rejection of an unsupported MIME type or oversized file *before* any network call, an invalid or outside-root parent, the session URI never appearing in a thrown message); `confirmUploadedFile` (a valid match; parent/MIME/size mismatches — including a mismatched-but-still-in-root parent, which is a business-rule failure, not a security one; outside-root; missing file); a dedicated secret-safety test across a realistic `verifyConnection` failure. |
+| `smokeOrchestration.test.ts` (2026-09-20 correction) | The pure, provider-injected orchestration behind `npm run google:smoke`, against an in-memory fake `CoverStorageProvider` — proves the cleanup guarantee directly: a fully happy-path run cleans up via Step F and calls `trashFile` exactly once; an upload failure (Step C) never calls `trashFile` at all (no file was ever created); a confirmation failure (Step D), a download failure (Step E), a byte-mismatch, a Step F safety-check failure, and a Step G mutation-safety failure each still trigger a real cleanup attempt after a successful upload; a cleanup failure is reported in its own field, never overwriting or hiding the original validation failure; the disposable-prefix guard (`isSafeToCleanUp`) is tested directly. |
 
 **Real Google connectivity is never exercised by these tests or by `npm test`/CI** — see
 "Real Google smoke test" below.
@@ -144,16 +145,25 @@ Performs, against the real configured Drive folder: (A) OAuth token refresh + ro
 verification; (B) a bounded listing of the root's immediate children plus a tiny bounded
 metadata sample from up to three child folders — no download, no processing, no
 renaming; (C) generates a real, valid, tiny PNG entirely in memory (constructed
-chunk-by-chunk with real CRC32s via `scripts/google/smoke.ts`'s own `generateTinySyntheticPng()`,
-never a binary asset committed to the repository) and uploads it through the real
-resumable-upload implementation — the same code path the future Phase 7 upload flow will
-use, not a shortcut; (D) confirms the resulting file server-side; (E) downloads it back
-and verifies a byte-for-byte match; (F) trashes only that exact disposable file, after
-independently re-checking its id, filename prefix, and root containment; (G) lists the
-root again and confirms every pre-existing child id survived unchanged, printing
-`existing library assets modified: NO` only when that's genuinely demonstrated. See
-`docs/IMPLEMENTATION_STATUS.md` for whether this has actually been run against real
-credentials in this environment, and its result if so.
+chunk-by-chunk with real CRC32s via `scripts/google/smokeOrchestration.ts`'s own
+`generateTinySyntheticPng()`, never a binary asset committed to the repository) and
+uploads it through the real resumable-upload implementation — the same code path the
+future Phase 7 upload flow will use, not a shortcut; (D) confirms the resulting file
+server-side; (E) downloads it back and verifies a byte-for-byte match; (F) trashes only
+that exact disposable file, after independently re-checking its id, filename prefix, and
+root containment; (G) lists the root again and confirms every pre-existing child id
+survived unchanged, printing `existing library assets modified: NO` only when that's
+genuinely demonstrated. See `docs/IMPLEMENTATION_STATUS.md` for whether this has actually
+been run against real credentials in this environment, and its result if so.
+
+**Cleanup guarantee (2026-09-20 correction):** the step orchestration
+(`scripts/google/smokeOrchestration.ts`'s `runSmokeTest`) attempts to trash the disposable
+test file from every failure path once Step C has created one — not just the Step F happy
+path — so a confirmation, download, or safety-check failure never orphans
+`__ssjc_phase6_smoke_*.png` in the real configured root. This is deterministically proven
+by `smokeOrchestration.test.ts` against a fake provider, not something only a real Drive
+run can demonstrate. `scripts/google/smoke.ts` itself is now a thin CLI wrapper around that
+tested orchestration.
 
 ## E2E tests (Playwright) — `tests/e2e/`
 
@@ -444,6 +454,33 @@ session with many backgrounded/interrupted test runs.
 All four are fixed and covered by regression tests (unit tests for 1–3; the corrected E2E
 assertion for 4). Full detail and the underlying measurements: `docs/SEARCH.md` §5/§9,
 `docs/DECISIONS.md`.
+
+### Real bugs this pass caught — Phase 6 correction pass (2026-09-20)
+
+Found by review before real OAuth credentials were ever introduced, not by a failing test —
+both were genuine gaps in code that otherwise had full mocked test coverage passing cleanly.
+
+1. **The public `getFileMetadata(fileId)` had no root-containment check at all**, unlike
+   every other provider method — a real escape hatch for arbitrary Drive metadata access
+   despite the interface's own doc comment openly acknowledging the gap rather than hiding
+   it. Fixed by renaming the raw fetch to a private `fetchRawMetadata` and making the public
+   `getFileMetadata` enforce containment before returning anything; `verifyConnection()`
+   calls the private raw fetch directly for the root's own metadata, avoiding a circular
+   "is the root contained within itself" check. 6 new tests
+   (`googleDriveProvider.test.ts`), including a compile-time-only `@ts-expect-error` check
+   (verified by `npm run typecheck`) that the private fetch never reaches the public
+   interface.
+2. **The real smoke test (`scripts/google/smoke.ts`) could orphan its own disposable test
+   file** — every failure path called `process.exit(1)` directly, including failures after
+   Step C had already created a real Drive file, leaving `__ssjc_phase6_smoke_*.png` in the
+   real configured root with no cleanup attempt. Fixed by extracting the step orchestration
+   into a pure, provider-injected function (`scripts/google/smokeOrchestration.ts`) that
+   never exits the process and always attempts cleanup once a real file exists, reporting a
+   cleanup failure separately from the original validation failure. 11 new tests
+   (`smokeOrchestration.test.ts`) prove this against an in-memory fake provider — no real
+   Google credentials needed to verify the guarantee.
+
+Full detail and reasoning: `docs/DECISIONS.md`.
 
 ## Query performance evidence at realistic scale (Phase 5)
 

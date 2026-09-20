@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DriveProviderError } from "@/lib/googleDrive/provider";
+import { DriveProviderError, type CoverStorageProvider } from "@/lib/googleDrive/provider";
 import { GoogleDriveCoverStorageProvider } from "@/lib/googleDrive/googleDriveProvider";
 import { __resetAccessTokenCacheForTests } from "@/lib/googleDrive/oauthClient";
 
@@ -212,6 +212,74 @@ describe("GoogleDriveCoverStorageProvider (mocked Drive REST)", () => {
       mockTokenThenDrive(new Response("not json", { status: 200 }));
       await expect(provider.getFileMetadata("some-id")).rejects.toThrow();
     });
+
+    // Root-scoping correction (2026-09-20): getFileMetadata is the public metadata lookup
+    // CoverStorageProvider exposes, and it must never be a root-containment escape hatch —
+    // see docs/GOOGLE_INTEGRATION.md, "Root-folder security boundary."
+    describe("root-scoping (2026-09-20 correction)", () => {
+      it("succeeds for a direct child of the configured root", async () => {
+        mockTokenThenDrive(jsonResponse(fileResource({ id: "direct-child", parents: [ROOT_FOLDER_ID] })));
+        const metadata = await provider.getFileMetadata("direct-child");
+        expect(metadata.id).toBe("direct-child");
+      });
+
+      it("succeeds for a nested descendant several levels below the configured root", async () => {
+        mockTokenThenDrive(
+          jsonResponse(fileResource({ id: "grandchild", parents: ["intermediate-folder"] })), // getFileMetadata's own fetch
+          jsonResponse({ parents: [ROOT_FOLDER_ID] }) // getParentsForContainment("intermediate-folder")
+        );
+        const metadata = await provider.getFileMetadata("grandchild");
+        expect(metadata.id).toBe("grandchild");
+      });
+
+      it("succeeds for the configured root folder itself", async () => {
+        mockTokenThenDrive(jsonResponse(folderResource()));
+        const metadata = await provider.getFileMetadata(ROOT_FOLDER_ID);
+        expect(metadata.id).toBe(ROOT_FOLDER_ID);
+      });
+
+      it("rejects an accessible id outside the configured root with outside_configured_root", async () => {
+        mockTokenThenDrive(
+          jsonResponse(fileResource({ id: "reachable-but-foreign", parents: ["some-other-drive-folder"] })),
+          jsonResponse({ parents: [] }) // "some-other-drive-folder" never reaches the configured root
+        );
+        await expect(provider.getFileMetadata("reachable-but-foreign")).rejects.toMatchObject({
+          category: "outside_configured_root",
+        });
+      });
+
+      it("the private raw metadata lookup is not part of the public CoverStorageProvider surface", () => {
+        // TypeScript's `private` is compile-time only — `fetchRawMetadata` still exists as
+        // an ordinary method at runtime (verified below), so the real guarantee this test
+        // documents is enforced by `npm run typecheck`, not a runtime assertion: see
+        // `_assertFetchRawMetadataIsNotOnPublicInterface` at the bottom of this file, which
+        // only compiles because CoverStorageProvider does not declare `fetchRawMetadata`.
+        // What IS meaningfully assertable at runtime is that the public interface surface
+        // (what a caller holding a `CoverStorageProvider`-typed reference can call) is
+        // exactly the documented provider methods.
+        const asInterface: CoverStorageProvider = provider;
+        expect(typeof asInterface.getFileMetadata).toBe("function");
+        const publicInterfaceMethods = [
+          "verifyConnection",
+          "listChildren",
+          "getFileMetadata",
+          "downloadSource",
+          "initiateResumableUpload",
+          "confirmUploadedFile",
+          "trashFile",
+        ];
+        for (const method of publicInterfaceMethods) {
+          expect(typeof (asInterface as unknown as Record<string, unknown>)[method]).toBe("function");
+        }
+      });
+
+      it("verifyConnection continues to work correctly (root verification is not circular)", async () => {
+        mockTokenThenDrive(jsonResponse(folderResource()));
+        const status = await provider.verifyConnection();
+        expect(status.connected).toBe(true);
+        expect(status.rootFolderId).toBe(ROOT_FOLDER_ID);
+      });
+    });
   });
 
   describe("downloadSource", () => {
@@ -373,3 +441,16 @@ describe("GoogleDriveCoverStorageProvider (mocked Drive REST)", () => {
     });
   });
 });
+
+/**
+ * Compile-time-only guarantee (checked by `npm run typecheck`, never executed): the
+ * `CoverStorageProvider` interface does not declare `fetchRawMetadata` — this function only
+ * type-checks because accessing it on an interface-typed value is a real TypeScript error.
+ * Never called; its only purpose is to make `tsc` fail if `fetchRawMetadata` (or any other
+ * unscoped raw-metadata accessor) is ever added to the public interface.
+ */
+function _assertFetchRawMetadataIsNotOnPublicInterface(p: CoverStorageProvider): void {
+  // @ts-expect-error — fetchRawMetadata must never be part of the public interface.
+  void p.fetchRawMetadata;
+}
+void _assertFetchRawMetadataIsNotOnPublicInterface;

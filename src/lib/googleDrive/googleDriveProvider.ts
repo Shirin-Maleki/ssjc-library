@@ -136,12 +136,41 @@ export class GoogleDriveCoverStorageProvider implements CoverStorageProvider {
     });
   }
 
-  async getFileMetadata(fileId: string): Promise<DriveFileMetadata> {
+  /**
+   * The raw, UNSCOPED Drive metadata fetch — private on purpose. This is the only place
+   * that calls Drive's `files.get` without any root-containment check, and it exists
+   * specifically for the two internal callers that legitimately need metadata *before* (or
+   * independent of) establishing containment: `verifyConnection()` (fetching the configured
+   * root's own metadata — checking that root for containment *against itself* would be a
+   * circular, pointless check, not a real security gate) and the public `getFileMetadata()`
+   * below (which performs the real fetch here, then checks containment before returning
+   * anything to the caller). Nothing else in this class — and nothing outside it, since this
+   * is private — may use this to read metadata for an arbitrary Drive ID without a
+   * containment check somewhere in the call path.
+   */
+  private async fetchRawMetadata(fileId: string): Promise<DriveFileMetadata> {
     const url = `${API_BASE}/files/${encodeURIComponent(fileId)}?fields=${encodeURIComponent(METADATA_FIELDS)}&supportsAllDrives=true`;
     const response = await this.authorizedFetch(url);
     if (!response.ok) throw await mapDriveHttpError(response, `getFileMetadata(${fileId})`);
     const raw = (await response.json()) as RawDriveFileResource;
     return normalizeMetadata(raw);
+  }
+
+  /**
+   * The PUBLIC metadata lookup — the only one `CoverStorageProvider` exposes. Fetches via
+   * `fetchRawMetadata`, then enforces root containment before ever returning the result:
+   * an arbitrary Drive ID the OAuth account can technically access, but which isn't the
+   * configured root or a real descendant of it, is rejected with `outside_configured_root`
+   * rather than silently handed back. This is a real security fix (2026-09-20 correction
+   * pass) — the previous version of this method had no containment check at all, making it
+   * a genuine escape hatch for arbitrary Drive metadata access despite every *other*
+   * provider method enforcing the boundary. See `docs/GOOGLE_INTEGRATION.md`,
+   * "Root-folder security boundary."
+   */
+  async getFileMetadata(fileId: string): Promise<DriveFileMetadata> {
+    const metadata = await this.fetchRawMetadata(fileId);
+    await this.assertMetadataWithinRoot(metadata);
+    return metadata;
   }
 
   /** Returns `fileId`'s immediate parent IDs for the root-containment walk, or `null` when
@@ -190,7 +219,11 @@ export class GoogleDriveCoverStorageProvider implements CoverStorageProvider {
   async verifyConnection(): Promise<DriveConnectionStatus> {
     let metadata: DriveFileMetadata;
     try {
-      metadata = await this.getFileMetadata(this.rootFolderId);
+      // The raw fetch, not the public `getFileMetadata` — this call IS how the root's own
+      // validity gets established, so checking the root's containment against itself here
+      // would be circular (and, since `assertMetadataWithinRoot` already short-circuits
+      // `metadata.id === this.rootFolderId`, functionally a no-op) rather than a real gate.
+      metadata = await this.fetchRawMetadata(this.rootFolderId);
     } catch (error) {
       if (error instanceof DriveProviderError && error.category === "file_not_found") {
         throw new DriveProviderError(
@@ -246,13 +279,13 @@ export class GoogleDriveCoverStorageProvider implements CoverStorageProvider {
   }
 
   async downloadSource(fileId: string): Promise<{ bytes: Buffer; metadata: DriveFileMetadata }> {
+    // The public getFileMetadata already enforces root containment — no separate call needed.
     const metadata = await this.getFileMetadata(fileId);
     if (metadata.isFolder) throw new DriveProviderError("invalid_file", "Cannot download a folder as a source file.");
     if (metadata.trashed) throw new DriveProviderError("file_not_found", "The requested file is trashed.");
     if (!metadata.capabilities.canDownload) {
       throw new DriveProviderError("permission_denied", "The authorized Drive account cannot download this file.");
     }
-    await this.assertMetadataWithinRoot(metadata);
 
     const url = `${API_BASE}/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true`;
     const response = await this.authorizedFetch(url);
@@ -274,13 +307,13 @@ export class GoogleDriveCoverStorageProvider implements CoverStorageProvider {
     }
     const filename = normalizeUploadFilename(params.filename);
 
+    // The public getFileMetadata already enforces root containment — no separate call needed.
     const parent = await this.getFileMetadata(params.parentFolderId);
     if (!parent.isFolder) throw new DriveProviderError("invalid_file", "The target parent is not a Drive folder.");
     if (parent.trashed) throw new DriveProviderError("invalid_file", "The target parent folder is trashed.");
     if (!parent.capabilities.canAddChildren) {
       throw new DriveProviderError("permission_denied", "The authorized Drive account cannot create files in the target folder.");
     }
-    await this.assertMetadataWithinRoot(parent);
 
     const url = `${UPLOAD_API_BASE}/files?uploadType=resumable&supportsAllDrives=true`;
     const response = await this.authorizedFetch(url, {
@@ -304,10 +337,10 @@ export class GoogleDriveCoverStorageProvider implements CoverStorageProvider {
 
   async confirmUploadedFile(params: ConfirmUploadedFileParams): Promise<DriveFileMetadata> {
     // Always re-fetched from Drive — never trusts browser/caller-supplied metadata (§21).
+    // The public getFileMetadata already enforces root containment — no separate call needed.
     const metadata = await this.getFileMetadata(params.fileId);
 
     if (metadata.trashed) throw new DriveProviderError("upload_failed", "The uploaded file is trashed.");
-    await this.assertMetadataWithinRoot(metadata);
 
     if (!metadata.parents.includes(params.expectedParentFolderId)) {
       throw new DriveProviderError("upload_failed", "The uploaded file's parent does not match the expected target folder.");

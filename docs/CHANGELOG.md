@@ -4,6 +4,26 @@ A simple, phase-level record of what actually shipped — not a verbose release 
 Entries are dated by when the work was completed; see `docs/IMPLEMENTATION_STATUS.md` for the
 current state and `docs/DECISIONS.md` for the reasoning behind any of these.
 
+## Phase 6 correction pass — 2026-09-20
+
+A small, bounded correction pass, made before any real OAuth credential was introduced:
+
+- **Root-scoped the public `getFileMetadata(fileId)`** — it previously had no
+  root-containment check, unlike every other provider method, making it a real escape
+  hatch for arbitrary Drive metadata access. Split into a private, unscoped
+  `fetchRawMetadata` and a public `getFileMetadata` that enforces containment before
+  returning anything.
+- **Gave the real smoke test a genuine cleanup guarantee** — a failure after the disposable
+  test file was uploaded (confirmation, download, or a safety check) previously exited the
+  process immediately, orphaning that file in the real configured root. Extracted the step
+  orchestration into a pure, provider-injected, fully-tested function
+  (`scripts/google/smokeOrchestration.ts`) that always attempts cleanup once a real file
+  exists.
+- Investigated a reported "empty `validation.test.ts`" and found it was not empty — 9
+  tests already covered every case asked for; no change made.
+- Test counts: 342 unit (was 325, +17), 68 integration (unchanged), 41 evaluation cases
+  (unchanged), 103 E2E (unchanged).
+
 ## Phase 6 — Google Drive connection — 2026-09-18
 
 Establishes secure, real Google Drive infrastructure for future cover-photo storage

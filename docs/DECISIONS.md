@@ -1816,3 +1816,81 @@ see `docs/IMPLEMENTATION_STATUS.md` for whether it has been run in this environm
 **Relevant files:** `src/lib/googleDrive/*`; `scripts/google/authorize.ts`;
 `scripts/google/smoke.ts`; `tests/unit/googleDrive/*`; `docs/GOOGLE_INTEGRATION.md`;
 `docs/GOOGLE_SETUP.md`.
+
+---
+
+## Phase 6 correction pass: root-scoping the public metadata lookup, and a real cleanup guarantee for the smoke test
+
+**Date:** 2026-09-20 · **Status:** Locked.
+
+**Problem 1 — `getFileMetadata` was a root-containment escape hatch.** Every OTHER provider
+method (`listChildren`, `downloadSource`, `initiateResumableUpload`'s parent,
+`confirmUploadedFile`, `trashFile`) enforced the configured Drive root boundary, but the
+public `getFileMetadata(fileId)` itself did not — a caller (or a future Phase 7 code path)
+could fetch metadata for any Drive ID the OAuth account happened to have access to,
+entirely outside `GOOGLE_DRIVE_ROOT_FOLDER_ID`, with no containment check anywhere in that
+one call path. The interface's own doc comment even said so explicitly ("Does not itself
+enforce root containment"), acknowledging the gap rather than hiding it — but an
+acknowledged gap in a security boundary is still a gap.
+
+**Fix:** the raw, unscoped Drive `files.get` call was renamed to a private
+`fetchRawMetadata`; the public `getFileMetadata` now calls it and then enforces containment
+(`assertMetadataWithinRoot`) before ever returning a result. `verifyConnection()` — which
+needs the configured root's OWN metadata to establish whether it's valid in the first
+place — calls the private `fetchRawMetadata` directly, avoiding a circular "is the root
+contained within itself" check (which `assertMetadataWithinRoot`'s self-match short-circuit
+would answer for free, but calling it there would be incidental correctness, not a
+deliberate non-circular design). `downloadSource`, `initiateResumableUpload`, and
+`confirmUploadedFile` — which already called the old `getFileMetadata` and then separately
+called `assertMetadataWithinRoot` themselves — now get containment enforcement for free from
+the public method and no longer need their own separate call, a small simplification that
+fell out of the fix rather than being a separate change.
+
+**Problem 2 — the real smoke test could orphan its own disposable test file.**
+`scripts/google/smoke.ts`'s `fail()` helper called `process.exit(1)` directly from every
+failure path, including every failure *after* Step C had already created a real Drive file
+(confirmation failing in Step D, download failing in Step E, or even a bug in Step F/G's own
+checks) — leaving `__ssjc_phase6_smoke_*.png` sitting in the real configured root with no
+cleanup attempt at all.
+
+**Fix — extracted the orchestration into a pure, provider-injected function
+(`scripts/google/smokeOrchestration.ts`'s `runSmokeTest`)** that never calls `process.exit`
+and always returns a structured report. A single `try/catch` wraps the whole step sequence;
+its `catch` always calls `attemptCleanupIfNeeded()`, which is a no-op only when no real file
+was ever created, or when Step F already cleaned up successfully on the happy path —
+otherwise it trashes the exact uploaded file id, retaining every existing safety check (the
+disposable-filename prefix — extracted as its own testable `isSafeToCleanUp()` — and root
+containment, delegated to `provider.trashFile` itself, which already enforces it). A cleanup
+failure is recorded in its own `report.cleanup` field, never overwriting or hiding the
+original `report.failure`. `scripts/google/smoke.ts` itself is now a thin CLI wrapper:
+construct the real provider and the two real network-facing dependencies (byte upload,
+current time), call `runSmokeTest`, print the report, set the exit code.
+
+**Why extract a whole module instead of just wrapping the existing script in a
+try/finally?** The phase brief specifically asked for the cleanup guarantee to be
+deterministically testable without real Google credentials. A `try/finally` inside the
+original script would have fixed the bug but left it unverified by anything except a real
+Drive account. Injecting the provider (and the two real I/O dependencies:
+`uploadBytes`, `now`) as parameters is the same shape already used for
+`src/lib/embeddings/generation.ts` (Phase 5) — proven in this codebase, reused
+deliberately.
+
+**Consequences:** `tests/unit/googleDrive/googleDriveProvider.test.ts` gained 6 new
+root-scoping tests for `getFileMetadata` (direct child, nested descendant, the root itself,
+an outside-root rejection, a compile-time-only check that the private `fetchRawMetadata`
+never reaches the public `CoverStorageProvider` interface, and confirmation that
+`verifyConnection` still works). A new `tests/unit/googleDrive/smokeOrchestration.test.ts`
+(11 tests) proves the cleanup guarantee directly: cleanup is skipped when no file was ever
+created, attempted and succeeds when Steps D/E/F/G fail after a real upload, and a cleanup
+failure is reported separately without masking the original validation failure — all
+against an in-memory fake `CoverStorageProvider`, no real network calls.
+`tests/unit/googleDrive/validation.test.ts` was inspected during this pass and found to
+already be fully populated (9 passing tests covering every MIME/size/filename case the
+correction brief asked for) — not the empty file it was reported as; no change was made to
+it.
+
+**Relevant files:** `src/lib/googleDrive/googleDriveProvider.ts`;
+`src/lib/googleDrive/provider.ts`; `scripts/google/smoke.ts`;
+`scripts/google/smokeOrchestration.ts` (new);
+`tests/unit/googleDrive/googleDriveProvider.test.ts`;
+`tests/unit/googleDrive/smokeOrchestration.test.ts` (new); `docs/GOOGLE_INTEGRATION.md`.

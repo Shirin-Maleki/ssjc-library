@@ -112,12 +112,22 @@ account can technically access, but which isn't the root or a descendant of it, 
 rejected with `outside_configured_root` — access to the OAuth account's broader Drive
 never becomes reachable through this application merely because Google would allow it.
 
-Every provider method that accepts a folder/file ID enforces this (`listChildren`,
-`downloadSource`, `initiateResumableUpload`'s parent, `confirmUploadedFile`, `trashFile`).
-Where a method already fetched the target's own metadata for another reason (its
-`parents` array is already in hand), the containment check reuses that instead of
-re-fetching the same file's parents a second time — see `assertMetadataWithinRoot` in
-`googleDriveProvider.ts`.
+Every provider method that accepts a folder/file ID enforces this — `listChildren`,
+`trashFile`, and, as of a 2026-09-20 correction, the public `getFileMetadata` itself.
+**`getFileMetadata` is not a scoping exception**: it fetches raw metadata via a private
+`fetchRawMetadata` and then checks containment before ever returning a result, so it can
+never be used as an escape hatch for an arbitrary Drive ID the OAuth account happens to
+have access to. `downloadSource`, `initiateResumableUpload`'s parent-folder check, and
+`confirmUploadedFile` all call the (now containment-enforcing) public `getFileMetadata`
+and no longer need their own separate check. The one deliberate exception is
+`verifyConnection()`, which calls the private `fetchRawMetadata` directly for the
+configured root's own metadata — checking the root's containment against itself would be
+circular, not a real security gate (`assertMetadataWithinRoot` already short-circuits an
+exact self-match, so calling the public method there would cost nothing extra, but the
+private call makes the non-circularity explicit rather than incidental). See
+`assertMetadataWithinRoot` in `googleDriveProvider.ts`, which — where a method has already
+fetched the target's own metadata — walks from the `parents` array already in hand instead
+of re-fetching the same file's parents a second time.
 
 ## Bounded listing
 

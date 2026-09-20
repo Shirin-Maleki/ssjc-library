@@ -1,23 +1,35 @@
 # Implementation Status
 
-Last updated: 2026-09-18 (Phase 6). This document is continuity insurance — it should always
+Last updated: 2026-09-20 (Phase 6 correction pass). This document is continuity insurance — it should always
 let another coding agent open this repository cold and know exactly where things stand. Keep
 it current at the end of every phase.
 
 ## Current phase
 
-**Phase 6 — Google Drive connection: IMPLEMENTATION COMPLETE — REAL GOOGLE VALIDATION BLOCKED
-ON USER OAUTH SETUP.** Phase 5 (real search architecture, including its real-provider
-validation pass) is complete and approved as of commit `88b02752363649c297b6e6f3e38202cee2e51a6a`.
+**Phase 6 — Google Drive connection: IMPLEMENTATION COMPLETE (including a 2026-09-20 code-safety
+correction pass) — REAL GOOGLE VALIDATION BLOCKED ON USER OAUTH SETUP.** Phase 5 (real search
+architecture, including its real-provider validation pass) is complete and approved as of
+commit `88b02752363649c297b6e6f3e38202cee2e51a6a`.
 
 Phase 6 establishes the OAuth-authorized Google Drive infrastructure that later phases (7:
 Add Book intake; 10: bulk import) will build on — see `docs/GOOGLE_INTEGRATION.md` for the
 full architecture and `docs/GOOGLE_SETUP.md` for setup. Everything that can be built and
 proven without a real Google OAuth credential has been: the `CoverStorageProvider`
 abstraction and its concrete `GoogleDriveCoverStorageProvider`, server-side OAuth token
-management, the root-folder security boundary, bounded/paginated listing, resumable-upload
-infrastructure, upload-completion verification, and 87 mocked unit tests across 6 files
-proving all of the above against a simulated Drive/OAuth HTTP boundary (`tests/unit/googleDrive/`).
+management, the root-folder security boundary (now enforced on every method, including
+`getFileMetadata` — see the 2026-09-20 correction below), bounded/paginated listing,
+resumable-upload infrastructure, upload-completion verification, and a real cleanup
+guarantee for the smoke test's own disposable file. 342 mocked unit tests total across the
+whole suite (87 from the original Phase 6 pass + 17 from the correction pass) prove all of
+the above against a simulated Drive/OAuth HTTP boundary (`tests/unit/googleDrive/`).
+
+**2026-09-20 correction pass** fixed two real gaps a review found before any real OAuth
+credential was introduced: (1) the public `getFileMetadata` had no root-containment check —
+fixed, see "Completed work (Phase 6 correction pass, 2026-09-20)" below; (2) the real smoke
+test could orphan its own disposable test file on a post-upload failure — fixed with a
+provider-injected, fully-tested cleanup guarantee. A third reported issue (an "empty"
+`validation.test.ts`) was investigated and found to be a false report — the file already had
+9 passing tests covering everything asked for; no change was needed.
 
 **What is NOT yet done, and cannot be done without user action**: no real Google Cloud
 project/OAuth client exists yet in this environment, so `npm run google:authorize` has not
@@ -492,6 +504,34 @@ OAuth-vs-service-account and provider-boundary reasoning. Starting commit:
     the HTTP boundary — 325 unit total (was 238), 68 integration (unchanged), 41 evaluation
     cases (unchanged), 103 E2E (unchanged).
 
+## Completed work (Phase 6 correction pass, 2026-09-20)
+
+A small, bounded correction pass, before real OAuth credentials were ever introduced. Full
+detail in `docs/DECISIONS.md`; test detail in `docs/TESTING.md`.
+
+1. **Root-scoped the public `getFileMetadata(fileId)`** — it previously had no
+   root-containment check at all, unlike every other provider method, making it a real
+   escape hatch for arbitrary Drive metadata access. Fixed by splitting it into a private
+   `fetchRawMetadata` (unscoped, used internally by containment logic itself and by
+   `verifyConnection()` for the root's own metadata) and a public `getFileMetadata` that
+   enforces containment before returning anything. `downloadSource`,
+   `initiateResumableUpload`, and `confirmUploadedFile` simplified accordingly (they no
+   longer need their own separate containment call). 6 new tests.
+2. **Gave the real smoke test a genuine cleanup guarantee.** Previously, any failure after
+   Step C's upload (confirmation, download, or a Step F/G safety check) called
+   `process.exit(1)` directly and left the disposable test file orphaned in the real
+   configured root. Extracted the orchestration into a pure, provider-injected function
+   (`scripts/google/smokeOrchestration.ts`) that always attempts cleanup once a real file
+   exists and reports a cleanup failure separately from the original validation failure —
+   proven by 11 new tests against an in-memory fake provider, no real credentials needed.
+3. **Investigated the reported "empty `validation.test.ts`" and found it was not empty** —
+   9 tests already covered every MIME/size/filename case asked for. No change made; see
+   `docs/DECISIONS.md` for the verification.
+4. Test counts: 342 unit total (was 325, +17: 6 root-scoping tests, 11 orchestration tests),
+   68 integration (unchanged), 41 evaluation cases (unchanged), 103 E2E (unchanged). No
+   database migration, no OAuth setup, no real Google validation performed in this pass —
+   out of scope per the correction brief.
+
 ## In-progress / not yet done for Phase 6
 
 - **Real Google OAuth setup and `npm run google:smoke`** — blocked on the user performing the
@@ -664,8 +704,10 @@ Sheets service is connected.
 
 Repository is linked to `github.com/Shirin-Maleki/ssjc-library` (`origin`, `main`). Phase 5 —
 including its real-provider validation pass — is approved as of commit
-`88b02752363649c297b6e6f3e38202cee2e51a6a`. This Phase 6 work is committed and pushed on top of
-that commit — see the final phase report for the exact commit SHA and push confirmation.
+`88b02752363649c297b6e6f3e38202cee2e51a6a`. The original Phase 6 implementation was committed
+as `ab515aae0d321464154c444c8fe2f534c0ec636a`. This correction pass's work is committed and
+pushed on top of that commit — see the final report for the exact commit SHA and push
+confirmation.
 
 ## Next recommended task
 

@@ -145,9 +145,12 @@ export interface CoverStorageProvider {
    * children. `folderId` must be the configured root or a proven descendant. */
   listChildren(folderId: string, options?: { pageSize?: number; pageToken?: string }): Promise<DriveListResult>;
 
-  /** Fetches one file/folder's normalized metadata by its durable Drive ID. Does not
-   * itself enforce root containment — callers that need the boundary check call
-   * `getFileMetadata` after (or as part of) that check, per method. */
+  /** Fetches one file/folder's normalized metadata by its durable Drive ID. Enforces root
+   * containment itself (2026-09-20 correction pass) — `fileId` must resolve to the
+   * configured root or a real descendant of it, or this throws `outside_configured_root`.
+   * This is the one place `CoverStorageProvider` reads a Drive file's metadata; it is never
+   * an escape hatch for an ID outside the configured boundary, no matter what the
+   * authorized OAuth account can otherwise access. */
   getFileMetadata(fileId: string): Promise<DriveFileMetadata>;
 
   /** Downloads a file's raw bytes. `fileId` must resolve within the configured root, must
