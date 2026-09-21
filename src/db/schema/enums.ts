@@ -76,9 +76,19 @@ export const availabilityStatusEnum = pgEnum("availability_status", ["on_shelf",
 
 export const contributorRoleEnum = pgEnum("contributor_role", ["author", "illustrator", "photographer", "translator"]);
 
+/**
+ * `cover_visible` added in Phase 7 (`docs/DECISIONS.md`) — a fact genuinely readable
+ * off the photographed front cover itself (e.g. a title printed on the cover, read
+ * directly), distinct from `ai_inferred` (a value AI *guessed* from context, not
+ * directly evidenced) and `external_provider` (a bibliographic API's own field).
+ * Never applied to a value AI merely looked at the image to infer — only to a value
+ * the cover genuinely, visibly states. See `docs/AI_PIPELINE.md` §"Evidence
+ * boundary."
+ */
 export const provenanceSourceTypeEnum = pgEnum("provenance_source_type", [
   "external_provider",
   "ai_inferred",
+  "cover_visible",
   "human_corrected",
   "human_verified",
 ]);

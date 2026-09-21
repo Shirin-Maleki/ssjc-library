@@ -1,0 +1,84 @@
+import { z } from "zod";
+
+/**
+ * Zod schemas for both Gemini generation tasks (Phase 7, §8/§20 of the phase brief).
+ * Each schema serves two purposes from one definition: `z.toJSONSchema()` (native to
+ * this project's Zod 4) builds the `responseSchema` object sent to Gemini
+ * (`geminiProvider.ts`), and the same schema then validates the actual response —
+ * schema-valid output from the model still requires real semantic validation before
+ * being trusted (§8: "Schema-valid output still requires semantic validation").
+ *
+ * `AIConfidenceLevel` is deliberately scoped per-task, not one universal "AI
+ * confidence" reused everywhere (§16/§20 of the phase brief) — this file defines it
+ * once because vision evidence and enrichment suggestions both genuinely need the
+ * same three-value shape, not because every future confidence concept should reuse
+ * it. Identity *reconciliation* confidence (`src/lib/intake/reconciliation.ts`) is a
+ * separate, independently-computed concept from deterministic evidence matching, not
+ * this value.
+ */
+export const AIConfidenceLevelSchema = z.enum(["high", "medium", "low"]);
+export type AIConfidenceLevel = z.infer<typeof AIConfidenceLevelSchema>;
+
+/**
+ * The first Gemini task's output — evidence extraction, not catalog completion
+ * (§8). Every bibliographic field is honestly nullable: a real front cover often
+ * doesn't show a subtitle, an ISBN, illustrators, or a series name, and the system
+ * instruction (`geminiProvider.ts`) explicitly forbids inventing any of them.
+ * `candidateSearchTerms` (never more than 5) feeds `src/lib/metadataProviders/`'s
+ * bounded provider search — not a place for the model to editorialize.
+ */
+export const CoverIdentificationSchema = z.object({
+  visibleTitle: z.string().min(1).max(300).nullable(),
+  visibleSubtitle: z.string().min(1).max(300).nullable(),
+  visibleAuthors: z.array(z.string().min(1).max(150)).max(6).nullable(),
+  visibleIllustrators: z.array(z.string().min(1).max(150)).max(6).nullable(),
+  visiblePublisherOrImprint: z.string().min(1).max(200).nullable(),
+  /** The language as it appears to the model from the cover's own text/script — free
+   * text, not yet reconciled against the ISO 639-1 registry (`src/lib/intake/`'s
+   * reconciliation step does that; a model guessing at a code directly would be a
+   * needless extra place to get it wrong). */
+  visibleLanguage: z.string().min(1).max(60).nullable(),
+  visibleIsbn: z.string().min(4).max(20).nullable(),
+  visibleSeries: z.string().min(1).max(200).nullable(),
+  candidateSearchTerms: z.array(z.string().min(1).max(120)).max(5),
+  identityConfidenceLevel: AIConfidenceLevelSchema,
+  /** A short, concrete note about what evidence was/wasn't visible — never a place
+   * for invented facts, only an honest account of what the cover actually showed. */
+  evidenceNotes: z.string().max(600),
+});
+export type CoverIdentification = z.infer<typeof CoverIdentificationSchema>;
+
+/**
+ * The second Gemini task's output — enrichment, run only after identity
+ * reconciliation has established a reasonable book candidate (§20). Every field is
+ * optional/nullable by design (§20: "correct absence is better than plausible
+ * invention") — nothing here is required for a book to save successfully
+ * (`src/lib/intake/persistence.ts` §32's minimum-data rule never depends on any of
+ * these). `physicalCategorySlug` is a plain string here, not a dynamic enum of the
+ * currently-active categories — Gemini is *told* the allowed set in the prompt
+ * (`geminiProvider.ts`), but the real enforcement that it "may NOT invent a
+ * category" is an application-level check
+ * (`src/lib/intake/categorySuggestion.ts`) against the live active list, never
+ * trust in the model alone.
+ */
+export const EnrichmentSuggestionSchema = z.object({
+  description: z.string().min(1).max(400).nullable(),
+  tags: z.array(z.string().min(1).max(40)).max(8),
+  fictionType: z.enum(["fiction", "nonfiction"]).nullable(),
+  format: z
+    .enum(["board_book", "picture_book", "early_reader", "chapter_book", "informational_reference", "activity_book", "other"])
+    .nullable(),
+  ageMinMonths: z.number().int().min(0).max(216).nullable(),
+  ageMaxMonths: z.number().int().min(0).max(216).nullable(),
+  readAloudMinutes: z.number().min(0).max(90).nullable(),
+  visualMediaTypes: z
+    .array(
+      z.enum(["photography", "watercolor", "collage", "digital_illustration", "pencil", "ink", "painted", "mixed_media", "graphic_vector"])
+    )
+    .max(3),
+  visualRealism: z.enum(["real_photography", "realistic_illustration", "stylized_illustration", "cartoon", "abstract", "mixed"]).nullable(),
+  physicalCategorySlug: z.string().min(1).max(100).nullable(),
+  categoryConfidence: AIConfidenceLevelSchema.nullable(),
+  categoryReason: z.string().max(300).nullable(),
+});
+export type EnrichmentSuggestion = z.infer<typeof EnrichmentSuggestionSchema>;

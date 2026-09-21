@@ -19,6 +19,7 @@ export const TRACKED_METADATA_FIELDS = {
   contributors: "identity",
   publisher: "identity",
   isbn: "identity",
+  language: "identity",
   physical_category: "category",
   age_range: "age",
   visual_media_type: "visual",

@@ -87,6 +87,20 @@ export const ingestionItems = pgTable(
     perceptualHash: text("perceptual_hash"),
     status: ingestionItemStatusEnum("status").notNull().default("pending"),
     reviewReason: text("review_reason"),
+    /**
+     * The versioned, validated Phase 7 intake draft (`docs/AI_PIPELINE.md` §"Review
+     * Later persistence") — everything needed to RESUME a single-book intake without
+     * re-uploading or re-running provider calls: confirmed Drive source metadata,
+     * validated cover-identification evidence, normalized metadata candidates, the
+     * reconciliation result, duplicate-candidate outcome, enrichment suggestions,
+     * category suggestion, and any teacher edits already made. Shaped by
+     * `src/lib/intake/draft.ts`'s `IntakeDraftSchema` (Zod-validated on every write,
+     * never an arbitrary raw AI response dump) — `schemaVersion` inside the object
+     * lets a future reader detect an old shape. Never contains: secrets, image
+     * bytes, a resumable upload session URI, or verbose raw model prose — see that
+     * schema's own doc comment for the exact boundary.
+     */
+    intakeDraft: jsonb("intake_draft"),
     resultingCopyId: uuid("resulting_copy_id").references((): AnyPgColumn => bookCopies.id),
     errorMessage: text("error_message"),
     retryCount: smallint("retry_count").notNull().default(0),

@@ -138,3 +138,79 @@ export async function generateEmbeddings(
 
   return { considered: candidates.length, succeeded, failed };
 }
+
+export interface GenerateEmbeddingForBookResult {
+  succeeded: boolean;
+  error?: string;
+}
+
+/**
+ * The targeted, single-book primitive Phase 7's intake save flow needs
+ * (`src/lib/intake/persistence.ts`, `docs/AI_PIPELINE.md`) — deliberately NOT a call
+ * into `generateEmbeddings()` above, which is designed as a broader catalog
+ * backfill/evaluation helper (fetches every active book's id, every category, every
+ * embedding-state row, just to decide what to do with the one book a teacher just
+ * saved). Reuses the exact same building blocks that function does — embedding
+ * document composition, the `EmbeddingProvider` interface, the model/dimension
+ * contract, the same stale/hash metadata columns — so a book embedded through this
+ * path is completely indistinguishable, to any later backfill run, from one embedded
+ * through the batch path.
+ *
+ * Never throws on a provider failure — returns `{ succeeded: false, error }`
+ * instead, so a caller (the post-save step in `persistence.ts`) can log/record the
+ * outcome without it ever affecting whether the book save itself succeeded (§36 of
+ * the phase brief: "BOOK CREATION STILL SUCCEEDS" regardless of embedding outcome).
+ * Only scoped to `active` books, matching `generateEmbeddings()`'s own visibility
+ * rule — calling this for a `pending_review` book is a caller error, not something
+ * this function silently permits or silently no-ops; callers must check
+ * `review_status` themselves before calling.
+ */
+export async function generateEmbeddingForBook(db: Database, provider: EmbeddingProvider, bookId: string): Promise<GenerateEmbeddingForBookResult> {
+  const bookRepository = new DrizzleBookRepository(db);
+  const categoryRepository = new DrizzleCategoryRepository(db);
+
+  const [[book], categories] = await Promise.all([bookRepository.getBooksByIds([bookId]), categoryRepository.listCategories()]);
+  if (!book) {
+    return { succeeded: false, error: `Book ${bookId} not found.` };
+  }
+
+  const categoryLabelBySlug = new Map(categories.map((c) => [c.slug, c.label]));
+  const document = buildEmbeddingDocument({
+    title: book.title,
+    subtitle: book.subtitle,
+    description: book.description,
+    authors: book.authors,
+    illustrators: book.illustrators,
+    publisher: book.publisher,
+    imprint: book.imprint,
+    categoryLabel: categoryLabelBySlug.get(book.physicalCategory),
+    tags: book.tags,
+    languageCode: book.languageCode,
+    additionalLanguageCodes: book.additionalLanguageCodes,
+    fictionType: book.fictionType,
+    format: book.format,
+    illustrationStyles: book.illustrationStyles,
+    visualRealism: book.visualRealism,
+    ageMinMonths: book.ageMinMonths,
+    ageMaxMonths: book.ageMaxMonths,
+    readAloudMinutes: book.readAloudMinutes,
+  });
+
+  try {
+    const [vector] = await provider.embedDocuments([document.text]);
+    await db
+      .update(books)
+      .set({
+        embedding: vector,
+        embeddingModel: provider.modelId,
+        embeddingDimension: provider.dimensions,
+        embeddingCompositionVersion: document.version,
+        embeddingSourceHash: document.sourceHash,
+        embeddingGeneratedAt: new Date(),
+      })
+      .where(eq(books.id, bookId));
+    return { succeeded: true };
+  } catch (error) {
+    return { succeeded: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
