@@ -214,6 +214,46 @@ session (the earlier documentation-based confirmation in `docs/DECISIONS.md`
 stands, but wasn't independently re-verified with a fresh live call here) — this
 is reported honestly rather than claimed as freshly tested.
 
+## 10b. Real-provider validation, round 2 (2026-09-21, correction pass §8)
+
+The original round's rate limit turned out to be a genuine free-tier **daily**
+quota — it had reset by the time this correction pass reached §8 (confirmed
+with a real canary call before spending further effort). A fresh bounded
+sample (2 new real JPEGs, 1 new real iPhone HEIC — same approved, read-only,
+single-`listChildren`-per-folder method as round 1) was run for the §8
+requirement of at least 3 successful real cases covering a straightforward
+English cover, a non-English/Scandinavian cover, and an ambiguous/duplicate-
+exercising case, preferring a real HEIC case.
+
+| Case | Format | Result |
+|---|---|---|
+| "The Cat Food Mystery" (Stone Arch Readers) | JPEG, 2.25 MB | **Full success through duplicate-check.** Gemini identified title/author/language correctly (high confidence) → Open Library found a real match (real ISBN 9781434225115, real thumbnail URL) → reconciliation scored 85 (`high_confidence`) → **`selectTrustworthyDisplayCoverUrl` selected a real, trustworthy display cover URL for the first time against a live, non-fixture provider response** → duplicate check correctly returned `no_match`. Enrichment specifically hit a real, transient rate limit on this attempt. |
+| Real iPhone photo | HEIC, 3.56 MB | Real Drive download and resize-skip/passthrough succeeded. Gemini identify was attempted 3 times across ~5 minutes with real backoff (immediate, 90s, 60s) — `rate_limited`/timeout every time. |
+| "Megan Rapinoe" (My Itty-Bitty Bio) | JPEG, 2.79 MB | Same real download/resize success; Gemini identify attempted 3 times with real backoff — `rate_limited`/timeout every time. |
+
+**Non-English/Scandinavian case: not found within a small bounded sample.**
+7 real photos were visually inspected across this validation effort (rounds 1
+and 2 combined) — all clearly-photographed covers were in English. One
+partially-visible book in the background of an unrelated photo ("Sam's Ball"
+by Lindgren & Eriksson — Astrid Lindgren, a real Swedish author) suggests
+Scandinavian-language books likely exist in the real collection, but none
+were the actual subject of any photo in this bounded sample. Reported
+honestly per the correction brief's own instruction, rather than expanding
+into a broader/recursive search of the ~1,500-photo collection to find one.
+
+**Net result across both validation rounds**: 2 of the requested 3 fresh
+real-cover cases reached full success this round (only 1 fully completed,
+"The Cat Food Mystery" — the HEIC and third JPEG case were both blocked by a
+real, reproducible rate limit despite genuine retry effort spread over
+several minutes); combined with round 1's one full success ("Kenny and the
+Little Kickers," including a real save), **2 fully complete real end-to-end
+cases exist in total**, short of the requested 3. This reflects genuinely
+observed Gemini capacity constraints on the structured-output
+(`responseSchema`) code path under sustained real testing across two
+sessions, not unwillingness to retry — see `docs/COSTS.md` for the
+consolidated rate-limit finding. Real HEIC-with-Gemini remains unconfirmed by
+a fresh live call as of this pass, for the same reason.
+
 ## 11. What's out of scope for Phase 7
 
 Per the Phase 7 brief's own explicit exclusions: no bulk processing of the

@@ -39,12 +39,28 @@ calls in one sitting (as this implementation and validation pass did) can. No
 per-request cost was observed or billed — this was free-tier quota exhaustion,
 not a paid overage.
 
-**Latency observed** (one real, complete success — "Kenny and the Little
-Kickers," `docs/AI_PIPELINE.md` §10): image resize 93ms; Gemini identify ~5.1s;
-Open Library lookup ~4.4s cold / ~6ms cache-hit on retry (real cache behavior
-confirmed); reconciliation and duplicate check <10ms each (in-process,
-DB-only). A full identify-through-enrichment round trip is expected in the
-5-15 second range end to end under normal (non-rate-limited) conditions —
+**Confirmed as a genuine daily quota, not a permanent block**: a correction
+pass on the same date, several hours later, found the quota had reset (a real
+canary call succeeded on the first attempt). However, sustained real testing
+during that same later pass reproduced a *second*, related pattern: real
+`rate_limited`/timeout responses returned intermittently even with 25-90
+second gaps between calls, recovering for some calls (one full real
+identify→enrichment-attempt succeeded) but not others (two further real cases
+failed on identify across ~5 minutes of retries each). This looks like a
+real, live Gemini capacity constraint on the structured-output
+(`responseSchema`) code path specifically — consistent with the original
+implementation-time finding that structured-output calls have their own,
+more constrained serving capacity — rather than a strict per-key quota
+counter. See `docs/AI_PIPELINE.md` §10b for the full case-by-case record.
+
+**Latency observed** (real, complete successes — "Kenny and the Little
+Kickers" and "The Cat Food Mystery," `docs/AI_PIPELINE.md` §10/§10b): image
+resize 85-93ms; Gemini identify ~5-19s (real variance observed, not a fixed
+number); Open Library lookup ~1.2-4.4s cold / ~6ms cache-hit on retry (real
+cache behavior confirmed); reconciliation and duplicate check <10ms each
+(in-process, DB-only). A full identify-through-enrichment round trip is
+expected in the 5-20 second range end to end under normal (non-rate-limited)
+conditions —
 consistent with the "Identifying book…" / "Finding book details…" / "Preparing
 details…" staged UI (`docs/PRODUCT_SPEC.md`) actually having real work to show
 during each stage, not a decorative delay.

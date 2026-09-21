@@ -3,6 +3,7 @@ import { OpenLibraryMetadataProvider } from "@/lib/metadataProviders/openLibrary
 
 describe("metadataProviders/openLibraryProvider", () => {
   const originalFetch = global.fetch;
+  const originalContact = process.env.OPEN_LIBRARY_CONTACT;
 
   beforeEach(() => {
     global.fetch = vi.fn();
@@ -10,6 +11,8 @@ describe("metadataProviders/openLibraryProvider", () => {
   afterEach(() => {
     global.fetch = originalFetch;
     vi.useRealTimers();
+    if (originalContact === undefined) delete process.env.OPEN_LIBRARY_CONTACT;
+    else process.env.OPEN_LIBRARY_CONTACT = originalContact;
   });
 
   it("returns an empty array without calling fetch when the query has no usable signal", async () => {
@@ -20,12 +23,33 @@ describe("metadataProviders/openLibraryProvider", () => {
   });
 
   it("sends a descriptive User-Agent header, per Open Library's own guidance", async () => {
+    delete process.env.OPEN_LIBRARY_CONTACT;
     vi.mocked(global.fetch).mockResolvedValue(new Response(JSON.stringify({ docs: [] }), { status: 200 }));
     const provider = new OpenLibraryMetadataProvider();
     await provider.search({ title: "The Gruffalo" });
     const [, init] = vi.mocked(global.fetch).mock.calls[0];
     const headers = new Headers((init as RequestInit).headers);
     expect(headers.get("User-Agent")).toMatch(/SSJC-Library-Intake/);
+  });
+
+  it("includes OPEN_LIBRARY_CONTACT in the User-Agent when configured, for the higher identified-request rate tier (Phase 7 correction pass §9)", async () => {
+    process.env.OPEN_LIBRARY_CONTACT = "library@example-school.org";
+    vi.mocked(global.fetch).mockResolvedValue(new Response(JSON.stringify({ docs: [] }), { status: 200 }));
+    const provider = new OpenLibraryMetadataProvider();
+    await provider.search({ title: "The Gruffalo" });
+    const [, init] = vi.mocked(global.fetch).mock.calls[0];
+    const headers = new Headers((init as RequestInit).headers);
+    expect(headers.get("User-Agent")).toContain("library@example-school.org");
+  });
+
+  it("never fabricates a contact address when OPEN_LIBRARY_CONTACT is unset", async () => {
+    delete process.env.OPEN_LIBRARY_CONTACT;
+    vi.mocked(global.fetch).mockResolvedValue(new Response(JSON.stringify({ docs: [] }), { status: 200 }));
+    const provider = new OpenLibraryMetadataProvider();
+    await provider.search({ title: "The Gruffalo" });
+    const [, init] = vi.mocked(global.fetch).mock.calls[0];
+    const headers = new Headers((init as RequestInit).headers);
+    expect(headers.get("User-Agent")).not.toMatch(/@/);
   });
 
   it("uses the current Search API (/search.json), never the legacy /api/books endpoint", async () => {

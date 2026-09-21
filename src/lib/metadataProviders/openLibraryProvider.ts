@@ -11,6 +11,14 @@ import { MetadataProviderError, type BookMetadataProvider, type MetadataSearchQu
  * (`src/lib/metadataProviders/cache.ts`) — never a hidden bulk backend (Phase 10
  * will need its own bulk-provider strategy, not this adapter reused at scale).
  *
+ * **Rate limit, re-confirmed 2026-09-21 (Phase 7 correction pass §9)**:
+ * unidentified requests get 1 req/sec; a `User-Agent` naming the application PLUS
+ * a real contact email/phone gets 3 req/sec. This app defaults to the unidentified
+ * tier — never a fabricated contact address — since it's more than sufficient at
+ * this real, bounded call volume (at most 1-2 lookups per book intake, cached).
+ * The optional `OPEN_LIBRARY_CONTACT` environment variable (never a hard-coded
+ * default) lets a real deployment opt into the identified tier if ever needed.
+ *
  * Reuses `src/lib/googleDrive/retry.ts`'s generic `fetchWithRetry`, same reasoning
  * as `googleBooksProvider.ts`.
  */
@@ -18,9 +26,16 @@ import { MetadataProviderError, type BookMetadataProvider, type MetadataSearchQu
 const API_BASE = "https://openlibrary.org/search.json";
 const MAX_RESULTS = 5;
 const REQUEST_TIMEOUT_MS = 5000;
+
 /** Identifies this application per Open Library's own request — a real, public repo
- * URL, not a fabricated contact address this codebase has no authority to invent. */
-const USER_AGENT = "SSJC-Library-Intake/1.0 (+https://github.com/Shirin-Maleki/ssjc-library)";
+ * URL always included; `OPEN_LIBRARY_CONTACT` (optional, e.g. "library@school.org")
+ * additionally opts into Open Library's higher identified-request rate tier when a
+ * real deployment sets it. Never a fabricated contact address. */
+function buildUserAgent(): string {
+  const base = "SSJC-Library-Intake/1.0 (+https://github.com/Shirin-Maleki/ssjc-library)";
+  const contact = process.env.OPEN_LIBRARY_CONTACT?.trim();
+  return contact ? `${base} (${contact})` : base;
+}
 
 const RESPONSE_FIELDS = "key,title,subtitle,author_name,first_publish_year,isbn,publisher,language,subject,cover_i";
 
@@ -97,7 +112,7 @@ export class OpenLibraryMetadataProvider implements BookMetadataProvider {
     const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     let response: Response;
     try {
-      response = await fetchWithRetry(url, { signal: controller.signal, headers: { "User-Agent": USER_AGENT } });
+      response = await fetchWithRetry(url, { signal: controller.signal, headers: { "User-Agent": buildUserAgent() } });
     } catch (error) {
       if (error instanceof Error && error.name === "AbortError") {
         throw new MetadataProviderError("open_library", "timeout", `Open Library request timed out after ${REQUEST_TIMEOUT_MS}ms.`);

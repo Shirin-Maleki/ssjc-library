@@ -1,14 +1,23 @@
 # Implementation Status
 
-Last updated: 2026-09-20 (Phase 6 complete — real Google Drive validation passed). This document
-is continuity insurance — it should always let another coding agent open this repository cold
-and know exactly where things stand. Keep it current at the end of every phase.
+Last updated: 2026-09-21 (Phase 7 implemented, correction pass applied — review pending). This
+document is continuity insurance — it should always let another coding agent open this
+repository cold and know exactly where things stand. Keep it current at the end of every phase.
 
 ## Current phase
 
-**PHASE 6 COMPLETE — REAL GOOGLE DRIVE VALIDATION PASSED.** Phase 5 (real search architecture,
-including its real-provider validation pass) is complete and approved as of commit
-`88b02752363649c297b6e6f3e38202cee2e51a6a`.
+**PHASE 7 IMPLEMENTED — CORRECTION PASS / REVIEW PENDING.** Not yet marked approved by this
+document itself — that determination belongs to the reviewer, not to whichever agent last
+touched the code. See "Completed work (Phase 7, 2026-09-20/21)" and "Completed work (Phase 7
+correction pass, 2026-09-21)" below for exactly what shipped and what's still genuinely open
+(real Google Books validation — no key available; a fresh live Gemini call against real HEIC
+bytes and a third real-provider validation case — both blocked by real, reproducible Gemini
+rate limits despite substantial genuine retry effort, not by a code defect). Phase 6 (Google
+Drive connection, including its 2026-09-20 correction pass) and Phase 5 (real search
+architecture, including its real-provider validation pass) remain complete and approved,
+unaffected except where Phase 7 built directly on Phase 6's Drive infrastructure — approved as
+of commit `88b02752363649c297b6e6f3e38202cee2e51a6a` (Phase 5) and
+`3fc48d4c4961d71308f5de9b098c18413ad99db4` (Phase 6, the Phase 7 starting point).
 
 Phase 6 established the OAuth-authorized Google Drive infrastructure that later phases (7: Add
 Book intake; 10: bulk import) will build on — see `docs/GOOGLE_INTEGRATION.md` for the full
@@ -653,16 +662,77 @@ architectural decision and its evidence: `docs/DECISIONS.md`; every test:
    `docs/TESTING.md`, `docs/COSTS.md`, `.env.example`, `docs/AGENT_HANDOFF.md`,
    `docs/CHANGELOG.md`.
 
+## Completed work (Phase 7 correction pass, 2026-09-21)
+
+A real implementation review against the pushed repository (commit
+`c821a3522a57e09b48ace1b29c5a03439d6d2c95`) found 8 material issues. All 8
+fixed, with new regression coverage for each. Full technical detail in each
+area's own doc section (`docs/AI_PIPELINE.md`, `docs/DECISIONS.md`,
+`docs/GOOGLE_INTEGRATION.md`); commit messages have the complete reasoning.
+
+1. **Deployment-blocking upload size** — the server-mediated upload (from the
+   prior pass) POSTed the whole source photo in one request, which would
+   exceed Vercel's real 4.5 MB serverless request-body limit for any cover
+   over that size (this pipeline allows up to 25 MiB). Replaced with a
+   chunked upload (`/api/intake/cover/init` + `/chunk`, <=4 MiB per request,
+   Google's own documented resumable-upload Content-Range/308 protocol,
+   original bytes preserved). Real-validated with an 11.62 MB file — 3
+   chunks, real Drive MD5 checksum matched the local original exactly.
+2. **Display cover completed** — was only partially wired (accepted but never
+   supplied, never projected by the repository, never rendered).
+   `BookCoverSpec` gains `displayUrl`; the repository projects it;
+   `BookCover.tsx` renders it (typographic placeholder otherwise); a new
+   `selectTrustworthyDisplayCoverUrl` derives it only from a confirmed
+   identity's actual selected metadata candidate. Real-validated this pass
+   with a live Open Library thumbnail.
+3. **Duplicate identity rule made conservative** — title+author+language could
+   previously claim `exact_copy_same_edition` with no ISBN at all; different
+   editions/translations routinely share all three. Now reserved exclusively
+   for a genuine ISBN match.
+4. **Duplicate UX / repeated provider calls** — "Different book" previously
+   restarted from Gemini vision and metadata lookup (real API cost, unchanged
+   evidence). Now preserves existing work and proceeds straight to
+   enrichment; the "You photographed: …" text now shows the real identified
+   title, never the raw filename.
+5. **Terminal action / failure / retry correctness** — Review Later now
+   checks its own result instead of always claiming success; a failed
+   confirm-save shows inline on the same screen instead of forcing Start
+   Over/re-upload; one shared in-flight guard prevents double submission;
+   every pipeline stage is independently retryable (a later failure no
+   longer re-runs an earlier, already-completed step).
+6. **Ingestion job lifecycle** — `saveNewBook`/`addAnotherCopy` now also mark
+   the parent `ingestion_jobs` row completed (previously only the item was
+   updated, leaving every job permanently `"running"`); Start Over after a
+   real upload now best-effort marks the abandoned job/item `"failed"`
+   instead of leaving it looking stuck forever.
+7. **`book_identity_candidates` operationalized** — every metadata candidate
+   considered is now persisted for audit (previously unused by Phase 7),
+   replacing rather than appending on retry.
+8. **Real-provider validation, round 2** — the original round's rate limit
+   was confirmed as a genuine daily quota (reset by this pass, verified with
+   a real canary call). A fresh bounded sample of 3 real covers (2 JPEG, 1
+   HEIC) found 1 full success and 2 blocked by a further, real, reproducible
+   Gemini capacity constraint on the structured-output path despite
+   substantial genuine retry effort — reported honestly, not glossed over.
+   Full results: `docs/AI_PIPELINE.md` §10b.
+
+**Testing**: 462 unit tests (was 450), 92 integration tests (was 85), 117 E2E
+tests (was 101) — all passing, real Chromium + real WebKit.
+
 ## In-progress / not yet done for Phase 7
 
 **Not real-tested**: Google Books (no `GOOGLE_BOOKS_API_KEY` was available —
-Open Library alone was validated live and is sufficient for metadata lookup to
-function); a fresh live Gemini vision call against real HEIC bytes (blocked by
-the real rate limit encountered during validation — the resize-skip/passthrough
-logic was still confirmed correct with 3 real HEIC files, and the HEIC
-input-support claim itself rests on Google's documentation from
-implementation-time re-confirmation, not a fresh call this session). Both
-recorded honestly in `docs/AI_PIPELINE.md` §10, not glossed over.
+Open Library alone was validated live twice, across both validation rounds,
+and is sufficient for metadata lookup to function); a fresh live Gemini
+vision call against real HEIC bytes (blocked by a real, reproducible rate
+limit across two separate validation sessions, despite substantial genuine
+retry effort each time — the resize-skip/passthrough logic was confirmed
+correct with 4 real HEIC files total, and the HEIC input-support claim itself
+rests on Google's documentation from implementation-time re-confirmation, not
+a fresh live call); a third real-provider validation case beyond the 2 that
+did fully succeed (§8 of the correction pass asked for 3; 2 were achieved,
+the third blocked by the same real rate limit). All recorded honestly in
+`docs/AI_PIPELINE.md` §10/§10b and `docs/COSTS.md`, not glossed over.
 
 **Not built, by explicit design** (per the phase brief's own exclusions): no
 processing of the existing ~1,500-photo collection, no Phase 8 Admin Review
