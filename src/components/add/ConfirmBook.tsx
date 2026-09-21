@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { ISO_639_1_LANGUAGE_NAMES, type LanguageCode } from "@/lib/catalog/languages";
+import { FORMAT_LABELS } from "@/lib/catalog/labels";
+import type { Format } from "@/lib/catalog/types";
 import type { TeacherEdits } from "@/lib/intake/draft";
 
 export interface ConfirmBookViewData {
@@ -43,6 +45,7 @@ export function ConfirmBook({ data, activeCategories, onConfirm, onReviewLater, 
   const [languageCode, setLanguageCode] = useState(data.languageCode ?? "");
   const [categorySlug, setCategorySlug] = useState(data.categorySlug ?? "");
   const [fictionType, setFictionType] = useState("");
+  const [format, setFormat] = useState("");
   const [ageMinYears, setAgeMinYears] = useState("");
   const [ageMaxYears, setAgeMaxYears] = useState("");
 
@@ -54,6 +57,7 @@ export function ConfirmBook({ data, activeCategories, onConfirm, onReviewLater, 
       languageCode: languageCode || null,
       physicalCategorySlug: categorySlug || null,
       fictionType: fictionType ? (fictionType as "fiction" | "nonfiction") : null,
+      format: format ? (format as Format) : null,
       ageMinMonths: ageMinYears ? Number(ageMinYears) * 12 : null,
       ageMaxMonths: ageMaxYears ? Number(ageMaxYears) * 12 : null,
     };
@@ -146,6 +150,20 @@ export function ConfirmBook({ data, activeCategories, onConfirm, onReviewLater, 
               {FICTION_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Format">
+            <select
+              value={format}
+              onChange={(e) => setFormat(e.target.value)}
+              className="h-11 rounded-md border border-border-input bg-surface px-3 text-base"
+            >
+              <option value="">Not specified</option>
+              {Object.entries(FORMAT_LABELS).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
                 </option>
               ))}
             </select>
