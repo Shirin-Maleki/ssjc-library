@@ -5,9 +5,31 @@ photo collection (Phase 6). Written for someone who is comfortable using Google 
 web console but isn't a professional Google Cloud administrator — every step names the
 exact screen/button, not just the underlying concept.
 
-This connects the application's *server* to Google Drive, once, using one SSJC Workspace
-account. It is completely separate from how teachers sign in to this app (they still use
-the shared staff password) — see `docs/GOOGLE_INTEGRATION.md` for why.
+This connects the application's *server* to Google Drive, once, using one Google account
+authorized for this purpose. It is completely separate from how teachers sign in to this
+app (they still use the shared staff password) — see `docs/GOOGLE_INTEGRATION.md` for why.
+
+**What actually happened during real Phase 6 validation (2026-09-20), and what to do
+differently if you're setting this up fresh:** the steps below describe the originally
+intended path — an SSJC Workspace account authorizing directly, with the OAuth consent
+screen set to Internal audience. In practice, SSJC's Workspace currently blocks
+third-party OAuth app authorization pending an administrator review, so the SSJC Workspace
+account itself could not complete step 6. Real validation was instead completed using a
+Google Cloud project under a **personal Gmail account**, with the real SSJC Drive folder
+shared to that account (Share → add the Gmail address → Editor access, from Drive's
+ordinary sharing UI) so the authorization could reach it. The OAuth consent screen for that
+project is **External + Testing**, not Internal. This worked and is sufficient to prove
+the integration end to end (see `docs/IMPLEMENTATION_STATUS.md`, "Real Google validation,
+2026-09-20," for the full transcript), but it is **not a finalized production credential
+strategy** — an External + Testing OAuth app has its own constraints (a limited test-user
+list, and consent screens Google may periodically require re-verifying). Before a real
+production deployment, whoever owns that decision should either (a) get the SSJC Workspace
+admin review completed so the app can run as Internal under the Workspace itself (the
+path documented below), or (b) verify the External app for production use. Follow the
+steps below as written if you're pursuing the Internal/Workspace path; if you hit the same
+Workspace block, the personal-Gmail-account + folder-sharing approach above is a working
+fallback for continued development, not a recommendation to skip the Workspace path
+permanently.
 
 ## Before you start
 
@@ -42,6 +64,12 @@ You'll need:
    SSJC Workspace organization can ever be authorized — never the general public. If
    "Internal" isn't available, your Cloud project isn't yet associated with the SSJC
    Workspace organization; fix that first (talk to whoever administers the organization).
+   **If your Workspace blocks third-party OAuth app authorization pending admin review**
+   (the real situation encountered during Phase 6 validation), you have two choices: get
+   that review completed, or — as a working fallback for continued development, not a
+   production plan — choose **External** audience instead, add yourself under **Test
+   users**, and use a personal Google account whose Drive access to the real SSJC folder
+   you've arranged via ordinary folder sharing. See the callout above "Before you start."
 3. Fill in the required app name and support email (any reasonable values — this screen
    is never shown to teachers, only to the one SSJC Workspace account performing the
    one-time authorization in step 6 below).
@@ -132,7 +160,7 @@ description (never a raw Google error, never any credential).
 |---|---|
 | `configuration_missing` | One of the four `.env.local` variables above is still empty. |
 | `authorization_required` / `authorization_revoked_or_invalid` | The refresh token is invalid or was revoked — re-run step 6. |
-| `permission_denied` | The authorized account doesn't have the Drive permission this operation needs (e.g. can't write to the folder). Check sharing settings on the folder itself, and whether a Workspace admin needs to approve the app (step 3). |
+| `permission_denied` | The authorized account doesn't have the Drive permission this operation needs (e.g. can't write to the folder). Check sharing settings on the folder itself, and whether a Workspace admin needs to approve the app (step 3). If authorization itself fails before you ever reach `google:smoke` with a message about the app being blocked or requiring admin approval, that's the Workspace-policy block described above "Before you start" — not something this application's code can work around. |
 | `root_folder_missing` | `GOOGLE_DRIVE_ROOT_FOLDER_ID` doesn't point at a real, accessible Drive folder. Double-check the ID. |
 | `rate_limited` / `transient_provider_failure` | A temporary Google-side issue — wait a bit and try again. |
 
@@ -143,7 +171,15 @@ project's Environment Variables (Project Settings → Environment Variables) for
 Production environment: `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`,
 `GOOGLE_OAUTH_REFRESH_TOKEN`, `GOOGLE_DRIVE_ROOT_FOLDER_ID`. Use the exact same values as
 your local `.env.local` — the refresh token doesn't change between environments; it's
-tied to the one authorized SSJC Workspace account, not to where the server runs.
+tied to the one authorized account, not to where the server runs.
+
+**Before actually deploying to production**, resolve which OAuth credential strategy you're
+running: an Internal app under the SSJC Workspace (the intended path, requiring the admin
+review above) is the durable choice. An External + Testing app (the working fallback used
+for Phase 6's own real validation) is fine for continued development, but is not something
+this document recommends carrying into production as-is — see the callout at the top of
+this file and `docs/IMPLEMENTATION_STATUS.md`'s "Real Google validation" section for the
+full reasoning. This is a deployment decision to make deliberately, not a step to skip.
 
 ## 10. Revoking or rotating access later
 

@@ -1,7 +1,8 @@
 # Testing
 
-Status: reflects what's actually built and run through Phase 6 — every command below was
-executed against the real project, not just written.
+Status: reflects what's actually built and run through Phase 6, including its real Google
+Drive validation — every command below was executed against the real project, not just
+written.
 
 ## Running the suite
 
@@ -153,8 +154,10 @@ server-side; (E) downloads it back and verifies a byte-for-byte match; (F) trash
 that exact disposable file, after independently re-checking its id, filename prefix, and
 root containment; (G) lists the root again and confirms every pre-existing child id
 survived unchanged, printing `existing library assets modified: NO` only when that's
-genuinely demonstrated. See `docs/IMPLEMENTATION_STATUS.md` for whether this has actually
-been run against real credentials in this environment, and its result if so.
+genuinely demonstrated. **Run against real credentials 2026-09-20 and passed** — full
+transcript in `docs/IMPLEMENTATION_STATUS.md`, "Real Google validation, 2026-09-20." The
+real configured root ("Corridor books") is a My Drive folder with three pre-existing
+photographer subfolders, all confirmed unchanged after the test.
 
 **Cleanup guarantee (2026-09-20 correction):** the step orchestration
 (`scripts/google/smokeOrchestration.ts`'s `runSmokeTest`) attempts to trash the disposable

@@ -23,11 +23,23 @@ it isn't designed for at that traffic pattern.
 
 ## OAuth architecture
 
-One SSJC Google Workspace account authorizes this application once, via OAuth 2.0 Web
-Server flow with offline access (`docs/GOOGLE_SETUP.md`). This is infrastructure
-authorization, not teacher identity — SSJC staff continue authenticating through the
-existing shared staff-password/session system (`docs/SECURITY.md`) regardless of Drive
-configuration.
+One Google account, authorized once, via OAuth 2.0 Web Server flow with offline access
+(`docs/GOOGLE_SETUP.md`). This is infrastructure authorization, not teacher identity — SSJC
+staff continue authenticating through the existing shared staff-password/session system
+(`docs/SECURITY.md`) regardless of Drive configuration.
+
+**Real-world credential note (2026-09-20):** the design intent, and `docs/GOOGLE_SETUP.md`'s
+primary documented path, is an SSJC Google Workspace account authorizing directly (OAuth
+consent screen audience = Internal). Real Phase 6 validation found that SSJC's Workspace
+currently blocks third-party OAuth app authorization pending an administrator review, so
+that path could not be completed as-is. Real validation was instead performed with a Google
+Cloud project under a personal Gmail account, granted access to the real SSJC Drive folder
+via ordinary Drive folder sharing, with the OAuth consent screen running as External +
+Testing. This proves the architecture described in this document works correctly end to
+end — nothing about the architecture itself changed or depends on which of these two
+authorizing-account paths is used. It is not, however, a finalized production credential
+strategy — see `docs/GOOGLE_SETUP.md` and `docs/IMPLEMENTATION_STATUS.md`'s "Real Google
+validation, 2026-09-20" for the full reasoning and the open production decision.
 
 **Why OAuth instead of a service account:** the existing ~1,500-photo collection already
 lives in ordinary Drive folders owned by real Workspace users, organized by whoever
@@ -239,3 +251,16 @@ provides), `downloadSource()` each real photo it intends to process, and
 `ingestion_items.drive_file_id` (pre-existing schema) to track which Drive file produced
 which ingestion attempt. Phase 6 deliberately does not process, hash, or import anything
 from the existing ~1,500-photo collection — it only proves the collection is reachable.
+
+## Real validation evidence (2026-09-20)
+
+`npm run google:smoke` was run against the real, configured SSJC Drive folder and passed
+end to end — full transcript and full analysis of what each step proved (including the
+authorizing-account credential context above) is in `docs/IMPLEMENTATION_STATUS.md`,
+"Real Google validation, 2026-09-20." Summary of what this confirmed about the real
+collection, not just the mocked test suite: the configured root ("Corridor books") is a
+**My Drive folder, not a Shared Drive**; its three pre-existing photographer subfolders
+(`Shirin`, `Diamond `, `Ray`) are real, reachable, and were confirmed unchanged before and
+after the test; a real resumable upload, server-side confirmation (with a real MD5
+checksum), byte-for-byte download, and trash-based cleanup all completed successfully
+against Google's actual API — not a simulation of it.

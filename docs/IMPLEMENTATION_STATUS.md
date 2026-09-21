@@ -1,44 +1,118 @@
 # Implementation Status
 
-Last updated: 2026-09-20 (Phase 6 correction pass). This document is continuity insurance — it should always
-let another coding agent open this repository cold and know exactly where things stand. Keep
-it current at the end of every phase.
+Last updated: 2026-09-20 (Phase 6 complete — real Google Drive validation passed). This document
+is continuity insurance — it should always let another coding agent open this repository cold
+and know exactly where things stand. Keep it current at the end of every phase.
 
 ## Current phase
 
-**Phase 6 — Google Drive connection: IMPLEMENTATION COMPLETE (including a 2026-09-20 code-safety
-correction pass) — REAL GOOGLE VALIDATION BLOCKED ON USER OAUTH SETUP.** Phase 5 (real search
-architecture, including its real-provider validation pass) is complete and approved as of
-commit `88b02752363649c297b6e6f3e38202cee2e51a6a`.
+**PHASE 6 COMPLETE — REAL GOOGLE DRIVE VALIDATION PASSED.** Phase 5 (real search architecture,
+including its real-provider validation pass) is complete and approved as of commit
+`88b02752363649c297b6e6f3e38202cee2e51a6a`.
 
-Phase 6 establishes the OAuth-authorized Google Drive infrastructure that later phases (7:
-Add Book intake; 10: bulk import) will build on — see `docs/GOOGLE_INTEGRATION.md` for the
-full architecture and `docs/GOOGLE_SETUP.md` for setup. Everything that can be built and
-proven without a real Google OAuth credential has been: the `CoverStorageProvider`
-abstraction and its concrete `GoogleDriveCoverStorageProvider`, server-side OAuth token
-management, the root-folder security boundary (now enforced on every method, including
-`getFileMetadata` — see the 2026-09-20 correction below), bounded/paginated listing,
-resumable-upload infrastructure, upload-completion verification, and a real cleanup
-guarantee for the smoke test's own disposable file. 342 mocked unit tests total across the
-whole suite (87 from the original Phase 6 pass + 17 from the correction pass) prove all of
-the above against a simulated Drive/OAuth HTTP boundary (`tests/unit/googleDrive/`).
+Phase 6 established the OAuth-authorized Google Drive infrastructure that later phases (7: Add
+Book intake; 10: bulk import) will build on — see `docs/GOOGLE_INTEGRATION.md` for the full
+architecture and `docs/GOOGLE_SETUP.md` for setup. Everything is built and now real-validated:
+the `CoverStorageProvider` abstraction and its concrete `GoogleDriveCoverStorageProvider`,
+server-side OAuth token management, the root-folder security boundary (enforced on every
+method, including `getFileMetadata` — see the 2026-09-20 code-safety correction), bounded/
+paginated listing, resumable-upload infrastructure, upload-completion verification, and a real
+cleanup guarantee for the smoke test's own disposable file. 342 mocked unit tests across the
+whole suite prove all of the above against a simulated Drive/OAuth HTTP boundary
+(`tests/unit/googleDrive/`), and `npm run google:smoke` has now proven the same mechanism
+against the real, configured Drive folder — see "Real Google validation, 2026-09-20" below for
+the full evidence.
 
-**2026-09-20 correction pass** fixed two real gaps a review found before any real OAuth
-credential was introduced: (1) the public `getFileMetadata` had no root-containment check —
-fixed, see "Completed work (Phase 6 correction pass, 2026-09-20)" below; (2) the real smoke
-test could orphan its own disposable test file on a post-upload failure — fixed with a
-provider-injected, fully-tested cleanup guarantee. A third reported issue (an "empty"
-`validation.test.ts`) was investigated and found to be a false report — the file already had
-9 passing tests covering everything asked for; no change was needed.
+**2026-09-20 code-safety correction pass** (before real OAuth was authorized) fixed two real
+gaps a review found: (1) the public `getFileMetadata` had no root-containment check — fixed,
+see "Completed work (Phase 6 correction pass, 2026-09-20)" below; (2) the real smoke test could
+orphan its own disposable test file on a post-upload failure — fixed with a provider-injected,
+fully-tested cleanup guarantee. A third reported issue (an "empty" `validation.test.ts`) was
+investigated and found to be a false report — the file already had 9 passing tests covering
+everything asked for; no change was needed.
 
-**What is NOT yet done, and cannot be done without user action**: no real Google Cloud
-project/OAuth client exists yet in this environment, so `npm run google:authorize` has not
-been run, `GOOGLE_OAUTH_REFRESH_TOKEN` is empty, and `npm run google:smoke` — the real,
-end-to-end connectivity proof the phase brief requires before final completion — has not
-been executed against a real Drive account. `GOOGLE_DRIVE_ROOT_FOLDER_ID` is the one Phase 6
-variable already set locally (the user supplied the real root folder id; it is in
-`.env.local` only, never committed). See "User inputs needed" below for the exact remaining
-steps — all non-secret actions the user (not this agent) must perform.
+## Real Google validation, 2026-09-20
+
+`npm run google:smoke` was run against the real, configured SSJC Drive folder and **passed
+end to end**. Full transcript:
+
+```
+=== Step A ===
+[A] Connected. Root folder: "Corridor books" (1FauwOR6x9IfGT0ToZXBi4CoXuVMi5wXZ)
+[A] Shared Drive: no (My Drive)
+[A] Can create children under root: true
+
+=== Step B ===
+[B] Root has 3 immediate non-trashed child item(s) (this page).
+[B]   - [folder] "Shirin" (1Nbycud7K69fHGsQDhTOg11Ii0arboZMH)
+[B]   - [folder] "Diamond " (1SaShMDITS2CoOC1w37gjpxvF-r6tJ-0Y)
+[B]   - [folder] "Ray" (1D_jnpMWR86D5ZsLFVw9F-VpMR-uoJOsj)
+[B]   Sampled "Shirin": 3 item(s) in a bounded 3-item page (not processed).
+[B]   Sampled "Diamond ": 3 item(s) in a bounded 3-item page (not processed).
+[B]   Sampled "Ray": 3 item(s) in a bounded 3-item page (not processed).
+
+=== Step C ===
+[C] Generated a 69-byte synthetic PNG named "__ssjc_phase6_smoke_1789951871387.png".
+[C] Resumable upload session initiated (session URI withheld from all output, as designed).
+[C] Upload complete. Real Drive file ID: 1IhZKhQ0_M5_q6V2oU8idYpAX8uymGCr7
+
+=== Step D ===
+[D] Confirmed: parent, MIME type, size, and filename all match. Checksum: a1cf09b59e5060f3beccdcf7a37189f0
+
+=== Step E ===
+[E] Downloaded 69 bytes. Byte-for-byte match with the original synthetic PNG: true.
+
+=== Step F ===
+[F] Trashed the disposable test file (1IhZKhQ0_M5_q6V2oU8idYpAX8uymGCr7). Nothing else was touched.
+
+=== Step G ===
+[G] Pre-existing child count: 3. Post-cleanup child count: 3.
+[G] Every pre-existing child id still present: true.
+[G] Disposable test file no longer listed (trashed): true.
+
+existing library assets modified: NO
+```
+
+The configured root is a real, named folder ("Corridor books") in **My Drive, not a Shared
+Drive**. The three pre-existing photographer folders (`Shirin`, `Diamond `, `Ray`) were all
+accessible and all still present, unchanged, after the test — confirmed by comparing pre- and
+post-cleanup child id lists, not merely by name. Only bounded metadata samples (3 items per
+folder) were read; no existing photograph was downloaded, processed, or altered. Google issued
+a real Drive file id for the disposable upload, returned a real MD5 checksum on confirmation,
+and the downloaded bytes matched the uploaded ones exactly. The disposable test file was
+trashed (never permanently deleted) and confirmed gone from the listing afterward.
+
+**Credential context, recorded accurately:** the Google Cloud project performing this
+authorization is under the requester's **personal Gmail account**, not the SSJC Google
+Workspace organization — the SSJC Workspace account itself could not complete OAuth
+authorization because Workspace policy currently blocks third-party OAuth app authorization
+pending admin review. No SSJC Workspace admin setting was changed to work around this. The
+real, existing SSJC Drive folder ("Corridor books") was shared to that personal Gmail account
+with sufficient access (read + write) for this authorization to reach it — the folder itself,
+its three subfolders, and their contents remain wherever they actually live in Drive; nothing
+was moved. This does not change teacher-facing authentication in any way: SSJC staff still sign
+in with the existing shared staff password (`docs/SECURITY.md`), and no teacher Google login
+was added or is planned.
+
+**Current production limitation, stated plainly:** the OAuth consent screen for this
+integration is currently configured as **External + Testing** in Google Cloud, not Internal —
+a direct consequence of the Workspace-account block above. This is sufficient to prove Phase 6
+real validation (this smoke test), but a Testing-mode OAuth app's refresh-token authorization
+is **not a permanent production credential strategy** — Google's Testing mode has its own
+constraints (e.g. a limited test-user list, and consent screens Google may periodically require
+re-verifying). **Real production OAuth longevity is not solved by this validation** and remains
+an open decision for whoever deploys this to production — options include getting the SSJC
+Workspace admin review completed so the app can run as Internal, or verifying the External app
+for production use. This is a deployment/security decision for a later phase, not a Phase 6
+architecture problem — nothing about `CoverStorageProvider`, the OAuth token-exchange
+mechanism, or the root-containment boundary depends on which of those two paths is eventually
+chosen.
+
+`.env.local` (gitignored, unmodified by this documentation pass) holds the real
+`GOOGLE_OAUTH_CLIENT_ID`/`GOOGLE_OAUTH_CLIENT_SECRET`/`GOOGLE_OAUTH_REFRESH_TOKEN`/
+`GOOGLE_DRIVE_ROOT_FOLDER_ID` used for this run. No client secret, refresh token, access token,
+authorization code, resumable session URI, or credential JSON appears anywhere in this
+repository — verified directly (see "Security review" in this pass's report).
 
 ## Full phase plan (for reference — do not execute ahead of approval)
 
@@ -50,7 +124,7 @@ steps — all non-secret actions the user (not this agent) must perform.
 | 3 | Voice + reading lists + guide | Complete (approved) |
 | 4 | Real database | Complete (approved) |
 | 5 | Real search architecture | Complete (approved), real-provider validation 2026-09-17 |
-| 6 | Google Drive connection | **Implementation complete — see "Current phase" for the one open item (real Google validation)** |
+| 6 | Google Drive connection | **Complete — real Google Drive validation passed 2026-09-20** |
 | 7 | Single Add-a-Book flow | Not started |
 | 8 | Admin review + taxonomy | Not started |
 | 9 | Google Sheets | Not started |
@@ -534,20 +608,17 @@ detail in `docs/DECISIONS.md`; test detail in `docs/TESTING.md`.
 
 ## In-progress / not yet done for Phase 6
 
-- **Real Google OAuth setup and `npm run google:smoke`** — blocked on the user performing the
-  non-secret setup steps in `docs/GOOGLE_SETUP.md` (Cloud project, OAuth consent screen,
-  Web Application client, then `npm run google:authorize`). See "User inputs needed" below
-  for the exact remaining steps. Until this runs successfully, Phase 6 cannot be marked fully
-  complete per its own acceptance criteria — see "Current phase" above.
-- Final git commit and push for this work (see "Git status" below for what was actually done).
+None. Real Google OAuth setup was completed (via a personal Gmail account — see "Real Google
+validation, 2026-09-20" above for why) and `npm run google:smoke` passed against the real
+configured Drive folder. Phase 6 is complete per its own acceptance criteria.
 
 ## Blocked work
 
-**Real Google Drive validation is blocked on the user completing OAuth Cloud setup** — see
-`docs/GOOGLE_SETUP.md` and "User inputs needed" below. Everything that does not require a
-real Google credential (the provider abstraction, OAuth token management, root-boundary
-enforcement, bounded listing, resumable-upload infrastructure, and all 87 mocked unit tests)
-is built, tested, and not blocked.
+None. Real Google Drive validation, previously blocked on OAuth Cloud setup, was completed
+2026-09-20 — see "Real Google validation, 2026-09-20" above. The one standing limitation (the
+OAuth app runs in External + Testing mode, not a finalized production credential strategy) is
+a deployment/security decision for a later phase, not a blocker on Phase 6 itself — see that
+section for the full explanation.
 
 ## Deferred work
 
@@ -568,24 +639,17 @@ assumption. Branding is now fully real end to end — nothing placeholder remain
 in `.env.local` as `GOOGLE_DRIVE_ROOT_FOLDER_ID` (never committed, never appears in source or
 documentation per the phase brief's own instruction).
 
-**USER INPUT REQUIRED to complete Phase 6** (none of these are secrets to paste into chat —
-see `docs/GOOGLE_SETUP.md` for the full walkthrough of each step):
+**Resolved 2026-09-20: real Google OAuth setup and `npm run google:smoke` are both complete.**
+The originally-planned path (an SSJC Workspace account authorizing directly) was blocked by
+Workspace policy on third-party OAuth apps pending admin review — no workaround or admin
+setting was changed to route around this. Instead, a Google Cloud project under the
+requester's own personal Gmail account performed the OAuth authorization, and the real SSJC
+Drive folder was shared to that account with sufficient access. `npm run google:smoke` then
+passed against the real folder — see "Real Google validation, 2026-09-20" above for the full
+transcript. The OAuth app currently runs in External + Testing mode; see that section for why
+this is sufficient for Phase 6 but not yet a finalized production credential strategy.
 
-1. Create/select a Google Cloud project belonging to the SSJC Workspace organization.
-2. Enable the Google Drive API for that project.
-3. Configure the Google Auth Platform / OAuth consent screen with audience = Internal, and
-   add the two scopes (`drive.readonly`, `drive.file`).
-4. Create an OAuth 2.0 **Web Application** client with redirect URI exactly
-   `http://127.0.0.1:53682/oauth2/callback`.
-5. Place the resulting client ID/secret into local `.env.local`
-   (`GOOGLE_OAUTH_CLIENT_ID`/`GOOGLE_OAUTH_CLIENT_SECRET`).
-6. Run `npm run google:authorize` and complete consent in the browser, signed in as the
-   intended SSJC Workspace account.
-7. Run `npm run google:smoke` and confirm it passes.
-8. Report the result (or the exact safe failure category, if any) so this phase's real
-   validation section can be completed — see `docs/IMPLEMENTATION_STATUS.md`'s "Current phase."
-
-None of these block anything else:
+None of the following block anything:
 
 - Google Sheet for the teacher catalog projection (Phase 9).
 - Which AI provider(s) you hold API/billing access to, beyond the Gemini key already
@@ -597,6 +661,14 @@ None of these block anything else:
 - Eventually: feedback on whether the 8 provisional physical categories used for Phase 2
   testing feel like a reasonable direction, once Phase 11's real taxonomy research begins —
   not needed now.
+- **Eventually, before a real production deployment: a permanent Google OAuth credential
+  strategy.** The current OAuth app is External + Testing under a personal Gmail account —
+  fine for Phase 6 validation and continued development, but not something to deploy to
+  production as-is. Whoever handles production deployment will need to choose between (a)
+  getting the SSJC Workspace admin review completed so the app can run as Internal under the
+  Workspace itself, or (b) verifying the External app for production use. Not a Phase 6
+  blocker; not needed until deployment planning (Phase 13 or whenever real deployment is
+  scheduled).
 
 ## Known bugs
 
@@ -658,11 +730,11 @@ Phase 1's four (`STAFF_PASSWORD_HASH`, `ADMIN_PASSWORD_HASH`, `SESSION_SECRET`, 
 `GEMINI_API_KEY` are unchanged — documented in `docs/DATABASE_SETUP.md` and `.env.example`; no
 values recorded here. **Phase 6 adds four optional variables**: `GOOGLE_OAUTH_CLIENT_ID`,
 `GOOGLE_OAUTH_CLIENT_SECRET`, `GOOGLE_OAUTH_REFRESH_TOKEN`, `GOOGLE_DRIVE_ROOT_FOLDER_ID` — see
-`docs/GOOGLE_SETUP.md`. **Current state in this environment**: `GOOGLE_DRIVE_ROOT_FOLDER_ID` is
-set (the user supplied the real value 2026-09-18); the other three are still empty pending the
-user's OAuth Cloud setup (see "User inputs needed" above). Nothing else in the app depends on
-any of these four — every existing feature works identically whether or not Drive is
-configured.
+`docs/GOOGLE_SETUP.md`. **Current state in this environment**: all four are set and
+live-validated as of 2026-09-20 — see "Real Google validation, 2026-09-20" above for the
+authorization path used (a personal Gmail account, not the SSJC Workspace account — see that
+section for why). Nothing else in the app depends on any of these four — every existing
+feature works identically whether or not Drive is configured.
 
 ## Migrations
 
@@ -696,22 +768,23 @@ recognition. **Optionally, Google's Gemini embedding API** (`gemini-embedding-2`
 `GEMINI_API_KEY` is configured — configured in this environment as of 2026-09-17 and live-tested
 (see "Completed work (Phase 5 real-provider validation)" above); search still works completely
 without it if the key is removed. **Phase 6 adds the Google Drive API** as a connected external
-service, once OAuth setup completes (`docs/GOOGLE_SETUP.md`) — not yet live-validated in this
-environment; see "Current phase" above and `docs/COSTS.md` for the cost picture. No Supabase or
-Sheets service is connected.
+service, real-validated 2026-09-20 (`docs/GOOGLE_SETUP.md`, "Real Google validation" above) —
+see `docs/COSTS.md` for the cost picture. No Supabase or Sheets service is connected.
 
 ## Git status
 
 Repository is linked to `github.com/Shirin-Maleki/ssjc-library` (`origin`, `main`). Phase 5 —
 including its real-provider validation pass — is approved as of commit
 `88b02752363649c297b6e6f3e38202cee2e51a6a`. The original Phase 6 implementation was committed
-as `ab515aae0d321464154c444c8fe2f534c0ec636a`. This correction pass's work is committed and
-pushed on top of that commit — see the final report for the exact commit SHA and push
-confirmation.
+as `ab515aae0d321464154c444c8fe2f534c0ec636a`; the 2026-09-20 code-safety correction pass as
+`72c5c8a33b55262e2cd906913883d3a85e2d31d7`. This documentation-only closure (recording the
+passed real Google validation) is committed and pushed on top of that commit — see the final
+report for the exact commit SHA and push confirmation.
 
 ## Next recommended task
 
-Complete the "User inputs needed" checklist above (Google Cloud OAuth setup), then run
-`npm run google:smoke` and report the result so Phase 6's real-validation section can be
-completed. Phase 7 (single Add-a-Book flow) must not begin until Phase 6 — including real
-Google validation — is explicitly approved.
+Await explicit review/approval of Phase 6 as complete. Phase 7 (single Add-a-Book flow) must
+not begin until that approval — this pass did not start any Phase 7 work. Whoever picks up
+Phase 7 should read `docs/GOOGLE_INTEGRATION.md`'s "How Phase 7 should use this" and the
+production-OAuth-strategy note in "Real Google validation, 2026-09-20" above before building
+the upload UI.

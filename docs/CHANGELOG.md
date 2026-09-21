@@ -4,6 +4,23 @@ A simple, phase-level record of what actually shipped — not a verbose release 
 Entries are dated by when the work was completed; see `docs/IMPLEMENTATION_STATUS.md` for the
 current state and `docs/DECISIONS.md` for the reasoning behind any of these.
 
+## Phase 6 complete — real Google Drive validation passed — 2026-09-20
+
+`npm run google:smoke` ran against the real, configured SSJC Drive folder ("Corridor
+books," a My Drive folder) and passed end to end: connection + root verification, bounded
+listing of the three pre-existing photographer subfolders (`Shirin`, `Diamond `, `Ray`,
+all confirmed accessible and unchanged), a real resumable upload, server-side confirmation
+with a real MD5 checksum, byte-for-byte download verification, cleanup of the disposable
+test file, and confirmation that every pre-existing item survived unchanged.
+
+Authorization used a personal Gmail account, not the SSJC Workspace account directly — the
+Workspace currently blocks third-party OAuth authorization pending admin review, and no
+Workspace setting was changed to route around this. The real Drive folder was shared to
+that account with sufficient access. This is a working setup for continued development,
+proven by the real pass above, but not a finalized production credential strategy — see
+`docs/GOOGLE_SETUP.md` and `docs/IMPLEMENTATION_STATUS.md` for the open production decision
+this leaves for later. No code changed in this update; documentation-only closure.
+
 ## Phase 6 correction pass — 2026-09-20
 
 A small, bounded correction pass, made before any real OAuth credential was introduced:

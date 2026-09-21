@@ -16,21 +16,24 @@ exactly what exists right now versus what is planned.
 
 ## Project status
 
-**Current phase: Phase 6 — Google Drive connection (implementation complete, real validation
-pending user OAuth setup).** Phase 5 (real search architecture, including real-provider
-validation against a live Gemini API key) is complete and approved. Find a Book runs a real,
-bounded, database-backed hybrid search pipeline — structured SQL filters, Postgres full-text +
-trigram fuzzy matching, and real optional pgvector semantic retrieval, combined by a transparent
-scorer on top of the unchanged deterministic Phase 2–4 ranking engine. Reading Lists (genuinely
-shared Postgres persistence, Phase 4) and voice search (Phase 3) are unaffected. Staff/admin
+**Current phase: Phase 6 — Google Drive connection — COMPLETE, real Google Drive validation
+PASSED (2026-09-20).** Phase 5 (real search architecture, including real-provider validation
+against a live Gemini API key) is complete and approved. Find a Book runs a real, bounded,
+database-backed hybrid search pipeline — structured SQL filters, Postgres full-text + trigram
+fuzzy matching, and real optional pgvector semantic retrieval, combined by a transparent scorer
+on top of the unchanged deterministic Phase 2–4 ranking engine. Reading Lists (genuinely shared
+Postgres persistence, Phase 4) and voice search (Phase 3) are unaffected. Staff/admin
 authentication (Phase 1) still gates everything and is completely separate from the Google
 account this phase authorizes for Drive infrastructure — no teacher ever signs in with Google.
-Phase 6 builds a `CoverStorageProvider` abstraction, OAuth token management, a root-folder
+Phase 6 built a `CoverStorageProvider` abstraction, OAuth token management, a root-folder
 security boundary, and resumable-upload infrastructure for a future Add Book flow (Phase 7) —
 see `docs/GOOGLE_INTEGRATION.md`. The real end-to-end connectivity test (`npm run google:smoke`)
-has not yet run because no Google Cloud OAuth client exists in this environment yet — see
-`docs/GOOGLE_SETUP.md` for the remaining non-secret setup steps. See
-`docs/IMPLEMENTATION_STATUS.md` for exactly what's built and what remains, `docs/DATABASE_SETUP.md`
+has run against the actual configured SSJC Drive folder and passed every step — see
+`docs/IMPLEMENTATION_STATUS.md`, "Real Google validation, 2026-09-20," for the full transcript.
+(Authorization currently runs through a personal Gmail account rather than the SSJC Workspace
+account directly, because Workspace policy blocks third-party OAuth pending admin review — a
+working setup for development, not yet a finalized production credential strategy; see
+`docs/GOOGLE_SETUP.md`.) See `docs/IMPLEMENTATION_STATUS.md` for exactly what's built, `docs/DATABASE_SETUP.md`
 for the database itself, `docs/SEARCH.md` for the full search architecture, and
 `docs/GOOGLE_INTEGRATION.md`/`docs/GOOGLE_SETUP.md` for the Drive integration.
 

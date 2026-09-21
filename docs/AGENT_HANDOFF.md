@@ -82,18 +82,30 @@ pipeline (structured SQL filters, full-text + trigram + optional semantic retrie
 `docs/SEARCH.md`); Reading Lists are genuinely shared across every staff member/device via
 authenticated Server Actions; the Library Guide is real content.
 
-**Phase 6 (Google Drive connection) is implementation-complete, blocked only on real Google
-OAuth validation** (2026-09-18) — see `docs/GOOGLE_INTEGRATION.md` for the architecture and
-`docs/IMPLEMENTATION_STATUS.md` for the exact open item. A `CoverStorageProvider` abstraction
-(`src/lib/googleDrive/`) with a concrete Google Drive implementation, server-side OAuth token
-management, a root-folder security boundary (ancestry-walk containment check), bounded/paginated
-listing, resumable-upload infrastructure for the future Phase 7 browser-upload flow, and upload
-completion verification are all built and covered by 87 mocked unit tests. No teacher Google
-login exists or is planned — SSJC staff authentication is completely unchanged. `npm run
-google:smoke`, the real end-to-end connectivity proof, has not yet been run because no real
-Google Cloud OAuth client exists in this environment yet — see `docs/GOOGLE_SETUP.md` for the
-exact non-secret steps a human needs to complete before this can happen. **Do not begin Phase 7
-until Phase 6's real Google validation is complete and the phase is explicitly approved.**
+**PHASE 6 (Google Drive connection) IS COMPLETE — REAL GOOGLE DRIVE VALIDATION PASSED**
+(2026-09-20) — see `docs/GOOGLE_INTEGRATION.md` for the architecture and
+`docs/IMPLEMENTATION_STATUS.md` for the full real-validation transcript. A `CoverStorageProvider`
+abstraction (`src/lib/googleDrive/`) with a concrete Google Drive implementation, server-side
+OAuth token management, a root-folder security boundary (ancestry-walk containment check,
+enforced on every method including `getFileMetadata` as of a 2026-09-20 code-safety
+correction), bounded/paginated listing, resumable-upload infrastructure for the future Phase 7
+browser-upload flow, and upload completion verification are all built, covered by 342 mocked
+unit tests, and now real-validated: `npm run google:smoke` ran against the actual configured
+SSJC Drive folder ("Corridor books," a My Drive folder with three pre-existing photographer
+subfolders) and passed every step (A–G) — real upload, real confirmation with a real checksum,
+real byte-for-byte download, real cleanup, and confirmed zero mutation to the pre-existing
+collection. No teacher Google login exists or is planned — SSJC staff authentication is
+completely unchanged.
+
+**Credential note worth knowing before touching this again:** the SSJC Google Workspace
+account could not complete OAuth authorization directly (Workspace policy currently blocks
+third-party OAuth apps pending admin review) — real validation used a personal Gmail account
+instead, with the real Drive folder shared to it, and the OAuth consent screen running as
+External + Testing rather than Internal. This is a genuine, working setup for continued
+development, proven by the real smoke-test pass above, but it is **not a finalized production
+credential strategy** — see `docs/GOOGLE_SETUP.md` and `docs/IMPLEMENTATION_STATUS.md` for the
+full reasoning before deploying this to production. **Phase 7 may now begin once explicitly
+approved** — this document does not itself grant that approval.
 
 See `docs/IMPLEMENTATION_STATUS.md` for the authoritative, continuously updated detail — this
 file only orients you to the process, not the current state, since state changes every phase and
@@ -349,7 +361,7 @@ if the test harness touches the same platform behavior the app does.
   a JSON-parse of what might be an empty body.
 - **When a script needs to build a real binary asset for a smoke test (a tiny PNG, here),
   construct it programmatically with a verifiable format rather than hand-typing a base64
-  constant you can't fully verify by inspection.** `scripts/google/smoke.ts`'s
+  constant you can't fully verify by inspection.** `scripts/google/smokeOrchestration.ts`'s
   `generateTinySyntheticPng()` builds real PNG chunks (IHDR/IDAT/IEND) with real CRC32s via
   Node's built-in `zlib.crc32`/`zlib.deflateSync` — its validity follows from the PNG format
   itself being correctly assembled, not from trusting an opaque byte string was transcribed
@@ -358,6 +370,41 @@ if the test harness touches the same platform behavior the app does.
   same `\$`-escaping discipline as `scripts/hash-password.mjs`** when writing a token
   containing `$` into `.env.local` — reused that established convention directly rather than
   discovering the bug again the hard way for a new credential type.
+- **A public provider method that fetches metadata is a real root-containment escape hatch
+  if it doesn't enforce the boundary itself — "callers check containment separately" is not
+  enough, because it only takes one new caller that doesn't.** Found in code review, not by
+  a failing test: `getFileMetadata` had zero containment enforcement while every other
+  provider method had it, and the interface's own doc comment even said so. The fix
+  (`fetchRawMetadata` private + `getFileMetadata` public wrapping it with a containment
+  check) simplified three other methods that had been separately calling both the old
+  `getFileMetadata` and their own containment check — the fix and a simplification arrived
+  together, which is a good sign the fix was structurally right, not a patch.
+- **A CLI script's `fail()`-style helper that calls `process.exit()` directly is a real risk
+  once the script has created any real, cleanup-needing external state (a file, a resource,
+  a lock)** — every exit path bypasses cleanup unless you go looking for each one. The fix
+  that actually made the guarantee verifiable: extract the step sequence into a pure
+  function that takes the external dependency (here, `CoverStorageProvider`) as a parameter
+  and returns a result instead of exiting, so a `try/catch`'s cleanup logic is reachable from
+  every failure path and testable with a fake dependency, no real credentials needed
+  (`scripts/google/smokeOrchestration.ts`, `runSmokeTest`). This is the same shape as
+  `src/lib/embeddings/generation.ts` (Phase 5) — extract pure orchestration out of a CLI
+  wrapper whenever the CLI's own I/O (here, `process.exit`) would otherwise make correctness
+  untestable.
+- **When a task description reports a bug, verify the actual file before touching it — a
+  reported "empty test file" was, on inspection, a real 71-line file with 9 passing tests
+  covering exactly what was asked for.** `wc -l`, `ls -la`, and running the test file
+  directly took under a minute and prevented deleting or rewriting already-correct,
+  already-tested code for no reason. Report the discrepancy plainly rather than silently
+  "fixing" a non-problem.
+- **A Workspace's own security policy can block OAuth authorization entirely, independent of
+  anything this application's code does** — SSJC's Workspace currently blocks third-party
+  OAuth app authorization pending admin review, which has nothing to do with the two scopes
+  requested or any code in this repository. When a real integration's setup instructions
+  assume an organizational account will authorize directly, budget for the real possibility
+  that it can't, and document a working fallback (here: a personal account + Drive folder
+  sharing) as a *fallback*, explicitly not silently redefining it as the new plan — the
+  production credential decision this creates is real and belongs to whoever deploys this,
+  not something to quietly resolve by omission.
 
 ## Practical lessons from Phase 3 (worth knowing before touching voice or Reading Lists code)
 
