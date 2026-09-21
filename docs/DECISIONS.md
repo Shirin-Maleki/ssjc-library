@@ -2152,3 +2152,126 @@ backward-compatible with existing drafts via Zod's `.default()`).
 `src/components/add/CoverCapture.tsx`; `src/components/add/AddBookFlow.tsx`;
 `tests/unit/intake/imagePrep.test.ts`; `tests/unit/components/CoverCapture.test.tsx`;
 `tests/unit/ai/geminiProvider.test.ts`; `tests/e2e/addBook.spec.ts`.
+
+## AI-first catalog draft correction: one combined multimodal call, and a strict verified-facts-vs-AI-suggestions product boundary
+
+**The real product gap this responds to.** A real teacher test succeeded at the
+narrow technical goal (title and author recognized from a rotated cover), but the
+actual product promise — "photograph a book, get a substantially prefilled catalog
+draft" — was not being met. Diagnosed directly from the real, still-present
+ingestion record (`ingestion_items.id = e0cdf157-ddce-4adc-860f-924292aae279`,
+real Drive file, real Gemini vision success: title "Making Our Pizza", author
+"Jeremy Lee", publisher "Lakeshore"). `draft.enrichmentSuggestion` was `null` —
+not because nothing was inferable, but because the SECOND sequential Gemini call
+(`suggestEnrichment`, run later in the pipeline) silently failed — this session's
+real, very small (20/day) free-tier quota had already been spent on the first
+(`identifyCover`) call plus this same day's earlier validation/canary calls — and
+`enrichAndSuggestCategoryAction`'s `catch { enrichment = null; }` swallowed that
+failure with no visible trace. The empty-looking confirmation screen a teacher saw
+was a direct, honest consequence of that silent failure, not a separate UI defect.
+
+**The architecture fix: one combined call, not two sequential ones.**
+`GeminiBookIntelligenceProvider.identifyCover()` + a separate `suggestEnrichment()`
+call is replaced by one `analyzeCover()` call returning
+`{ coverEvidence, aiSuggestions }` in a single multimodal request
+(`CombinedCoverAnalysisSchema`, `src/lib/ai/schemas.ts`). This halves the default
+per-book Gemini call count against a quota this project has now directly measured
+at 20 requests/day — a second sequential call was never free from this specific
+fragility, independent of any other tuning. `identifyCoverAction` now fetches the
+active category list and calls `analyzeCover()` once; the later
+`enrichAndSuggestCategoryAction` step no longer calls Gemini at all — it only
+merges real provider context (subjects → tags,
+`src/lib/intake/enrichmentMerge.ts`) and re-validates the suggested category
+against the current active list, matching this correction's own explicit
+instruction not to "turn a useful partial AI result into an empty draft."
+
+**A malformed `aiSuggestions` section must never discard a valid `coverEvidence`
+extraction.** Both sections are validated as one JSON payload but with two
+independent Zod parses (`parseCombinedAnalysis()` in `geminiProvider.ts`):
+`coverEvidence` is a hard requirement (a malformed/missing section still throws
+`invalid_response`, matching the old `identifyCover`'s exact failure behavior),
+but a malformed or missing `aiSuggestions` section falls back to a real, valid
+empty-suggestions object (`EMPTY_AI_SUGGESTIONS`) rather than failing the whole
+call. Validating the combined payload as one atomic schema would have violated
+this correction's own "preserve what it did provide" requirement, since Zod fails
+an entire object on any single nested field's violation.
+
+**The product-level distinction this correction formalizes, not just a technical
+detail.** Two genuinely different classes of data, kept strictly separate at every
+layer (schema, draft state, confirmation UI, save-time provenance):
+
+- **Verified bibliographic facts** — title, subtitle, authors, illustrators,
+  publisher/imprint, ISBN, edition identity, language where reliably identified,
+  display-cover identity. Sourced ONLY from visible cover evidence
+  (`coverEvidence`, `sourceType: cover_visible`) or a reconciled, accepted
+  (`high_confidence`) metadata-provider match (`sourceType: external_provider`).
+  Never invented — this strict standard is unchanged from every earlier Phase 7
+  pass.
+- **AI-suggested discovery/teacher metadata** — short description, physical
+  category, age range, fiction/nonfiction, format, read-aloud estimate,
+  tags/topics/themes, visual style/realism (`aiSuggestions`,
+  `sourceType: ai_inferred`). This is DELIBERATELY, EXPLICITLY inferential —
+  the system instruction (`geminiProvider.ts`) tells the model it is expected to
+  make a useful best-effort suggestion whenever there's reasonable evidence (the
+  recognized title/author, the cover artwork, general knowledge of a confidently
+  identified real book, reasonable pedagogical judgment), and that defaulting to
+  null merely because the cover doesn't literally prove the answer wastes the
+  entire point of this section. This is a deliberate product choice: the goal is
+  reducing real teacher cataloging labor, which requires the AI to actually
+  commit to a useful draft, not hedge into uselessness — while the bibliographic
+  half of the same response stays exactly as strict as before. A teacher always
+  sees and can correct every AI suggestion (Quick Edit now initializes from these
+  values instead of blank fields) before it's saved.
+
+**Confirmation screen and Quick Edit changed to match.** The default confirmation
+screen previously showed only title/author/language/description and hid category,
+age, fiction/format, read-aloud estimate, tags, and visual style even when
+`draft.enrichmentSuggestion` had them. It now shows all of these as compact chips
+(never a raw confidence decimal, provider id, or provenance structure), with a
+subtle "AI prepared this book record for you" / "Suggested" framing. Quick Edit
+previously initialized `fictionType`/`format`/age fields blank regardless of what
+AI had already suggested — a real, reproducible bug, now fixed: Quick Edit starts
+from the AI's own values, so a teacher corrects a draft rather than fills an empty
+form. `description` was added to the small Quick Edit/`TeacherEdits` surface
+specifically because it's visible, AI-generated content that may need a small
+human correction, exactly like every other field already there.
+
+**A second, independent real bug found and fixed in the same pass: the
+teacher-corrected rotation reverted to sideways on the confirmation screen.** Root
+cause was a genuine stale-closure bug in `AddBookFlow.tsx`'s async pipeline: each
+step (`runIdentify` → `runLookup` → `runDuplicateCheck` → `runEnrichAndConfirm`)
+called the next step by name from within one continuous, multi-`await` function
+chain established at the very start of that chain — a React state update
+(`setRotationDegrees`) partway through does not change which function references
+that already-running chain continues to call, so `runEnrichAndConfirm` was reading
+`rotationDegrees` from a closure captured before the teacher's rotation choice had
+been applied. Fixed by threading the rotation value through the chain as an
+explicit parameter (`rotation: RotationDegrees`) at every step, exactly like
+`itemId`/`previewUrl` already were, rather than reading it from component state
+mid-chain. A real E2E test reproduced this exact failure (`rotate(0deg)` where
+`rotate(90deg)` was expected) before the fix and passes after it. A new shared
+`SourceCoverPreview` component (`src/components/add/SourceCoverPreview.tsx`)
+renders the teacher's just-photographed source cover consistently across the
+capture, recovery, duplicate-comparison, and confirmation screens — never applied
+to a metadata-provider display cover, which is a separate, already-correctly-
+oriented asset.
+
+**Consequences.** `BookVisionProvider.identifyCover()`/`BookEnrichmentProvider`/
+`suggestEnrichment()`/`EnrichmentInput` are removed from the provider interface —
+replaced entirely by `analyzeCover()`. `EnrichmentSummary` and
+`ConfirmBookViewData` both gained the full set of AI-suggestion fields.
+`TRACKED_METADATA_FIELDS` (`src/lib/metadata/fieldRegistry.ts`) gained a
+`description` key — a code-only change, no migration, per that registry's own
+documented design. No database schema change otherwise (drafts are `jsonb`).
+
+**Relevant files:** `src/lib/ai/schemas.ts`; `src/lib/ai/provider.ts`;
+`src/lib/ai/geminiProvider.ts`; `src/lib/ai/index.ts`; `src/lib/intake/actions.ts`;
+`src/lib/intake/enrichmentMerge.ts`; `src/lib/intake/draft.ts`;
+`src/lib/metadata/fieldRegistry.ts`; `src/components/add/ConfirmBook.tsx`;
+`src/components/add/DuplicateCheck.tsx`; `src/components/add/AddBookFlow.tsx`;
+`src/components/add/SourceCoverPreview.tsx`;
+`tests/unit/ai/schemas.test.ts`; `tests/unit/ai/geminiProvider.test.ts`;
+`tests/unit/intake/enrichmentMerge.test.ts`;
+`tests/unit/components/ConfirmBook.test.tsx`;
+`tests/unit/components/DuplicateCheck.test.tsx`;
+`tests/integration/db/persistence.test.ts`; `tests/e2e/addBook.spec.ts`.

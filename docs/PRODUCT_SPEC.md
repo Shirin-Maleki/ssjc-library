@@ -127,16 +127,39 @@ A "Open Teacher Catalog" action links out to the generated, read-only Google She
 
 ## 7. Add a Book
 
-Single front-cover photo only in v1 (no barcode, no back cover, no title page). Flow:
-capture → upload original to Drive → identify → check duplicates → enrich metadata →
-classify visuals → generate description → assign tags → suggest one existing physical
-category → compute confidence → **teacher confirmation** with exactly three actions:
+Single front-cover photo only in v1 (no barcode, no back cover, no title page). The
+intended experience (AI-first catalog draft correction): **photo → AI creates a
+near-complete catalog draft → provider metadata verifies bibliographic facts →
+teacher reviews / makes minor corrections → save.** A teacher should never feel like
+they're completing a catalog form from scratch.
 
-1. **Confirm** — accept and save; show shelving instruction.
-2. **Quick Edit** — correct only a small set of teacher-realistic fields (physical category,
-   language, age range, fiction/nonfiction, format/size exception). No AI internals, no
-   provenance, no raw tags exposed here.
+Flow: capture → upload original to Drive → one combined AI analysis (identify +
+enrich in a single request, see `docs/AI_PIPELINE.md`) → check duplicates against
+reconciled bibliographic identity → **teacher confirmation** with exactly three
+actions:
+
+1. **Confirm** — accept and save; show shelving instruction. Confirming without
+   opening Quick Edit still saves every AI-suggested field the analysis produced —
+   nothing an AI genuinely suggested is silently dropped just because no one
+   re-confirmed it by hand.
+2. **Quick Edit** — a small, teacher-realistic correction surface that STARTS FROM
+   the AI's own suggested values (title, authors, language, physical category, age
+   range, fiction/nonfiction, format, short description) — a teacher corrects a
+   draft, never fills a blank form. Tags, visual metadata, and detailed provenance
+   stay outside this surface. No AI internals, no raw provenance structures, no
+   raw confidence numbers, no model/provider identifiers exposed here.
 3. **Review Later** — save in a usable state, flag for admin review.
+
+**Two classes of data, kept strictly separate** (see `docs/DECISIONS.md` for the
+full rationale): **verified bibliographic facts** (title, subtitle, authors,
+illustrators, publisher/imprint, ISBN, edition identity, language where reliably
+identified, display-cover identity) come only from visible cover evidence or a
+reconciled, accepted metadata-provider match — never invented. **AI-suggested
+discovery/teacher metadata** (short description, physical category, age range,
+fiction/nonfiction, format, read-aloud estimate, tags/topics/themes, visual
+style/realism) is genuinely inferential catalog assistance the AI is expected to
+attempt whenever there's reasonable evidence, explicitly to save teacher labor —
+never claimed as a publisher fact, always correctable.
 
 Meaningful progress stages are shown during processing; never a blank spinner.
 

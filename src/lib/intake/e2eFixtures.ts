@@ -1,4 +1,4 @@
-import type { CoverIdentification } from "@/lib/ai/schemas";
+import type { CoverIdentification, EnrichmentSuggestion } from "@/lib/ai/schemas";
 import type { NormalizedMetadataCandidate } from "@/lib/metadataProviders/provider";
 import { isE2EFakeProvidersEnabled } from "@/lib/e2eTestFlags";
 
@@ -108,6 +108,38 @@ export function buildFakeCoverEvidence(filename: string): CoverIdentification {
     visibleTitle: `${words.join(" ")} ${crypto.randomUUID()}`,
     visibleAuthors: ["E2E Fixture Author"],
     visibleLanguage: "English",
+  };
+}
+
+/**
+ * Fake AI suggestions (AI-first catalog draft correction §13) — separate from
+ * `buildFakeCoverEvidence` and deliberately keyed to only ONE filename ("aidraft"),
+ * never applied to any other existing fixture scenario, so every already-passing
+ * E2E test (including "no category was AI-suggested" ones that specifically rely
+ * on no suggestion existing) keeps its exact existing behavior. Real-shaped: every
+ * field a real Gemini `aiSuggestions` section could plausibly return, so the E2E
+ * suite can exercise the confirmation screen's AI-suggestion display and Quick
+ * Edit's AI-value initialization without a live, quota-limited Gemini call.
+ */
+export function buildFakeAiSuggestions(filename: string): EnrichmentSuggestion | null {
+  if (!filename.toLowerCase().includes("aidraft")) return null;
+  return {
+    description: "A curious mouse explores the forest and outsmarts every creature it meets along the way.",
+    tags: ["forest", "clever-character", "rhyme", "read-aloud"],
+    fictionType: "fiction",
+    format: "picture_book",
+    ageMinMonths: 36,
+    ageMaxMonths: 84,
+    readAloudMinutes: 8,
+    visualMediaTypes: ["digital_illustration"],
+    visualRealism: "stylized_illustration",
+    // A real seeded, currently-active category slug (src/lib/catalog/categories.ts)
+    // — validateCategorySuggestion() rejects anything else, exactly as it would a
+    // real model hallucination, so this must be a genuinely real slug for the E2E
+    // suite to exercise the real validation path rather than trivially no-op it.
+    physicalCategorySlug: "stories-imagination",
+    categoryConfidence: "high",
+    categoryReason: "Clearly a picture book in both format and length.",
   };
 }
 

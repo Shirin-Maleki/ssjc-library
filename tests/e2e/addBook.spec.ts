@@ -12,16 +12,23 @@ import { loginAsStaff, tinySyntheticPng } from "./helpers";
  * filename selects the fixture scenario: a name containing "gruffalo" produces
  * evidence matching the real seeded "The Gruffalo" fixture book exactly (for the
  * duplicate-detection path, against the real seeded catalog); any other name
- * produces a unique, never-seeded title (for the new-book path). Unauthenticated
+ * produces a unique, never-seeded title (for the new-book path). A name
+ * containing "aidraft" additionally produces real-shaped fake AI suggestions
+ * (description/category/age/fiction/format/tags — AI-first catalog draft
+ * correction §13), exercising the confirmation screen's AI-suggestion display
+ * without any other fixture scenario's behavior changing. Unauthenticated
  * access to /add is already covered by `auth.spec.ts`'s
  * "each staff destination requires a session" test — not repeated here.
  */
 
-async function uploadCover(page: import("@playwright/test").Page, filename: string) {
+async function uploadCover(page: import("@playwright/test").Page, filename: string, rotateTimes = 0) {
   await page.goto("/add");
   await expect(page.getByRole("heading", { name: "Add a Book" })).toBeVisible();
   await page.locator('input[type="file"]').setInputFiles({ name: filename, mimeType: "image/png", buffer: tinySyntheticPng() });
   await expect(page.getByText("Photo selected")).toBeVisible();
+  for (let i = 0; i < rotateTimes; i++) {
+    await page.getByRole("button", { name: "Rotate 90°" }).click();
+  }
   await page.getByRole("button", { name: "Use this cover" }).click();
 }
 
@@ -245,5 +252,37 @@ test.describe("Add a Book", () => {
     await page.getByLabel("Physical category").selectOption({ label: "Stories & Imagination" });
     await page.getByRole("button", { name: "Confirm / Add book" }).click();
     await expect(page.getByText("Added to SSJC Library")).toBeVisible({ timeout: 15000 });
+  });
+
+  test("AI-first catalog draft correction: confirmation arrives substantially prefilled, and confirming without editing persists the AI suggestions automatically (§7/§11)", async ({
+    page,
+  }) => {
+    await uploadCover(page, "aidraft-book-test.png");
+
+    await expect(page.getByText("AI prepared this book record for you")).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText(/outsmarts every creature/)).toBeVisible();
+    await expect(page.getByText("Stories & Imagination")).toBeVisible();
+    await expect(page.getByText("Fiction")).toBeVisible();
+    await expect(page.getByText("Picture book")).toBeVisible();
+    await expect(page.getByText("5–10 min read-aloud")).toBeVisible();
+    await expect(page.getByText("forest", { exact: true })).toBeVisible();
+
+    // No Quick Edit at all — confirming the AI-prepared draft as-is.
+    await page.getByRole("button", { name: "Confirm / Add book" }).click();
+    await expect(page.getByText("Added to SSJC Library")).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText("Stories & Imagination")).toBeVisible();
+  });
+
+  test("a manually rotated photo stays visually rotated through metadata processing and on the confirmation screen (AI-first catalog draft correction §9)", async ({
+    page,
+  }) => {
+    await uploadCover(page, "aidraft-rotation-test.png", 1); // one tap = 90 degrees
+    await expect(page.getByText("AI prepared this book record for you")).toBeVisible({ timeout: 15000 });
+
+    const coverPreview = page.locator('img[src^="blob:"]').first();
+    await expect(async () => {
+      const transform = await coverPreview.evaluate((el) => (el as HTMLImageElement).style.transform);
+      expect(transform).toBe("rotate(90deg)");
+    }).toPass();
   });
 });

@@ -14,11 +14,13 @@ additional copy of an existing one) through a single server-orchestrated pipelin
 ```
 cover photo (browser)
   → upload (server-mediated, chunked — /api/intake/cover/init + /chunk, see §6)
-  → cover identification (Gemini vision, src/lib/ai/)
+  → ONE combined AI analysis: cover identification + AI-suggested catalog
+    metadata, in a single multimodal request (Gemini, src/lib/ai/ — see §2)
   → bibliographic metadata lookup (Google Books / Open Library, src/lib/metadataProviders/)
   → identity reconciliation (deterministic scoring, src/lib/intake/reconciliation.ts)
   → duplicate detection against the real catalog (src/lib/intake/duplicateMatcher.ts)
-  → AI enrichment + physical-category suggestion (Gemini, src/lib/ai/)
+  → merge provider context into AI suggestions + re-validate category (no further
+    Gemini call — src/lib/intake/enrichmentMerge.ts, see §8)
   → teacher confirms / Quick Edits / Review Later
   → transactional save (src/lib/intake/persistence.ts)
 ```
@@ -30,29 +32,58 @@ blocking it. The one hard requirement the pipeline cannot work around is a
 confirmed Drive-stored source photo (§6) — Add a Book itself is unavailable
 (placeholder shown) when Drive isn't configured.
 
-## 2. Vision: cover identification
+**AI-first catalog draft correction**: the pipeline makes exactly ONE Gemini call
+per book in the normal case (down from two sequential calls) — see §2 and §8, and
+`docs/DECISIONS.md` for the full real-teacher-diagnosed reason this changed.
 
-`src/lib/ai/geminiProvider.ts` — `GeminiBookIntelligenceProvider.identifyCover()`.
+## 2. Vision + AI suggestions: one combined analysis call
+
+`src/lib/ai/geminiProvider.ts` — `GeminiBookIntelligenceProvider.analyzeCover()`.
+Replaces the original two-sequential-call design (`identifyCover()` +
+`suggestEnrichment()`) — see `docs/DECISIONS.md` for the real diagnosed reason.
 
 - **Model**: `gemini-3.8-flash` (re-confirmed current/stable/GA against
   `ai.google.dev` on 2026-09-20 — see `docs/DECISIONS.md` for the full
   re-confirmation record and the API-surface decision).
-- **Input**: the analysis-derivative image (see §5) as `inlineData` (base64) plus
-  a short text instruction. Never the Drive original's raw multi-megabyte bytes.
-- **Output schema** (`src/lib/ai/schemas.ts`'s `CoverIdentificationSchema`, also
-  the literal `responseSchema` sent to Gemini via `z.toJSONSchema()`):
-  `visibleTitle`, `visibleSubtitle`, `visibleAuthors`, `visibleIllustrators`,
-  `visiblePublisherOrImprint`, `visibleLanguage`, `visibleIsbn`, `visibleSeries`
-  (all nullable — a real cover often doesn't show every field), plus
-  `candidateSearchTerms` (≤5), `identityConfidenceLevel` (high/medium/low), and
-  `evidenceNotes` (≤600 chars).
-- **Evidence boundary** (the system instruction's real enforcement, not just a
-  comment): Gemini is explicitly told to report only what's visibly printed on
-  the cover and to leave a field `null` rather than guess — no invented ISBN,
-  publication year, edition, page count, interior illustration medium, age range,
-  or read duration. Schema-valid output still gets stored via
-  `sourceType: "cover_visible"` provenance, distinct from `ai_inferred"` (used for
-  enrichment guesses) — see `docs/DATA_MODEL.md` §"Provenance".
+- **Input**: the analysis-derivative image (see §5) as `inlineData` (base64), a
+  short text instruction, plus the exact current active physical-category list
+  (fetched fresh before the call — never a stale/hard-coded list). Never the
+  Drive original's raw multi-megabyte bytes.
+- **Output**: one JSON response with two independently-validated sections
+  (`src/lib/ai/schemas.ts`'s `CombinedCoverAnalysisSchema`):
+  - `coverEvidence` (`CoverIdentificationSchema`, unchanged contract):
+    `visibleTitle`, `visibleSubtitle`, `visibleAuthors`, `visibleIllustrators`,
+    `visiblePublisherOrImprint`, `visibleLanguage`, `visibleIsbn`, `visibleSeries`
+    (all nullable — a real cover often doesn't show every field), plus
+    `candidateSearchTerms` (≤5), `identityConfidenceLevel` (high/medium/low), and
+    `evidenceNotes` (≤600 chars).
+  - `aiSuggestions` (`EnrichmentSuggestionSchema` — see §8 for the full field
+    list and the deliberately different "make a useful suggestion" standard that
+    applies here, not the strict evidence standard below).
+- **Evidence boundary, `coverEvidence` only** (the system instruction's real
+  enforcement, not just a comment): Gemini is explicitly told to report only what's
+  visibly printed on the cover and to leave a field `null` rather than guess — no
+  invented ISBN, publication year, edition, page count, interior illustration
+  medium, age range, or read duration. Schema-valid output still gets stored via
+  `sourceType: "cover_visible"` provenance, distinct from `ai_inferred` (used for
+  `aiSuggestions` fields) — see `docs/DATA_MODEL.md` §"Provenance". This strict
+  standard applies ONLY to `coverEvidence` — `aiSuggestions` follows the opposite,
+  deliberately inferential standard described in §8.
+- **The two sections are validated independently, not as one atomic object**
+  (`parseCombinedAnalysis()`): `coverEvidence` is a hard requirement (a
+  malformed/missing section still throws `invalid_response`, exactly matching the
+  old `identifyCover()`'s failure behavior); a malformed or missing
+  `aiSuggestions` section falls back to a real, valid, all-null/empty
+  `EMPTY_AI_SUGGESTIONS` object rather than discarding an otherwise-good
+  identification. See `docs/DECISIONS.md` for why validating the whole payload as
+  one schema would have violated "preserve what it did provide."
+- **Teacher-provided rotation hint** (real-cover correction pass, final round §1):
+  when the teacher's manual rotation correction couldn't be physically applied to
+  the analysis bytes (real HEIC/HEIF sources this deployment can't decode), the
+  correction is passed as explicit structured text
+  (`teacherRotationHintDegrees`) instead of being silently dropped — the prompt
+  tells the model to treat it as stronger evidence than its own automatic
+  orientation inference.
 - **Orientation/framing robustness (real-cover correction pass §4, `docs/DECISIONS.md`)**:
   a real teacher's failed upload showed identification silently returning nothing
   useful for a genuinely sideways photo. The system instruction now explicitly
@@ -64,7 +95,8 @@ confirmed Drive-stored source photo (§6) — Add a Book itself is unavailable
   low confidence or a null field. This is a real safety net independent of the
   image-processing fix below — it also covers real HEIC sources, which cannot be
   pixel-rotated in this deployment at all (§5).
-- **Timeout**: 20 seconds (`VISION_TIMEOUT_MS`), enforced via `Promise.race`.
+- **Timeout**: 25 seconds (`ANALYSIS_TIMEOUT_MS` — one combined call now does the
+  work the old two calls split across 20s + 15s), enforced via `Promise.race`.
 - **Retry**: `src/lib/ai/retry.ts`'s `withGeminiRetry()` — up to 2 retries on
   429/500/502/503/504, exponential backoff (1s base, 6s cap) with jitter. Built
   specifically because structured-output calls to this model were observed to
@@ -72,8 +104,16 @@ confirmed Drive-stored source photo (§6) — Add a Book itself is unavailable
   `docs/DECISIONS.md`.
 - **Error categories** (`AIProviderError`): `configuration_missing`,
   `invalid_image`, `rate_limited`, `transient_provider_failure`, `timeout`,
-  `invalid_response`, `unexpected_provider_failure` — each maps to a calm,
-  teacher-facing message; the browser never sees a raw Gemini error.
+  `invalid_response`, `unexpected_provider_failure`. `identifyCoverAction`
+  (`src/lib/intake/visionFailureClassification.ts`) classifies these into exactly
+  two teacher-facing outcomes (real-cover correction pass, final round §2):
+  `invalid_image`/`invalid_response` → "We couldn't read this cover clearly."
+  (rotate/retry/choose-a-different-photo all make sense); everything else
+  (`rate_limited`/`transient_provider_failure`/`timeout`/
+  `unexpected_provider_failure`) → "Automatic book recognition is temporarily
+  unavailable." (never suggests retaking or rotating the photo — the photo was
+  never the problem). The browser never sees a raw Gemini error, an HTTP status,
+  a quota name, or a model identifier either way.
 
 ## 3. Bibliographic metadata lookup
 
@@ -229,25 +269,55 @@ author-overlap and language-match, this classifies into `exact_copy_same_edition
 `ambiguous_similar_title`, or `no_match` — never an automatic merge; every
 non-`no_match` outcome is a teacher decision (`DuplicateCheck.tsx`).
 
-## 8. AI enrichment + physical category suggestion
+## 8. AI-suggested discovery/teacher metadata (no separate Gemini call)
 
-`GeminiBookIntelligenceProvider.suggestEnrichment()` — runs only after
-reconciliation has established real evidence, and only sends text (validated
-cover evidence + trusted metadata summary), never the image again.
+**AI-first catalog draft correction**: `aiSuggestions` now comes from the SAME
+combined `analyzeCover()` call as `coverEvidence` (§2) — there is no second,
+separate enrichment call in the normal pipeline anymore.
+`enrichAndSuggestCategoryAction` (`src/lib/intake/actions.ts`) runs later in the
+pipeline (after metadata lookup/reconciliation/duplicate-check) but only MERGES
+and VALIDATES what the combined call already produced — it never calls Gemini.
+See `docs/DECISIONS.md` for the real teacher-diagnosed reason this changed (a
+second sequential call was what silently failed against this project's very
+small, 20/day free-tier quota, producing a near-empty confirmation screen even
+when identification itself had already succeeded).
 
-Output (`EnrichmentSuggestionSchema`): `description` (1-2 plain sentences, no
-sales language), `tags` (≤8, normalized against existing tags), `fictionType`,
-`format`, `ageMinMonths`/`ageMaxMonths`, `readAloudMinutes`, `visualMediaTypes`
-(≤3), `visualRealism`, and `physicalCategorySlug` + `categoryConfidence` +
-`categoryReason`. Every field is nullable by design — an absent value is correct
-and preferred over a plausible-sounding guess.
+**This section follows a deliberately different, more permissive standard than
+`coverEvidence`'s strict visible-only rule** — the whole point of `aiSuggestions`
+is to save real teacher cataloging labor, so the model is explicitly told it is
+expected to make a useful best-effort suggestion (with a confidence level)
+whenever there's reasonable evidence — the recognized title/author, the cover
+artwork, the model's own general knowledge of a confidently identified real book,
+trusted provider context, or reasonable pedagogical judgment — rather than
+defaulting to null merely because the front cover doesn't literally prove the
+answer. Null/unknown is reserved for when there genuinely is no usable basis (most
+commonly: the book couldn't be identified at all). Every `aiSuggestions` field is
+still schema-nullable and still `ai_inferred` provenance, never claimed as a
+publisher fact, and always visible + correctable on the confirmation screen.
+
+Output (`EnrichmentSuggestionSchema`, unchanged shape): `description` (1-2 plain
+sentences, no sales language), `tags` (≤8, merged with real provider subjects when
+available — see below), `fictionType`, `format`, `ageMinMonths`/`ageMaxMonths` (a
+broad, practical recommendation, not publisher fact), `readAloudMinutes` (banded
+in the UI as "Under 5 min" / "5–10 min" / "10+ min"), `visualMediaTypes` (≤3),
+`visualRealism`, and `physicalCategorySlug` + `categoryConfidence` +
+`categoryReason`.
+
+**Provider context is merged in without a second AI call**
+(`src/lib/intake/enrichmentMerge.ts`'s `mergeProviderSubjectsIntoTags()`): when a
+high-confidence metadata candidate was accepted and has real `subjects`, they're
+case-insensitively de-duplicated into the AI-suggested tag list (capped at 10
+total) — real provider signal, never invented, never a reason to re-call Gemini.
 
 **Category enforcement is an application check, not model trust**: Gemini is
-*told* the exact current active category list in its system instruction
-(built fresh from `categoryRepository.listActiveCategories()` on every call), but
-`src/lib/intake/categorySuggestion.ts`'s `validateCategorySuggestion()` is the
-actual boundary — it returns `undefined` (never a fabricated fallback) unless the
-suggested slug is genuinely in the live active list at save time.
+*told* the exact current active category list in the combined call's system
+instruction (built fresh from `categoryRepository.listActiveCategories()` before
+that one call), but `src/lib/intake/categorySuggestion.ts`'s
+`validateCategorySuggestion()` is the actual boundary — it returns `undefined`
+(never a fabricated fallback) unless the suggested slug is genuinely in the live
+active list. Re-checked again in `enrichAndSuggestCategoryAction` in case the
+active list changed between identify time and confirmation (no new Gemini call
+either way).
 
 ## 9. Provider factories and the E2E fixture seam
 
@@ -443,6 +513,39 @@ screenshots of the rotate control and the resulting recovery screen, both
 captured at 390px and 320px. What remains unproven is Gemini's own text
 extraction from the corrected, now-upright derivative for this exact photo —
 blocked by a real, bounded, honestly-reported quota limit, not a code defect.
+
+## 10e. Real diagnosis: the second sequential Gemini call was the actual gap (AI-first catalog draft correction, 2026-09-21)
+
+A real teacher's follow-up test succeeded at title/author recognition (the exact
+photo the previous pass's HEIC-rotation-hint work had blocked on) — the real,
+still-present ingestion record
+(`ingestion_items.id = e0cdf157-ddce-4adc-860f-924292aae279`, real Drive file,
+"Making Our Pizza" by Jeremy Lee, Lakeshore) shows a real Gemini identify success:
+`coverEvidence` fully populated (title, author, illustrator, publisher, language,
+high confidence), `reconciliationOutcome: "unresolved"` (Open Library genuinely
+has no match for this niche activity-book title — a correct, honest outcome, not
+a bug), `duplicateOutcome: "no_match"` (correct, no signal to match on). But
+`draft.enrichmentSuggestion` was `null` — the confirmation screen a teacher would
+have seen showed only title/author/language/publisher, nothing else.
+
+**Root cause, confirmed by direct inspection, not inferred**: at the time this
+record was produced, the pipeline still made two SEPARATE sequential Gemini
+calls — `identifyCover()` then, later, `suggestEnrichment()`. The first succeeded;
+the second silently failed (this session's real, measured 20-request/day
+free-tier quota had already been spent between the identify call and every other
+real/canary call made that day) and `enrichAndSuggestCategoryAction`'s
+`catch { enrichment = null; }` swallowed that failure with no trace at all. This
+IS the product gap described in the correction brief: not a missing feature, a
+silent failure mode in a two-call design that this project's own real,
+measured quota makes fragile by construction.
+
+**The fix**: collapse to one combined call (§2/§8) so there is no second call left
+to silently fail. Also fixed as part of the same pass: the confirmation screen
+now actually displays every `aiSuggestions` field when present (§7 of the
+correction brief), Quick Edit initializes from them rather than blank (§8), and a
+second, independently-discovered real bug (a stale-closure bug losing the
+teacher's manual rotation on the way to the confirmation screen) — see
+`docs/DECISIONS.md` for the full technical account of both.
 
 ## 11. What's out of scope for Phase 7
 

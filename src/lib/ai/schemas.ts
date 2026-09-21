@@ -82,3 +82,49 @@ export const EnrichmentSuggestionSchema = z.object({
   categoryReason: z.string().max(300).nullable(),
 });
 export type EnrichmentSuggestion = z.infer<typeof EnrichmentSuggestionSchema>;
+
+/**
+ * The single combined multimodal analysis response (AI-first catalog draft
+ * correction, §3) — replaces the original two-sequential-Gemini-call pipeline
+ * (one for `CoverIdentificationSchema` evidence, a second for
+ * `EnrichmentSuggestionSchema` suggestions) with one request that returns both,
+ * separately validated. This halves the default per-book Gemini call count and
+ * removes a real, observed fragility: the enrichment call is what most often hit
+ * this project's very small (20/day) free-tier quota second, silently leaving a
+ * teacher with a near-empty confirmation screen even when identification itself
+ * had already succeeded.
+ *
+ * `coverEvidence` keeps its existing strict, visible-only-evidence contract
+ * unchanged. `aiSuggestions` reuses `EnrichmentSuggestionSchema` as-is — it was
+ * already shaped correctly for this purpose — but is now explicitly understood as
+ * genuinely inferential, teacher-labor-saving catalog assistance (`ai_inferred`
+ * provenance), never claimed as a publisher fact. See `geminiProvider.ts`'s
+ * `analyzeCover()` for why these two sections are validated independently rather
+ * than as one atomic object: a malformed `aiSuggestions` section must never
+ * discard an otherwise-valid `coverEvidence` extraction.
+ */
+export const CombinedCoverAnalysisSchema = z.object({
+  coverEvidence: CoverIdentificationSchema,
+  aiSuggestions: EnrichmentSuggestionSchema,
+});
+export type CombinedCoverAnalysis = z.infer<typeof CombinedCoverAnalysisSchema>;
+
+/** A genuinely empty suggestions object — used when `aiSuggestions` fails its own
+ * schema validation but `coverEvidence` is still valid, so a partial real result is
+ * never discarded wholesale (AI-first catalog draft correction, §5). Every field
+ * absent/null is honest here: it means "no suggestion could be salvaged," not "AI
+ * decided there was nothing to suggest." */
+export const EMPTY_AI_SUGGESTIONS: EnrichmentSuggestion = {
+  description: null,
+  tags: [],
+  fictionType: null,
+  format: null,
+  ageMinMonths: null,
+  ageMaxMonths: null,
+  readAloudMinutes: null,
+  visualMediaTypes: [],
+  visualRealism: null,
+  physicalCategorySlug: null,
+  categoryConfidence: null,
+  categoryReason: null,
+};

@@ -75,7 +75,11 @@ const ProposedBookValuesSchema = z.object({
 });
 
 /** The limited, teacher-facing correction surface (§29 of the phase brief) — never
- * a full catalog form's worth of fields. */
+ * a full catalog form's worth of fields. `description` was added for the AI-first
+ * catalog draft correction: it's visible, AI-generated content shown right on the
+ * confirmation screen, and may need a small human correction, exactly like every
+ * other field here — tags, visual metadata, and detailed provenance stay outside
+ * this surface. */
 const TeacherEditsSchema = z
   .object({
     title: z.string().nullable(),
@@ -88,6 +92,7 @@ const TeacherEditsSchema = z
     format: z
       .enum(["board_book", "picture_book", "early_reader", "chapter_book", "informational_reference", "activity_book", "other"])
       .nullable(),
+    description: z.string().nullable(),
   })
   .partial();
 export type TeacherEdits = z.infer<typeof TeacherEditsSchema>;

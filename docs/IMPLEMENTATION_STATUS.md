@@ -1,25 +1,27 @@
 # Implementation Status
 
-Last updated: 2026-09-21 (Phase 7 implemented; correction pass, final closure pass, and a real
-teacher-reported cover-recognition correction all applied — review pending). This document is
-continuity insurance — it should always let another coding agent open this repository cold and
+Last updated: 2026-09-21 (Phase 7 implemented; correction pass, final closure pass, a real
+teacher-reported cover-recognition correction, a HEIC rotation-hint/vision-failure-classification
+follow-up, and an AI-first catalog draft correction all applied — review pending). This document
+is continuity insurance — it should always let another coding agent open this repository cold and
 know exactly where things stand. Keep it current at the end of every phase.
 
 ## Current phase
 
-**PHASE 7 IMPLEMENTED — REAL COVER-RECOGNITION CORRECTION APPLIED / REVIEW PENDING.** Not yet
+**PHASE 7 IMPLEMENTED — AI-FIRST CATALOG DRAFT CORRECTION APPLIED / REVIEW PENDING.** Not yet
 marked approved by this document itself — that determination belongs to the reviewer, not to
 whichever agent last touched the code. See "Completed work (Phase 7, 2026-09-20/21)," "Completed
 work (Phase 7 correction pass, 2026-09-21)," "Completed work (Phase 7 final closure pass,
-2026-09-21)," and "Completed work (Phase 7 real cover-recognition correction, 2026-09-21)" below
-for exactly what shipped and what's still genuinely open (real Google Books validation — no key
-available; a fresh live Gemini call against real HEIC bytes; a third full real-provider
-validation case; and a live re-identification of the real teacher-reported failed cover after the
-orientation fix — all blocked by a real, concretely-identified Gemini free-tier daily quota of 20
-requests/day, exhausted again during this pass's own bounded retry attempt, not by a code defect).
-Phase 6 (Google Drive connection, including its 2026-09-20 correction pass) and Phase 5 (real
-search architecture, including its real-provider validation pass) remain complete and approved,
-unaffected except where Phase 7 built directly on Phase 6's Drive infrastructure — approved as
+2026-09-21)," "Completed work (Phase 7 real cover-recognition correction, 2026-09-21)," and
+"Completed work (Phase 7 AI-first catalog draft correction, 2026-09-21)" below for exactly what
+shipped and what's still genuinely open (real Google Books validation — no key available; a fresh
+live Gemini call against real HEIC bytes; a full real-provider acceptance test of the new combined
+one-call pipeline against the real teacher-tested book — all blocked by a real, concretely-
+identified Gemini free-tier daily quota of 20 requests/day, confirmed still exhausted during this
+pass's own bounded check, not by a code defect). Phase 6 (Google Drive connection, including its
+2026-09-20 correction pass) and Phase 5 (real search architecture, including its real-provider
+validation pass) remain complete and approved, unaffected except where Phase 7 built directly on
+Phase 6's Drive infrastructure — approved as
 of commit `88b02752363649c297b6e6f3e38202cee2e51a6a` (Phase 5) and
 `3fc48d4c4961d71308f5de9b098c18413ad99db4` (Phase 6, the Phase 7 starting point).
 
@@ -854,6 +856,104 @@ narrative: `docs/DECISIONS.md`.
 integration tests (unchanged), 125 E2E tests (was 117) — all passing, real
 Chromium + real WebKit.
 
+## Completed work (Phase 7 HEIC rotation-hint / vision-failure-classification follow-up, 2026-09-21)
+
+Two remaining real-cover issues, fixed before the AI-first correction below:
+
+1. **HEIC/HEIF manual rotation made meaningful.** The rotate control's choice
+   could not be physically applied to real HEIC/HEIF bytes (unchanged decode
+   limitation) and was previously silently discarded. `resolveRotationHint()`
+   (`src/lib/intake/imagePrep.ts`) now turns that into an explicit
+   `teacherRotationHintDegrees` field passed to the vision call as structured
+   text — never claimed as a physical rotation, always the teacher's own stated
+   correction, and the model is told to treat it as stronger evidence than its
+   own automatic inference. Never applied when the bytes were already physically
+   rotated (JPEG/PNG/WebP) — no regression to that path.
+2. **Vision failure classification.** `identifyCoverAction` previously collapsed
+   every vision-provider failure (quota exhaustion, rate limit, timeout, a
+   genuinely unreadable image) into one identical recovery screen. Extracted
+   `classifyVisionFailure()` (`src/lib/intake/visionFailureClassification.ts`,
+   pure and unit-testable without a database) into two real teacher-facing
+   outcomes: "We couldn't read this cover clearly." (rotate/retry/choose-a-
+   different-photo all make sense) vs. "Automatic book recognition is
+   temporarily unavailable." (never suggests retaking/rotating — the photo was
+   never the problem). Neither ever exposes Gemini, an HTTP status, a quota
+   name, or a model identifier.
+
+**Testing**: 486 unit tests (was 470), 94 integration tests (unchanged), 127
+E2E tests (was 125) — all passing.
+
+## Completed work (Phase 7 AI-first catalog draft correction, 2026-09-21)
+
+A real teacher's follow-up test succeeded at title/author recognition but the
+actual product promise — a substantially prefilled catalog draft, not an
+almost-empty confirmation screen — still wasn't met. Diagnosed from the real,
+still-present ingestion record (`e0cdf157-ddce-4adc-860f-924292aae279`, "Making
+Our Pizza" — real Gemini identify success, `draft.enrichmentSuggestion: null`).
+Root cause: the pipeline still made two SEPARATE sequential Gemini calls
+(`identifyCover` then, later, `suggestEnrichment`); the first succeeded, the
+second silently failed against this project's own measured 20-request/day free
+tier and was swallowed with no trace. Full technical account:
+`docs/AI_PIPELINE.md` §10e, `docs/DECISIONS.md`.
+
+1. **One combined Gemini call, not two.** `analyzeCover()` replaces
+   `identifyCover()` + `suggestEnrichment()` — one multimodal request returns
+   both `coverEvidence` (unchanged strict, visible-only contract) and
+   `aiSuggestions` (unchanged `EnrichmentSuggestionSchema` shape), validated
+   independently so a malformed `aiSuggestions` section can never discard a
+   valid `coverEvidence` extraction. Halves the default per-book Gemini call
+   count.
+2. **A genuinely different standard for `aiSuggestions`.** The system
+   instruction now explicitly tells the model it's expected to make a useful
+   best-effort catalog suggestion (description, category, age range,
+   fiction/nonfiction, format, read-aloud estimate, tags/themes, visual
+   style/realism) whenever there's reasonable evidence, rather than defaulting
+   to null merely because the cover doesn't literally prove the answer — while
+   `coverEvidence`'s strict "never invent a bibliographic fact" rule is
+   unchanged. Formalizes a real product-level distinction: verified
+   bibliographic facts vs. AI-suggested discovery/teacher metadata (see
+   `docs/PRODUCT_SPEC.md` §7, `docs/DECISIONS.md`).
+3. **The confirmation screen now shows the AI's work.** Previously hid
+   category/age/fiction/format/read-aloud/tags/visual-style even when the draft
+   had them. Now shown as compact chips with a subtle "AI prepared this book
+   record for you" / "Suggested" framing — never a raw confidence decimal,
+   provider id, or provenance structure.
+4. **Quick Edit starts from the AI's values, not blank.** A real, reproducible
+   bug: `fictionType`/`format`/age fields always initialized empty regardless of
+   what the draft already had. Fixed; `description` was also added to the small
+   Quick Edit/`TeacherEdits` surface as visible, correctable AI-generated
+   content.
+5. **Confirming without editing now genuinely persists the AI suggestions** —
+   already-correct fallback logic in `confirmSaveAction` simply had nothing to
+   fall back to before (`draft.enrichmentSuggestion` was null); now that the
+   combined call actually populates it, this works for real. New provenance
+   tracking added for `description`/`age_range`/`fiction_status`/`format`/
+   `visual_media_type`/`visual_realism` (`ai_inferred` vs. `human_corrected`),
+   and a `description` field key added to `TRACKED_METADATA_FIELDS`
+   (`src/lib/metadata/fieldRegistry.ts`, a code-only change, no migration).
+6. **A second, independent real bug found and fixed**: the teacher's manually
+   rotated photo reverted to looking sideways again on the confirmation screen.
+   Root cause: a genuine stale-closure bug in `AddBookFlow.tsx`'s multi-step
+   async pipeline (a React state update mid-chain doesn't change which function
+   references an already-running chain continues to call). Fixed by threading
+   the rotation value through the chain as an explicit parameter, exactly like
+   `itemId`/`previewUrl` already were. A new shared `SourceCoverPreview`
+   component renders the source cover consistently across capture, recovery,
+   duplicate-comparison, and confirmation screens — never applied to a
+   metadata-provider display cover, which stays a separate, correctly-oriented
+   asset.
+7. **Real provider context merged without a second AI call.**
+   `mergeProviderSubjectsIntoTags()` (`src/lib/intake/enrichmentMerge.ts`) folds
+   a high-confidence candidate's real subjects into the AI-suggested tag list —
+   real signal, never invented, never a reason to re-call Gemini.
+8. **Real acceptance test**: not completed this pass. A single bounded quota
+   check confirmed the real daily quota (20/day) was still exhausted — no
+   further calls were made. The real ingestion record and Drive file remain
+   untouched for a future bounded retry.
+
+**Testing**: 507 unit tests (was 486), 96 integration tests (was 94), 131 E2E
+tests (was 127) — all passing.
+
 ## In-progress / not yet done for Phase 7
 
 **Not real-tested**: Google Books (no `GOOGLE_BOOKS_API_KEY` was available —
@@ -875,9 +975,13 @@ cover after the orientation fix (§10d of `docs/AI_PIPELINE.md` — the fix
 itself was proven technically/visually against the real photo, but Gemini's
 own text extraction from the corrected derivative was not re-obtained live,
 blocked by the same exhausted daily quota; the real ingestion record and
-Drive file remain untouched for a future bounded retry). All recorded
-honestly in `docs/AI_PIPELINE.md` §10/§10b/§10c/§10d and `docs/COSTS.md`, not
-glossed over.
+Drive file remain untouched for a future bounded retry); the full real
+acceptance test of the new one-combined-call pipeline against the exact real
+teacher-tested book (§10e/§12 of the AI-first catalog draft correction —
+blocked by the same confirmed-still-exhausted daily quota as of this pass's
+own bounded check; the real ingestion record and Drive file remain untouched).
+All recorded honestly in `docs/AI_PIPELINE.md` §10/§10b/§10c/§10d/§10e and
+`docs/COSTS.md`, not glossed over.
 
 **Not built, by explicit design** (per the phase brief's own exclusions): no
 processing of the existing ~1,500-photo collection, no Phase 8 Admin Review

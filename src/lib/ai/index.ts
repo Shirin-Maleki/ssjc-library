@@ -1,16 +1,10 @@
 import "server-only";
 import { GeminiBookIntelligenceProvider } from "./geminiProvider";
-import type { BookEnrichmentProvider, BookVisionProvider } from "./provider";
+import type { BookVisionProvider } from "./provider";
 
-export type {
-  BookVisionProvider,
-  BookEnrichmentProvider,
-  CoverIdentificationInput,
-  EnrichmentInput,
-  AIErrorCategory,
-} from "./provider";
+export type { BookVisionProvider, CoverIdentificationInput, AIErrorCategory } from "./provider";
 export { AIProviderError } from "./provider";
-export type { CoverIdentification, EnrichmentSuggestion, AIConfidenceLevel } from "./schemas";
+export type { CoverIdentification, EnrichmentSuggestion, CombinedCoverAnalysis, AIConfidenceLevel } from "./schemas";
 
 /**
  * The one place production code decides whether/how to construct the real Gemini
@@ -22,7 +16,7 @@ export type { CoverIdentification, EnrichmentSuggestion, AIConfidenceLevel } fro
  * enrichment failure never blocks a save when other evidence is sufficient), it is
  * never a hard error.
  */
-export function getConfiguredBookIntelligenceProvider(): (BookVisionProvider & BookEnrichmentProvider) | undefined {
+export function getConfiguredBookIntelligenceProvider(): BookVisionProvider | undefined {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return undefined;
   try {

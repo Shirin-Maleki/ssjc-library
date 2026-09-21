@@ -1,14 +1,7 @@
 import { GoogleGenAI } from "@google/genai";
 import { z } from "zod";
-import {
-  AIProviderError,
-  type AIErrorCategory,
-  type BookEnrichmentProvider,
-  type BookVisionProvider,
-  type CoverIdentificationInput,
-  type EnrichmentInput,
-} from "./provider";
-import { CoverIdentificationSchema, EnrichmentSuggestionSchema, type CoverIdentification, type EnrichmentSuggestion } from "./schemas";
+import { AIProviderError, type AIErrorCategory, type BookVisionProvider, type CoverIdentificationInput } from "./provider";
+import { CoverIdentificationSchema, CombinedCoverAnalysisSchema, EnrichmentSuggestionSchema, EMPTY_AI_SUGGESTIONS, type CombinedCoverAnalysis } from "./schemas";
 import { withGeminiRetry } from "./retry";
 
 /**
@@ -35,6 +28,12 @@ import { withGeminiRetry } from "./retry";
  * request/response shape is the one already deeply, reliably understood in this
  * codebase. See `docs/DECISIONS.md` for the full reasoning.
  *
+ * **AI-first catalog draft correction**: `analyzeCover()` replaces the original
+ * `identifyCover()` + `suggestEnrichment()` two-sequential-call design with ONE
+ * combined multimodal request returning `{ coverEvidence, aiSuggestions }`. See
+ * `schemas.ts`'s `CombinedCoverAnalysisSchema` for why, and this file's
+ * `parseCombinedAnalysis()` for why the two sections are validated independently.
+ *
  * Deliberately NOT `import "server-only"` — matches `embeddings/geminiProvider.ts`
  * and `googleDrive/googleDriveProvider.ts`'s own reasoning: this class must be
  * directly constructible in mocked unit tests. The real production guard is
@@ -42,11 +41,9 @@ import { withGeminiRetry } from "./retry";
  */
 
 const MODEL_ID = "gemini-3.8-flash";
-const VISION_TIMEOUT_MS = 20_000;
-const ENRICHMENT_TIMEOUT_MS = 15_000;
+const ANALYSIS_TIMEOUT_MS = 25_000; // one combined call now does the work of the old two (20s + 15s) calls
 
-const COVER_IDENTIFICATION_JSON_SCHEMA = stripMetaKeys(z.toJSONSchema(CoverIdentificationSchema));
-const ENRICHMENT_JSON_SCHEMA = stripMetaKeys(z.toJSONSchema(EnrichmentSuggestionSchema));
+const COMBINED_ANALYSIS_JSON_SCHEMA = stripMetaKeys(z.toJSONSchema(CombinedCoverAnalysisSchema));
 
 /** `z.toJSONSchema()` emits a top-level `$schema` key (and Zod 4 emits
  * `additionalProperties: false` at every object level) — Gemini's `responseSchema`
@@ -62,22 +59,38 @@ function stripMetaKeys(schema: unknown): Record<string, unknown> {
   return schema as Record<string, unknown>;
 }
 
-const COVER_IDENTIFICATION_SYSTEM_INSTRUCTION = `You are extracting bibliographic evidence from a photograph of a children's book's front cover, for a school library catalog.
+/**
+ * The one combined system instruction (AI-first catalog draft correction, §2/§6) —
+ * explicitly separates two different obligations in the same response:
+ * `coverEvidence` (strict, visible-only, never invented) and `aiSuggestions`
+ * (genuinely inferential, teacher-labor-saving catalog assistance, expected to make
+ * a useful best-effort guess rather than defaulting to null merely because the
+ * cover alone doesn't literally prove the answer). Conflating these two would
+ * either make bibliographic identity unreliable (if suggestions were treated as
+ * fact) or make suggestions uselessly sparse (if evidence's strict standard leaked
+ * into them) — the prompt is deliberately explicit about which rule applies to
+ * which half of the response.
+ */
+function buildCombinedAnalysisSystemInstruction(activeCategories: { slug: string; label: string }[]): string {
+  const categoryList = activeCategories.map((c) => `- ${c.slug}: ${c.label}`).join("\n");
+  return `You are helping a school librarian catalog a children's book from one photograph of its front cover. You produce TWO separate sections in one response: "coverEvidence" (strict factual extraction) and "aiSuggestions" (useful, explicitly inferential catalog assistance). These two sections follow DIFFERENT rules — read both parts of this instruction carefully before answering.
 
 This is a REAL PHONE PHOTO, not a clean scan. Before reading any text, account for how real phone photos are actually taken:
 - The image may be rotated 90, 180, or 270 degrees from upright — a photo's orientation metadata is not reliable, so judge orientation from the image content itself, not from any assumption that it arrives upright.
 - The photo may be slightly skewed, taken at an angle, or show mild perspective distortion (the cover photographed from slightly above/below/to one side).
 - The frame may include background clutter — a shelf, table, other books, hands, or the edge of a surface — alongside the actual book.
 
-Before extracting any text, work through these steps:
+Before extracting anything, work through these steps:
 1. Identify the likely front-cover rectangle in the image — the single book cover that is the actual subject of the photo, distinguishing it from any other books, spines, or objects also visible in the frame.
 2. Determine that rectangle's readable orientation (it may not match the orientation the image file arrives in). If this message tells you the teacher provided an explicit rotation correction, treat that as a stronger, more reliable signal of the intended viewing orientation than whatever you would otherwise infer from the pixels alone — apply it rather than overriding it with your own guess.
 3. Mentally rotate/re-orient your reading of that rectangle as needed so the title and author text read normally, left to right.
-4. Only then read the cover's visible text (title, subtitle, author(s), illustrator(s), publisher/imprint, series, visible ISBN, visible language).
+4. Only then read the cover's visible text and artwork.
+
+=== SECTION 1: "coverEvidence" — STRICT, FACTUAL, VISIBLE-ONLY ===
 
 ONLY report information you can actually see printed on the cover in the photograph. Report a field as null when the cover does not clearly show it.
 
-Do NOT invent or guess:
+Do NOT invent or guess, in coverEvidence:
 - an ISBN that is not visibly printed on the cover
 - a publication year
 - an exact edition
@@ -87,7 +100,25 @@ Do NOT invent or guess:
 - a read-aloud duration
 - publisher metadata not visible on the cover itself
 
-The image is evidence, not permission to guess. Rotation, skew, an off-angle shot, or background clutter are normal photo conditions to work through, not reasons by themselves to report low confidence — reserve low confidence and null fields for when the cover's own text is genuinely blurry, obscured, in an unfamiliar script, or otherwise actually unclear once correctly oriented.`;
+The image is evidence, not permission to guess. Rotation, skew, an off-angle shot, or background clutter are normal photo conditions to work through, not reasons by themselves to report low confidence — reserve low confidence and null fields for when the cover's own text is genuinely blurry, obscured, in an unfamiliar script, or otherwise actually unclear once correctly oriented.
+
+=== SECTION 2: "aiSuggestions" — USEFUL, EXPLICITLY INFERENTIAL CATALOG ASSISTANCE ===
+
+This section is DIFFERENT from coverEvidence. Its whole purpose is to save a busy teacher real cataloging work by preparing a genuinely useful draft — not to prove facts. You ARE expected to make a useful best-effort suggestion with a confidence level whenever there is reasonable evidence, even though the cover alone does not literally prove the answer. You may use: the title and author you just read, the cover artwork/photography style, your own general knowledge of a confidently identified real book, trusted bibliographic context if any is provided separately, and reasonable pedagogical judgment for a children's/school library. Reserve null/unknown for aiSuggestions fields ONLY when there is genuinely not enough basis to make a useful suggestion (e.g., the book could not be identified at all) — do not default to null merely because the cover doesn't literally spell out the answer.
+
+- "description": 1-2 short, plain sentences — what the book is about and why a teacher might search for it. Never marketing language, never "beloved classic," never exaggerated praise, never an unsupported educational claim.
+- "tags": about 4-8 short, normalized, lowercase discovery concepts — topics, themes, social-emotional or curriculum concepts where relevant, singular where natural, no near-duplicates.
+- "fictionType": your best-supported guess ("fiction" or "nonfiction"), or null only if genuinely unclear even for a confidently identified book.
+- "format": your best-supported guess from the given options, or null only if genuinely unclear.
+- "ageMinMonths"/"ageMaxMonths": a broad, practical preschool/library age RECOMMENDATION in months (not a publisher fact) — prefer a reasonable broad range over null when the book type/content gives you a real basis to estimate one.
+- "readAloudMinutes": a reasonable estimate based on the likely book type/length (e.g. a short picture book vs. a longer one) — a recommendation, not a measured fact.
+- "visualMediaTypes"/"visualRealism": infer from the visible cover art/photography when it's reasonably representative of the book's overall visual style — a front cover alone does not prove the INTERIOR pages' medium, so prefer an empty/null answer only when the cover genuinely gives no usable signal, not merely because it's not 100% certain.
+- "physicalCategorySlug": choose EXACTLY ONE slug from this exact list — the most practical real shelf placement for this book — or null ONLY when no listed category is reasonably appropriate. You may never invent a category or return a slug not in this list:
+${categoryList}
+- "categoryConfidence"/"categoryReason": your honest confidence in the category choice and a short reason.
+
+Restated plainly: coverEvidence must never invent a bibliographic fact. aiSuggestions, by contrast, is EXPECTED to make a useful pedagogical/catalog suggestion whenever there is reasonable evidence — an empty aiSuggestions section for a book you could clearly identify is not the safe choice, it is a wasted opportunity to help the teacher.`;
+}
 
 /**
  * Real-cover correction pass (final round, §1) — when the teacher's manual
@@ -98,41 +129,13 @@ The image is evidence, not permission to guess. Rotation, skew, an off-angle sho
  * otherwise, so this never regresses the JPEG/PNG/WebP path (which already
  * physically rotates the bytes and needs no hint at all).
  */
-function buildIdentifyCoverPromptText(teacherRotationHintDegrees: CoverIdentificationInput["teacherRotationHintDegrees"]): string {
-  const base = "Extract bibliographic evidence visible on this book cover.";
+function buildAnalyzeCoverPromptText(teacherRotationHintDegrees: CoverIdentificationInput["teacherRotationHintDegrees"]): string {
+  const base = "Analyze this book cover photo and produce both coverEvidence and aiSuggestions as instructed.";
   if (!teacherRotationHintDegrees) return base;
   return `${base}\n\nExplicit teacher-provided orientation correction: the teacher visually inspected this exact photo and indicated it should be interpreted with an additional ${teacherRotationHintDegrees}-degree clockwise rotation applied before reading. This image format could not be automatically pixel-rotated, so the bytes you are given are NOT already rotated — apply this correction yourself when determining the cover's readable orientation. Treat this as a stronger, more reliable signal of the intended viewing orientation than your own automatic inference from the pixels alone.`;
 }
 
-function buildEnrichmentSystemInstruction(activeCategories: { slug: string; label: string }[]): string {
-  const categoryList = activeCategories.map((c) => `- ${c.slug}: ${c.label}`).join("\n");
-  return `You are suggesting enrichment metadata for a children's book already added to a school library catalog, based on validated cover evidence and (when available) bibliographic metadata already looked up from a trusted source.
-
-Only suggest a value when there is real supporting evidence in what you were given. Leaving a field null/empty is correct and preferred over a plausible-sounding guess — this is a library catalog, not a fiction generator.
-
-Write "description" as 1-2 plain sentences: what the book is about and why a teacher might search for it. Never sales language, never "beloved classic," never exaggerated praise, never an unsupported educational claim.
-
-Suggest at most 8 short, normalized tags (lowercase, singular where natural, no near-duplicates of each other).
-
-For "physicalCategorySlug", choose EXACTLY ONE slug from this exact list, or null if none genuinely fits — you may never invent a category or return a slug not in this list:
-${categoryList}
-
-A front cover alone does not prove the medium/style of the book's INTERIOR pages — only suggest visualMediaTypes/visualRealism when the cover itself is genuine evidence of the book's overall visual style, and prefer an empty/null answer when unsure.`;
-}
-
-interface EnrichmentPromptPayload {
-  coverEvidence: unknown;
-  metadataSummary: unknown;
-}
-
-function buildEnrichmentPrompt(input: EnrichmentInput): EnrichmentPromptPayload {
-  return {
-    coverEvidence: input.coverEvidence,
-    metadataSummary: input.metadataSummary ?? null,
-  };
-}
-
-export class GeminiBookIntelligenceProvider implements BookVisionProvider, BookEnrichmentProvider {
+export class GeminiBookIntelligenceProvider implements BookVisionProvider {
   private readonly client: GoogleGenAI;
 
   constructor(apiKey: string) {
@@ -142,12 +145,12 @@ export class GeminiBookIntelligenceProvider implements BookVisionProvider, BookE
     this.client = new GoogleGenAI({ apiKey });
   }
 
-  async identifyCover(input: CoverIdentificationInput): Promise<CoverIdentification> {
+  async analyzeCover(input: CoverIdentificationInput): Promise<CombinedCoverAnalysis> {
     if (input.imageBytes.length === 0) {
       throw new AIProviderError("invalid_image", "The image has no bytes to analyze.");
     }
 
-    const promptText = buildIdentifyCoverPromptText(input.teacherRotationHintDegrees);
+    const promptText = buildAnalyzeCoverPromptText(input.teacherRotationHintDegrees);
 
     const raw = await this.callWithTimeout(
       () =>
@@ -164,43 +167,16 @@ export class GeminiBookIntelligenceProvider implements BookVisionProvider, BookE
               },
             ],
             config: {
-              systemInstruction: COVER_IDENTIFICATION_SYSTEM_INSTRUCTION,
+              systemInstruction: buildCombinedAnalysisSystemInstruction(input.activeCategories),
               responseMimeType: "application/json",
-              responseSchema: COVER_IDENTIFICATION_JSON_SCHEMA,
+              responseSchema: COMBINED_ANALYSIS_JSON_SCHEMA,
             },
           })
         ),
-      VISION_TIMEOUT_MS
+      ANALYSIS_TIMEOUT_MS
     );
 
-    return this.parseAndValidate(raw.text, CoverIdentificationSchema, "identifyCover");
-  }
-
-  async suggestEnrichment(input: EnrichmentInput): Promise<EnrichmentSuggestion> {
-    const payload = buildEnrichmentPrompt(input);
-
-    const raw = await this.callWithTimeout(
-      () =>
-        withGeminiRetry(() =>
-          this.client.models.generateContent({
-            model: MODEL_ID,
-            contents: [
-              {
-                role: "user",
-                parts: [{ text: `Evidence:\n${JSON.stringify(payload, null, 2)}` }],
-              },
-            ],
-            config: {
-              systemInstruction: buildEnrichmentSystemInstruction(input.activeCategories),
-              responseMimeType: "application/json",
-              responseSchema: ENRICHMENT_JSON_SCHEMA,
-            },
-          })
-        ),
-      ENRICHMENT_TIMEOUT_MS
-    );
-
-    return this.parseAndValidate(raw.text, EnrichmentSuggestionSchema, "suggestEnrichment");
+    return this.parseCombinedAnalysis(raw.text);
   }
 
   private async callWithTimeout<T>(action: () => Promise<T>, timeoutMs: number): Promise<T> {
@@ -230,20 +206,37 @@ export class GeminiBookIntelligenceProvider implements BookVisionProvider, BookE
     return new AIProviderError(category, `Gemini request failed (${category}).`, error);
   }
 
-  private parseAndValidate<T>(text: string | undefined, schema: z.ZodType<T>, context: string): T {
+  /**
+   * Parses the combined response, but deliberately does NOT validate it as one
+   * atomic object (AI-first catalog draft correction, §5/§13): `coverEvidence` is a
+   * hard requirement (matches the old `identifyCover` failure behavior exactly —
+   * a malformed/missing `coverEvidence` still throws `invalid_response`), but a
+   * malformed `aiSuggestions` section alone falls back to
+   * `EMPTY_AI_SUGGESTIONS` rather than discarding an otherwise-good identification.
+   * "Preserve what it did provide" (the phase brief's own words) would be violated
+   * by validating the whole object as one schema, since Zod fails an entire object
+   * on any single nested field's schema violation.
+   */
+  private parseCombinedAnalysis(text: string | undefined): CombinedCoverAnalysis {
     if (!text) {
-      throw new AIProviderError("invalid_response", `Gemini returned no text content (${context}).`);
+      throw new AIProviderError("invalid_response", "Gemini returned no text content (analyzeCover).");
     }
     let json: unknown;
     try {
       json = JSON.parse(text);
     } catch (error) {
-      throw new AIProviderError("invalid_response", `Gemini's response was not valid JSON (${context}).`, error);
+      throw new AIProviderError("invalid_response", "Gemini's response was not valid JSON (analyzeCover).", error);
     }
-    const result = schema.safeParse(json);
-    if (!result.success) {
-      throw new AIProviderError("invalid_response", `Gemini's response did not match the expected schema (${context}).`, result.error);
+
+    const record = json && typeof json === "object" ? (json as Record<string, unknown>) : {};
+    const coverEvidenceResult = CoverIdentificationSchema.safeParse(record.coverEvidence);
+    if (!coverEvidenceResult.success) {
+      throw new AIProviderError("invalid_response", "Gemini's response did not match the expected schema (analyzeCover).", coverEvidenceResult.error);
     }
-    return result.data;
+
+    const aiSuggestionsResult = EnrichmentSuggestionSchema.safeParse(record.aiSuggestions);
+    const aiSuggestions = aiSuggestionsResult.success ? aiSuggestionsResult.data : EMPTY_AI_SUGGESTIONS;
+
+    return { coverEvidence: coverEvidenceResult.data, aiSuggestions };
   }
 }

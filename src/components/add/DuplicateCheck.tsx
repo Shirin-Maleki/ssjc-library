@@ -2,6 +2,7 @@
 
 import { Button } from "@/components/ui/Button";
 import { ISO_639_1_LANGUAGE_NAMES, type LanguageCode } from "@/lib/catalog/languages";
+import { SourceCoverPreview, type RotationDegrees } from "./SourceCoverPreview";
 
 export interface DuplicateCandidateViewData {
   bookId: string;
@@ -19,6 +20,11 @@ export interface DuplicateCandidateViewData {
 interface DuplicateCheckProps {
   isExactMatch: boolean;
   coverPreviewUrl: string;
+  /** The teacher's persisted manual rotation (AI-first catalog draft correction §9)
+   * — applied to the "Just photographed" thumbnail only, never to
+   * `candidate.displayCoverUrl`, which is a completely separate, already-correctly-
+   * oriented metadata-provider asset. */
+  coverPreviewRotationDegrees: RotationDegrees;
   capturedTitle: string;
   candidate: DuplicateCandidateViewData;
   onSameBook: () => void;
@@ -36,6 +42,7 @@ interface DuplicateCheckProps {
 export function DuplicateCheck({
   isExactMatch,
   coverPreviewUrl,
+  coverPreviewRotationDegrees,
   capturedTitle,
   candidate,
   onSameBook,
@@ -54,7 +61,9 @@ export function DuplicateCheck({
 
       <div className="flex items-start gap-4">
         <div className="flex flex-col items-center gap-1">
-          <img src={coverPreviewUrl} alt="" className="h-32 w-24 rounded-md border border-border object-cover" />
+          <div className="flex h-32 w-24 items-center justify-center overflow-hidden rounded-md border border-border bg-surface-subtle">
+            <SourceCoverPreview previewUrl={coverPreviewUrl} alt="" rotationDegrees={coverPreviewRotationDegrees} />
+          </div>
           <p className="text-xs text-text-muted">Just photographed</p>
         </div>
         <div className="flex flex-col items-center gap-1">

@@ -26,6 +26,11 @@ export const TRACKED_METADATA_FIELDS = {
   visual_realism: "visual",
   format: "metadata",
   fiction_status: "metadata",
+  /** Added for the AI-first catalog draft correction — the teacher-facing short
+   * description is now a visible, AI-generated (`ai_inferred`) field a teacher may
+   * correct via Quick Edit, exactly like the other fields this registry already
+   * tracks. */
+  description: "metadata",
 } as const;
 
 export type MetadataFieldKey = keyof typeof TRACKED_METADATA_FIELDS;

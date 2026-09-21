@@ -138,7 +138,7 @@ export function AddBookFlow({ activeCategories }: AddBookFlowProps) {
       setStage({ name: "identify_recovery", kind: "unreadable", itemId, previewUrl });
       return;
     }
-    await runLookup(itemId, previewUrl);
+    await runLookup(itemId, previewUrl, manualRotationDegrees);
   }
 
   // The three recovery choices offered on the identify_recovery screen (§5).
@@ -151,24 +151,34 @@ export function AddBookFlow({ activeCategories }: AddBookFlowProps) {
   }
 
   function handleContinueWithManualFallback(itemId: string, previewUrl: string) {
-    void runLookup(itemId, previewUrl);
+    void runLookup(itemId, previewUrl, rotationDegrees);
   }
 
-  async function runLookup(itemId: string, previewUrl: string) {
+  // `rotationDegrees` (the teacher's persisted correction, AI-first catalog draft
+  // correction §9) is threaded through this entire chain as an explicit parameter,
+  // exactly like `itemId`/`previewUrl` — never read from component state mid-chain.
+  // A real bug this fixes: React state updates from `setRotationDegrees` earlier in
+  // this same uninterrupted async chain do not change which function references
+  // the chain continues to call (a classic stale-closure trap for a multi-await
+  // callback chain) — reading the `rotationDegrees` state variable here would
+  // silently use whatever it was BEFORE the teacher's rotation choice, exactly
+  // matching the real symptom reported: a manually rotated photo reverting to
+  // looking sideways again once the confirmation screen appeared.
+  async function runLookup(itemId: string, previewUrl: string, rotation: RotationDegrees) {
     setStage({ name: "processing", processingStage: "looking_up" });
     const lookupResult = await lookupMetadataAction(itemId);
     if (!lookupResult.ok) {
-      setStage({ name: "error", message: lookupResult.message, retry: () => runLookup(itemId, previewUrl) });
+      setStage({ name: "error", message: lookupResult.message, retry: () => runLookup(itemId, previewUrl, rotation) });
       return;
     }
-    await runDuplicateCheck(itemId, previewUrl);
+    await runDuplicateCheck(itemId, previewUrl, rotation);
   }
 
-  async function runDuplicateCheck(itemId: string, previewUrl: string) {
+  async function runDuplicateCheck(itemId: string, previewUrl: string, rotation: RotationDegrees) {
     setStage({ name: "processing", processingStage: "checking_duplicates" });
     const duplicateResult = await checkDuplicatesAction(itemId);
     if (!duplicateResult.ok) {
-      setStage({ name: "error", message: duplicateResult.message, retry: () => runDuplicateCheck(itemId, previewUrl) });
+      setStage({ name: "error", message: duplicateResult.message, retry: () => runDuplicateCheck(itemId, previewUrl, rotation) });
       return;
     }
     if (duplicateResult.candidates.length > 0 && duplicateResult.outcome !== "no_match") {
@@ -191,14 +201,14 @@ export function AddBookFlow({ activeCategories }: AddBookFlowProps) {
       });
       return;
     }
-    await runEnrichAndConfirm(itemId, previewUrl);
+    await runEnrichAndConfirm(itemId, previewUrl, rotation);
   }
 
-  async function runEnrichAndConfirm(itemId: string, previewUrl: string) {
+  async function runEnrichAndConfirm(itemId: string, previewUrl: string, rotation: RotationDegrees) {
     setStage({ name: "processing", processingStage: "enriching" });
     const enrichResult = await enrichAndSuggestCategoryAction(itemId);
     if (!enrichResult.ok) {
-      setStage({ name: "error", message: enrichResult.message, retry: () => runEnrichAndConfirm(itemId, previewUrl) });
+      setStage({ name: "error", message: enrichResult.message, retry: () => runEnrichAndConfirm(itemId, previewUrl, rotation) });
       return;
     }
     const summary = enrichResult.summary;
@@ -208,12 +218,22 @@ export function AddBookFlow({ activeCategories }: AddBookFlowProps) {
       name: "confirm",
       data: {
         coverPreviewUrl: previewUrl,
+        coverPreviewRotationDegrees: rotation,
         title: summary.title || "Untitled",
         authors: summary.authors,
         languageCode: summary.languageCode,
         description: summary.description,
         categorySlug: summary.categorySlug,
         categoryLabel: summary.categoryLabel,
+        fictionType: summary.fictionType,
+        format: summary.format,
+        ageMinMonths: summary.ageMinMonths,
+        ageMaxMonths: summary.ageMaxMonths,
+        readAloudMinutes: summary.readAloudMinutes,
+        tags: summary.tags,
+        visualMediaTypes: summary.visualMediaTypes,
+        visualRealism: summary.visualRealism,
+        aiSuggestionsAvailable: summary.aiSuggestionsAvailable,
       },
     });
   }
@@ -243,7 +263,7 @@ export function AddBookFlow({ activeCategories }: AddBookFlowProps) {
     // on proceeding — failure here is swallowed.
     await markDifferentBookAction(ingestionItemId).catch(() => {});
     setIsSubmitting(false);
-    await runEnrichAndConfirm(ingestionItemId, cover.previewUrl);
+    await runEnrichAndConfirm(ingestionItemId, cover.previewUrl, rotationDegrees);
   }
 
   async function handleConfirmSave(edits: TeacherEdits) {
@@ -362,6 +382,7 @@ export function AddBookFlow({ activeCategories }: AddBookFlowProps) {
           <DuplicateCheck
             isExactMatch={stage.isExactMatch}
             coverPreviewUrl={cover?.previewUrl ?? ""}
+            coverPreviewRotationDegrees={rotationDegrees}
             capturedTitle={stage.capturedTitle}
             candidate={stage.candidate}
             onSameBook={() => handleSameBook(stage.candidate.bookId)}

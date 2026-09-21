@@ -3,18 +3,40 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { ISO_639_1_LANGUAGE_NAMES, type LanguageCode } from "@/lib/catalog/languages";
-import { FORMAT_LABELS } from "@/lib/catalog/labels";
-import type { Format } from "@/lib/catalog/types";
+import { FORMAT_LABELS, FICTION_TYPE_LABELS, ILLUSTRATION_STYLE_LABELS, VISUAL_REALISM_LABELS } from "@/lib/catalog/labels";
+import { formatAgeRange } from "@/lib/catalog/age";
+import type { Format, FictionType, IllustrationStyle, VisualRealism } from "@/lib/catalog/types";
 import type { TeacherEdits } from "@/lib/intake/draft";
+import { SourceCoverPreview, type RotationDegrees } from "./SourceCoverPreview";
 
 export interface ConfirmBookViewData {
   coverPreviewUrl: string;
+  /** The teacher's persisted manual rotation (AI-first catalog draft correction §9)
+   * — the same value used throughout the intake flow, so a photo the teacher
+   * rotated during capture never reverts to looking sideways here. */
+  coverPreviewRotationDegrees: RotationDegrees;
   title: string;
   authors: string[];
   languageCode: string | null;
+  /** Everything below is `ai_inferred` catalog-assistance from the single combined
+   * analysis call — genuinely useful suggestions, never claimed as bibliographic
+   * fact (AI-first catalog draft correction §2/§7/§10). */
   description: string | null;
   categorySlug: string | null;
   categoryLabel: string | null;
+  fictionType: FictionType | null;
+  format: Format | null;
+  ageMinMonths: number | null;
+  ageMaxMonths: number | null;
+  readAloudMinutes: number | null;
+  tags: string[];
+  visualMediaTypes: IllustrationStyle[];
+  visualRealism: VisualRealism | null;
+  /** `false` only when AI never ran at all (unconfigured, or a real provider
+   * failure that still let identification/reconciliation complete on cover
+   * evidence alone) — distinct from AI running and having nothing useful to add,
+   * so the UI can be honest about which case it's showing. */
+  aiSuggestionsAvailable: boolean;
 }
 
 interface ConfirmBookProps {
@@ -31,12 +53,36 @@ const FICTION_OPTIONS = [
   { value: "nonfiction", label: "Nonfiction" },
 ] as const;
 
+/** A friendly, teacher-facing band rather than a precise minute count — the
+ * estimate itself is already a recommendation, not a measured fact (§6 of the
+ * phase brief). */
+function readAloudBand(minutes: number | null): string | null {
+  if (minutes == null) return null;
+  if (minutes < 5) return "Under 5 min";
+  if (minutes <= 10) return "5–10 min";
+  return "10+ min";
+}
+
+/** A small, subtle chip for one piece of compact catalog info — never a provider
+ * id, a raw confidence decimal, or any other internal detail (§7 of the phase
+ * brief). */
+function Chip({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="inline-flex items-center rounded-full bg-surface-subtle px-3 py-1 text-xs font-medium text-text-secondary">
+      {children}
+    </span>
+  );
+}
+
 /**
- * The default confirmation view (§29 of the phase brief) — compact, mostly
- * read-only. Quick Edit is a deliberately small correction surface, never a full
- * catalog form: title, authors, language, category, age range, fiction/nonfiction.
- * Nothing here ever shows a provider id, a raw confidence number, a provenance row,
- * raw AI output, an embedding, every tag, or a raw Drive id.
+ * The default confirmation view (§29 of the phase brief; AI-first catalog draft
+ * correction §7) — designed to feel like "AI prepared this book record for you,"
+ * not a blank catalog form. Compact rows/chips, mobile-first, scannable in
+ * roughly 10-15 seconds. Quick Edit is a deliberately small correction surface
+ * that STARTS FROM the AI-suggested values (§8) — the teacher corrects a draft,
+ * never fills an empty form. Nothing here ever shows a provider id, a raw
+ * confidence number, a provenance row, raw AI output, an embedding, every tag, or
+ * a raw Drive id.
  */
 export function ConfirmBook({ data, activeCategories, onConfirm, onReviewLater, submitting }: ConfirmBookProps) {
   const [editing, setEditing] = useState(false);
@@ -44,10 +90,14 @@ export function ConfirmBook({ data, activeCategories, onConfirm, onReviewLater, 
   const [authorsText, setAuthorsText] = useState(data.authors.join(", "));
   const [languageCode, setLanguageCode] = useState(data.languageCode ?? "");
   const [categorySlug, setCategorySlug] = useState(data.categorySlug ?? "");
-  const [fictionType, setFictionType] = useState("");
-  const [format, setFormat] = useState("");
-  const [ageMinYears, setAgeMinYears] = useState("");
-  const [ageMaxYears, setAgeMaxYears] = useState("");
+  const [description, setDescription] = useState(data.description ?? "");
+  // Quick Edit initializes from the AI's own suggestions (§8) — a teacher is
+  // CORRECTING a draft, not filling blanks, even though these three fields have
+  // no dedicated always-visible chip of their own above.
+  const [fictionType, setFictionType] = useState(data.fictionType ?? "");
+  const [format, setFormat] = useState(data.format ?? "");
+  const [ageMinYears, setAgeMinYears] = useState(data.ageMinMonths != null ? String(Math.floor(data.ageMinMonths / 12)) : "");
+  const [ageMaxYears, setAgeMaxYears] = useState(data.ageMaxMonths != null ? String(Math.ceil(data.ageMaxMonths / 12)) : "");
 
   function buildEdits(): TeacherEdits {
     if (!editing) return {};
@@ -56,6 +106,7 @@ export function ConfirmBook({ data, activeCategories, onConfirm, onReviewLater, 
       authors: authorsText.trim() ? authorsText.split(",").map((a) => a.trim()).filter(Boolean) : null,
       languageCode: languageCode || null,
       physicalCategorySlug: categorySlug || null,
+      description: description.trim() || null,
       fictionType: fictionType ? (fictionType as "fiction" | "nonfiction") : null,
       format: format ? (format as Format) : null,
       ageMinMonths: ageMinYears ? Number(ageMinYears) * 12 : null,
@@ -63,20 +114,57 @@ export function ConfirmBook({ data, activeCategories, onConfirm, onReviewLater, 
     };
   }
 
+  const readAloud = readAloudBand(data.readAloudMinutes);
+  const hasAgeRange = data.ageMinMonths != null || data.ageMaxMonths != null;
+  const hasAnySuggestionChip =
+    Boolean(data.categoryLabel) || hasAgeRange || Boolean(data.fictionType) || Boolean(data.format) || Boolean(readAloud) || Boolean(data.visualRealism) || data.visualMediaTypes.length > 0;
+
   return (
     <div className="flex flex-col gap-6">
       <div className="flex items-start gap-4">
-        <img src={data.coverPreviewUrl} alt="" className="h-40 w-28 shrink-0 rounded-md border border-border object-cover sm:h-48 sm:w-32" />
+        <div className="flex h-40 w-28 shrink-0 items-center justify-center overflow-hidden rounded-md border border-border bg-surface-subtle sm:h-48 sm:w-32">
+          <SourceCoverPreview previewUrl={data.coverPreviewUrl} alt="" rotationDegrees={data.coverPreviewRotationDegrees} />
+        </div>
         <div className="flex min-w-0 flex-col gap-1 pt-1">
+          {data.aiSuggestionsAvailable && (
+            <p className="text-xs font-medium uppercase tracking-wide text-brand-primary">AI prepared this book record for you</p>
+          )}
           <h2 className="text-lg font-semibold text-text-primary">{editing ? title : data.title}</h2>
           {data.authors.length > 0 && <p className="text-sm text-text-secondary">{editing ? authorsText : data.authors.join(", ")}</p>}
           <p className="text-sm text-text-muted">
             {ISO_639_1_LANGUAGE_NAMES[(editing ? languageCode : data.languageCode) as LanguageCode] ?? "Language not identified"}
           </p>
-          {data.categoryLabel && <p className="text-sm text-text-muted">Category: {editing ? undefined : data.categoryLabel}</p>}
-          {data.description && !editing && <p className="mt-1 text-sm text-text-secondary">{data.description}</p>}
         </div>
       </div>
+
+      {data.description && !editing && <p className="text-sm text-text-secondary">{data.description}</p>}
+
+      {!editing && hasAnySuggestionChip && (
+        <div className="flex flex-col gap-2">
+          <p className="text-xs font-medium uppercase tracking-wide text-text-muted">Suggested</p>
+          <div className="flex flex-wrap gap-2">
+            {data.categoryLabel && <Chip>{data.categoryLabel}</Chip>}
+            {hasAgeRange && <Chip>{formatAgeRange(data.ageMinMonths ?? undefined, data.ageMaxMonths ?? undefined)}</Chip>}
+            {data.fictionType && <Chip>{FICTION_TYPE_LABELS[data.fictionType]}</Chip>}
+            {data.format && <Chip>{FORMAT_LABELS[data.format]}</Chip>}
+            {readAloud && <Chip>{readAloud} read-aloud</Chip>}
+            {data.visualRealism && <Chip>{VISUAL_REALISM_LABELS[data.visualRealism]}</Chip>}
+            {data.visualMediaTypes.map((type) => (
+              <Chip key={type}>{ILLUSTRATION_STYLE_LABELS[type]}</Chip>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {!editing && data.tags.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {data.tags.map((tag) => (
+            <span key={tag} className="rounded-full border border-border px-2.5 py-0.5 text-xs text-text-muted">
+              {tag}
+            </span>
+          ))}
+        </div>
+      )}
 
       {editing && (
         <div className="flex flex-col gap-4 rounded-lg border border-border bg-surface-subtle p-4">
@@ -104,6 +192,14 @@ export function ConfirmBook({ data, activeCategories, onConfirm, onReviewLater, 
                 </option>
               ))}
             </select>
+          </Field>
+          <Field label="Short description">
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              rows={3}
+              className="rounded-md border border-border-input bg-surface px-3 py-2 text-base"
+            />
           </Field>
           <Field label="Physical category">
             <select

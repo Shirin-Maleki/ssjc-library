@@ -2,6 +2,10 @@
 
 import { useId, useRef, useState } from "react";
 import { Button } from "@/components/ui/Button";
+import { SourceCoverPreview, nextRotation, type RotationDegrees } from "./SourceCoverPreview";
+
+export type { RotationDegrees };
+export { nextRotation };
 
 /** Mirrors `src/lib/googleDrive/validation.ts`'s server-side contract — duplicated
  * as plain string/number constants (not imported) because that module lives under
@@ -13,8 +17,6 @@ import { Button } from "@/components/ui/Button";
 const ALLOWED_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"]);
 const MAX_SIZE_BYTES = 25 * 1024 * 1024;
 
-export type RotationDegrees = 0 | 90 | 180 | 270;
-
 export interface SelectedCover {
   file: File;
   previewUrl: string;
@@ -22,10 +24,6 @@ export interface SelectedCover {
    * shows (real-cover correction pass §6) — 0 unless they tapped Rotate. Applied to
    * the AI analysis derivative only; the original file/Drive upload is unaffected. */
   rotationDegrees: RotationDegrees;
-}
-
-export function nextRotation(current: RotationDegrees): RotationDegrees {
-  return ((current + 90) % 360) as RotationDegrees;
 }
 
 interface CoverCaptureProps {
@@ -45,6 +43,9 @@ function formatFileSize(bytes: number): string {
  * Shared between the initial cover-selection preview and the post-identification
  * recovery UI (`AddBookFlow`'s "we couldn't read this cover clearly" state), since
  * both need the same "let the teacher fix an obviously sideways photo" affordance.
+ * Built on the same `SourceCoverPreview` every other screen uses to DISPLAY the
+ * persisted rotation (AI-first catalog draft correction §9) — this is the only
+ * place that also offers the button to CHANGE it.
  */
 export function RotatablePreview({
   previewUrl,
@@ -60,12 +61,7 @@ export function RotatablePreview({
   return (
     <div className="flex flex-col items-center gap-2">
       <div className="flex h-40 w-40 items-center justify-center overflow-hidden rounded-md border border-border bg-surface-subtle sm:h-48 sm:w-48">
-        <img
-          src={previewUrl}
-          alt={alt}
-          style={{ transform: `rotate(${rotationDegrees}deg)` }}
-          className="max-h-full max-w-full object-contain"
-        />
+        <SourceCoverPreview previewUrl={previewUrl} alt={alt} rotationDegrees={rotationDegrees} />
       </div>
       <button
         type="button"

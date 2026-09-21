@@ -1,6 +1,6 @@
 import { describe, expect, it, afterAll, afterEach } from "vitest";
 import { eq } from "drizzle-orm";
-import { books, bookCopies, ingestionItems, ingestionJobs, auditLog, reviewFlags } from "@/db/schema";
+import { books, bookCopies, ingestionItems, ingestionJobs, auditLog, reviewFlags, bookFieldProvenance } from "@/db/schema";
 import { saveNewBook, addAnotherCopy, saveForReview, type NewBookInput } from "@/lib/intake/persistence";
 import { createInitialDraft } from "@/lib/intake/draft";
 import { DrizzleSearchRepository } from "@/db/repositories/searchRepository";
@@ -74,6 +74,47 @@ describe.skipIf(!hasTestDb)("intake/persistence (against a real Postgres databas
       ...overrides,
     };
   }
+
+  it("AI-first catalog draft correction §11/§13: a human-corrected description is stored as human_corrected provenance, never ai_inferred", async () => {
+    const ingestionItemId = await makeIngestionItem();
+    const result = await saveNewBook(
+      db,
+      baseInput(
+        {
+          description: "A teacher-written description replacing the AI suggestion.",
+          provenance: [{ fieldKey: "description", sourceType: "human_corrected" }],
+        },
+        ingestionItemId
+      )
+    );
+    createdBookIds.push(result.bookId);
+
+    const [row] = await db.select().from(bookFieldProvenance).where(eq(bookFieldProvenance.bookId, result.bookId));
+    expect(row.fieldKey).toBe("description");
+    expect(row.sourceType).toBe("human_corrected");
+  });
+
+  it("an AI-suggested description a teacher never touched is stored as ai_inferred provenance — it must never mysteriously disappear on save", async () => {
+    const ingestionItemId = await makeIngestionItem();
+    const result = await saveNewBook(
+      db,
+      baseInput(
+        {
+          description: "An AI-generated description the teacher confirmed as-is.",
+          provenance: [{ fieldKey: "description", sourceType: "ai_inferred" }],
+        },
+        ingestionItemId
+      )
+    );
+    createdBookIds.push(result.bookId);
+
+    const [bookRow] = await db.select().from(books).where(eq(books.id, result.bookId)).limit(1);
+    expect(bookRow.shortDescription).toBe("An AI-generated description the teacher confirmed as-is.");
+
+    const [row] = await db.select().from(bookFieldProvenance).where(eq(bookFieldProvenance.bookId, result.bookId));
+    expect(row.fieldKey).toBe("description");
+    expect(row.sourceType).toBe("ai_inferred");
+  });
 
   it("saveNewBook creates a book, its physical copy, and marks the ingestion item completed — all in one transaction", async () => {
     const ingestionItemId = await makeIngestionItem();

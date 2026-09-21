@@ -1,4 +1,4 @@
-import type { CoverIdentification, EnrichmentSuggestion } from "./schemas";
+import type { CombinedCoverAnalysis } from "./schemas";
 
 /**
  * The seam between the intake pipeline and Gemini generation/vision (Phase 7, §7 of
@@ -55,37 +55,23 @@ export interface CoverIdentificationInput {
    * automatic inference from the (possibly still-sideways) pixels themselves.
    */
   teacherRotationHintDegrees?: 0 | 90 | 180 | 270;
-}
-
-export interface EnrichmentInput {
-  /** The validated vision evidence from the identification step. */
-  coverEvidence: CoverIdentification;
-  /** The reconciled, trusted metadata candidate, when one was established — omitted
-   * when none was (enrichment still runs on cover evidence alone; §20 of the phase
-   * brief only requires that identity reconciliation happened first, not that it
-   * succeeded with high confidence). */
-  metadataSummary?: {
-    title?: string;
-    subtitle?: string;
-    authors?: string[];
-    publisher?: string;
-    description?: string;
-    subjects?: string[];
-  };
-  /** The exact, currently-active physical categories Gemini may choose from — never
-   * a stale/hard-coded list (§28). Enforced again at the application layer
-   * regardless of what the model returns. */
+  /** The exact, currently-active physical categories Gemini may choose from for
+   * `aiSuggestions.physicalCategorySlug` — never a stale/hard-coded list (§28 of the
+   * phase brief). Enforced again at the application layer regardless of what the
+   * model returns (`src/lib/intake/categorySuggestion.ts`). Fetched and passed in
+   * for THIS one combined call now that evidence extraction and suggestion both
+   * happen together (AI-first catalog draft correction, §3) — previously only the
+   * second, separate enrichment call needed this list. */
   activeCategories: { slug: string; label: string }[];
 }
 
-/** The first Gemini task — evidence extraction from a photographed cover, never
- * catalog completion (§8). */
+/** The one Gemini vision task per book (AI-first catalog draft correction, §3) —
+ * one multimodal request returns both strict visible-evidence extraction and
+ * genuinely inferential catalog-assistance suggestions, replacing the original
+ * two-sequential-call design (`identifyCover` + a separate `suggestEnrichment`).
+ * See `src/lib/ai/schemas.ts`'s `CombinedCoverAnalysisSchema` doc comment for why
+ * this halves the default per-book Gemini call count and for why the two sections
+ * are validated independently. */
 export interface BookVisionProvider {
-  identifyCover(input: CoverIdentificationInput): Promise<CoverIdentification>;
-}
-
-/** The second Gemini task — enrichment suggestions, run only after identity
- * reconciliation (§20). */
-export interface BookEnrichmentProvider {
-  suggestEnrichment(input: EnrichmentInput): Promise<EnrichmentSuggestion>;
+  analyzeCover(input: CoverIdentificationInput): Promise<CombinedCoverAnalysis>;
 }

@@ -18,12 +18,18 @@ documentation first.
 
 ## Add a Book (Phase 7)
 
-**Per-book real cost, at most 2 Gemini calls** (one vision identification, one
-enrichment) **+ at most 2 metadata-provider searches** (Google Books if
-configured, Open Library always) **+ 1 Drive upload/confirm pair**. This is a
-low-volume staff library — teachers add books in the tens to low hundreds per
-year, not per day — so absolute cost is expected to be negligible; the
-observation below is about *rate limits*, not dollar cost.
+**Per-book real cost, exactly 1 Gemini call in the normal case** (down from 2 —
+AI-first catalog draft correction, `docs/DECISIONS.md`: one combined multimodal
+call now returns both cover identification and AI-suggested catalog metadata in
+one request, since the second, separate enrichment call was what this project's
+own small daily quota kept silently defeating in real use) **+ at most 2
+metadata-provider searches** (Google Books if configured, Open Library always)
+**+ 1 Drive upload/confirm pair**. This is a low-volume staff library — teachers
+add books in the tens to low hundreds per year, not per day — so absolute cost is
+expected to be negligible; the observation below is about *rate limits*, not
+dollar cost. Halving the default call count directly doubles how many real books
+a teacher can add on a given day before hitting the measured 20-request/day
+free-tier ceiling below.
 
 **Real-provider validation observed a genuine free-tier daily quota limit.**
 During implementation and again during a dedicated real-provider validation pass

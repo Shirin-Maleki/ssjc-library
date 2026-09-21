@@ -18,13 +18,14 @@ import { resolveCandidateAcceptance, wasSelected as candidateWasSelected } from 
 import { lookupMetadataCandidates } from "./metadataLookup";
 import { findDuplicateCandidates, type DuplicateCandidate } from "./duplicateMatcher";
 import { validateCategorySuggestion } from "./categorySuggestion";
+import { mergeProviderSubjectsIntoTags } from "./enrichmentMerge";
 import { selectTrustworthyDisplayCoverUrl } from "./displayCover";
 import { persistIdentityCandidates } from "./identityCandidates";
 import { readIntakeDraft, parseIntakeDraft, type IntakeDraft, type TeacherEdits, type AnalysisRotationDegrees } from "./draft";
-import { isE2EFakeProvidersEnabled, buildFakeCoverEvidence, buildFakeMetadataCandidates } from "./e2eFixtures";
+import { isE2EFakeProvidersEnabled, buildFakeCoverEvidence, buildFakeAiSuggestions, buildFakeMetadataCandidates } from "./e2eFixtures";
 import { saveNewBook, addAnotherCopy, saveForReview, type ProvenanceInput } from "./persistence";
 import { isLanguageCode } from "@/lib/catalog/languages";
-import type { LanguageCode } from "@/lib/catalog/types";
+import type { LanguageCode, Format, FictionType, IllustrationStyle, VisualRealism } from "@/lib/catalog/types";
 
 /**
  * The authenticated Server Action boundary for the Phase 7 single-book intake
@@ -125,6 +126,12 @@ export async function identifyCoverAction(ingestionItemId: string, manualRotatio
     }
     const evidence = buildFakeCoverEvidence(draft.driveSource.filename);
     draft.coverEvidence = evidence;
+    const fakeSuggestions = buildFakeAiSuggestions(draft.driveSource.filename);
+    if (fakeSuggestions) {
+      const activeCategories = await categoryRepository.listActiveCategories();
+      draft.enrichmentSuggestion = fakeSuggestions;
+      draft.categorySuggestion = toCategorySuggestionRecord(validateCategorySuggestion(fakeSuggestions, activeCategories));
+    }
     draft.pipelineStage = "identified";
     await saveDraft(ingestionItemId, draft);
     return {
@@ -150,13 +157,21 @@ export async function identifyCoverAction(ingestionItemId: string, manualRotatio
 
   const analysisImage = await prepareAnalysisImage(downloaded.bytes, draft.driveSource.mimeType, manualRotationDegrees);
   const rotationHint = resolveRotationHint(analysisImage, manualRotationDegrees);
+  const activeCategories = await categoryRepository.listActiveCategories();
 
-  let evidence;
+  // AI-first catalog draft correction (§3): ONE combined multimodal request
+  // returns both the strict visible-evidence extraction AND genuinely inferential
+  // catalog-assistance suggestions — replacing the original two-sequential-call
+  // design (a separate `suggestEnrichment` call later in the pipeline no longer
+  // exists). See `analyzeCover`'s own doc comment for why this halves the default
+  // per-book Gemini call count.
+  let analysis;
   try {
-    evidence = await aiProvider.identifyCover({
+    analysis = await aiProvider.analyzeCover({
       imageBytes: analysisImage.bytes,
       mimeType: analysisImage.mimeType,
       teacherRotationHintDegrees: rotationHint,
+      activeCategories,
     });
   } catch (error) {
     await saveDraft(ingestionItemId, draft); // still persist the chosen rotation for the next retry
@@ -164,16 +179,18 @@ export async function identifyCoverAction(ingestionItemId: string, manualRotatio
     return failure(classified.category, classified.message);
   }
 
-  draft.coverEvidence = evidence;
+  draft.coverEvidence = analysis.coverEvidence;
+  draft.enrichmentSuggestion = analysis.aiSuggestions;
+  draft.categorySuggestion = toCategorySuggestionRecord(validateCategorySuggestion(analysis.aiSuggestions, activeCategories));
   draft.pipelineStage = "identified";
   await saveDraft(ingestionItemId, draft);
 
   return {
     ok: true,
-    visibleTitle: evidence.visibleTitle,
-    visibleAuthors: evidence.visibleAuthors,
-    identityConfidenceLevel: evidence.identityConfidenceLevel,
-    hasUsableIdentification: Boolean(evidence.visibleTitle?.trim()),
+    visibleTitle: analysis.coverEvidence.visibleTitle,
+    visibleAuthors: analysis.coverEvidence.visibleAuthors,
+    identityConfidenceLevel: analysis.coverEvidence.identityConfidenceLevel,
+    hasUsableIdentification: Boolean(analysis.coverEvidence.visibleTitle?.trim()),
   };
 }
 
@@ -350,61 +367,82 @@ export interface EnrichmentSummary {
   title: string | null;
   authors: string[];
   languageCode: string | null;
+  /** Everything below is `ai_inferred` — genuinely inferential catalog-assistance
+   * suggestions from the single combined analysis call in `identifyCoverAction`
+   * (AI-first catalog draft correction §2/§10), never claimed as bibliographic
+   * fact. `aiSuggestionsAvailable: false` means AI never ran at all for this
+   * intake (unconfigured, or an E2E fixture with no suggestions) — distinct from
+   * AI running and genuinely having nothing useful to suggest, so the UI can be
+   * honest about which case it's in rather than showing an unexplained gap. */
   description: string | null;
   tags: string[];
   categorySlug: string | null;
   categoryLabel: string | null;
+  categoryConfidence: "high" | "medium" | "low" | null;
+  fictionType: FictionType | null;
+  format: Format | null;
+  ageMinMonths: number | null;
+  ageMaxMonths: number | null;
+  readAloudMinutes: number | null;
+  visualMediaTypes: IllustrationStyle[];
+  visualRealism: VisualRealism | null;
+  aiSuggestionsAvailable: boolean;
 }
 
 export type EnrichAndSuggestResult = ActionFailure | { ok: true; summary: EnrichmentSummary };
 
+function emptyEnrichmentSummary(draft: IntakeDraft): EnrichmentSummary {
+  return {
+    title: draft.proposedBookValues?.title ?? null,
+    authors: draft.proposedBookValues?.authors ?? [],
+    languageCode: draft.proposedBookValues?.languageCode ?? null,
+    description: null,
+    tags: [],
+    categorySlug: null,
+    categoryLabel: null,
+    categoryConfidence: null,
+    fictionType: null,
+    format: null,
+    ageMinMonths: null,
+    ageMaxMonths: null,
+    readAloudMinutes: null,
+    visualMediaTypes: [],
+    visualRealism: null,
+    aiSuggestionsAvailable: false,
+  };
+}
+
+/**
+ * AI-first catalog draft correction (§5): this no longer makes a second Gemini
+ * call. `draft.enrichmentSuggestion` already came from the single combined
+ * analysis call in `identifyCoverAction` — this step only MERGES real provider
+ * context (subjects → tags) and RE-VALIDATES the suggested category against the
+ * current active list (categories could in principle have changed since
+ * identify time). A useful partial AI result is never discarded: only the
+ * category slug is re-checked; every other AI-suggested field is preserved
+ * as-is, even if incomplete.
+ */
 export async function enrichAndSuggestCategoryAction(ingestionItemId: string): Promise<EnrichAndSuggestResult> {
   await requireStaffSession();
   assertValidId(ingestionItemId);
 
   const { draft } = await loadDraft(ingestionItemId);
-  if (!draft.coverEvidence || !draft.proposedBookValues?.title) {
-    return {
-      ok: true,
-      summary: {
-        title: draft.proposedBookValues?.title ?? null,
-        authors: draft.proposedBookValues?.authors ?? [],
-        languageCode: draft.proposedBookValues?.languageCode ?? null,
-        description: null,
-        tags: [],
-        categorySlug: null,
-        categoryLabel: null,
-      },
-    };
+  if (!draft.proposedBookValues?.title) {
+    return { ok: true, summary: emptyEnrichmentSummary(draft) };
   }
 
   const activeCategories = await categoryRepository.listActiveCategories();
-  const aiProvider = getConfiguredBookIntelligenceProvider();
+  const suggestion = draft.enrichmentSuggestion;
 
-  let enrichment;
-  if (aiProvider) {
-    try {
-      enrichment = await aiProvider.suggestEnrichment({
-        coverEvidence: draft.coverEvidence,
-        metadataSummary: {
-          title: draft.proposedBookValues.title,
-          subtitle: draft.proposedBookValues.subtitle ?? undefined,
-          authors: draft.proposedBookValues.authors,
-          publisher: draft.proposedBookValues.publisher ?? undefined,
-        },
-        activeCategories,
-      });
-    } catch {
-      enrichment = null;
-    }
-  }
+  const selectedCandidate = draft.selectedCandidateProviderIdentifier
+    ? draft.metadataCandidates.find((c) => c.providerIdentifier === draft.selectedCandidateProviderIdentifier)
+    : undefined;
+  const mergedTags = mergeProviderSubjectsIntoTags(suggestion?.tags ?? [], selectedCandidate?.subjects);
 
-  const categorySuggestion = enrichment ? validateCategorySuggestion(enrichment, activeCategories) : undefined;
+  const categorySuggestion = suggestion ? validateCategorySuggestion(suggestion, activeCategories) : undefined;
 
-  draft.enrichmentSuggestion = enrichment ?? null;
-  draft.categorySuggestion = categorySuggestion
-    ? { slug: categorySuggestion.slug, label: categorySuggestion.label, confidence: categorySuggestion.confidence, reason: categorySuggestion.reason }
-    : null;
+  draft.enrichmentSuggestion = suggestion ? { ...suggestion, tags: mergedTags } : null;
+  draft.categorySuggestion = toCategorySuggestionRecord(categorySuggestion);
   draft.pipelineStage = "ready_for_confirmation";
   await saveDraft(ingestionItemId, draft);
 
@@ -414,10 +452,19 @@ export async function enrichAndSuggestCategoryAction(ingestionItemId: string): P
       title: draft.proposedBookValues.title,
       authors: draft.proposedBookValues.authors,
       languageCode: draft.proposedBookValues.languageCode,
-      description: enrichment?.description ?? null,
-      tags: enrichment?.tags ?? [],
+      description: suggestion?.description ?? null,
+      tags: mergedTags,
       categorySlug: categorySuggestion?.slug ?? null,
       categoryLabel: categorySuggestion?.label ?? null,
+      categoryConfidence: categorySuggestion?.confidence ?? null,
+      fictionType: suggestion?.fictionType ?? null,
+      format: suggestion?.format ?? null,
+      ageMinMonths: suggestion?.ageMinMonths ?? null,
+      ageMaxMonths: suggestion?.ageMaxMonths ?? null,
+      readAloudMinutes: suggestion?.readAloudMinutes ?? null,
+      visualMediaTypes: suggestion?.visualMediaTypes ?? [],
+      visualRealism: suggestion?.visualRealism ?? null,
+      aiSuggestionsAvailable: Boolean(suggestion),
     },
   };
 }
@@ -484,6 +531,40 @@ export async function confirmSaveAction(input: ConfirmSaveInput): Promise<Confir
   if (input.edits?.physicalCategorySlug) provenance.push({ fieldKey: "physical_category", sourceType: "human_verified" });
   else if (draft.categorySuggestion) provenance.push({ fieldKey: "physical_category", sourceType: "ai_inferred", confidenceLevel: draft.categorySuggestion.confidence ?? undefined });
 
+  // AI-first catalog draft correction (§11) — the same accepted/human-corrected
+  // pattern extended to every AI-suggested discovery field a teacher can see on
+  // the confirmation screen. A field the teacher never touched, but that the
+  // single combined analysis call genuinely suggested, is still `ai_inferred`
+  // provenance — it must never mysteriously disappear on save just because no one
+  // explicitly re-confirmed it (§11's own explicit requirement).
+  const description = input.edits?.description ?? enrichment?.description ?? undefined;
+  if (input.edits?.description) provenance.push({ fieldKey: "description", sourceType: "human_corrected" });
+  else if (enrichment?.description) provenance.push({ fieldKey: "description", sourceType: "ai_inferred" });
+
+  const fictionType = input.edits?.fictionType ?? enrichment?.fictionType ?? undefined;
+  if (input.edits?.fictionType) provenance.push({ fieldKey: "fiction_status", sourceType: "human_corrected" });
+  else if (enrichment?.fictionType) provenance.push({ fieldKey: "fiction_status", sourceType: "ai_inferred" });
+
+  const format = input.edits?.format ?? enrichment?.format ?? undefined;
+  if (input.edits?.format) provenance.push({ fieldKey: "format", sourceType: "human_corrected" });
+  else if (enrichment?.format) provenance.push({ fieldKey: "format", sourceType: "ai_inferred" });
+
+  const ageMinMonths = input.edits?.ageMinMonths ?? enrichment?.ageMinMonths ?? undefined;
+  const ageMaxMonths = input.edits?.ageMaxMonths ?? enrichment?.ageMaxMonths ?? undefined;
+  if (input.edits?.ageMinMonths != null || input.edits?.ageMaxMonths != null) {
+    provenance.push({ fieldKey: "age_range", sourceType: "human_corrected" });
+  } else if (enrichment?.ageMinMonths != null || enrichment?.ageMaxMonths != null) {
+    provenance.push({ fieldKey: "age_range", sourceType: "ai_inferred" });
+  }
+
+  // No Quick Edit surface for visual metadata (§8's explicit exclusion) — always
+  // ai_inferred when the combined analysis call suggested it, never a teacher
+  // correction.
+  if (enrichment?.visualMediaTypes && enrichment.visualMediaTypes.length > 0) {
+    provenance.push({ fieldKey: "visual_media_type", sourceType: "ai_inferred" });
+  }
+  if (enrichment?.visualRealism) provenance.push({ fieldKey: "visual_realism", sourceType: "ai_inferred" });
+
   // Display cover (Phase 7 correction pass §2) — derived ONLY from the
   // actually selected/reconciled metadata candidate, never the raw Drive
   // source original. See displayCover.ts for the trust boundary (confirmed
@@ -504,12 +585,12 @@ export async function confirmSaveAction(input: ConfirmSaveInput): Promise<Confir
       languageCode,
       isbn10: proposed?.isbn10 ?? undefined,
       isbn13: proposed?.isbn13 ?? undefined,
-      description: enrichment?.description ?? undefined,
+      description,
       physicalCategorySlug: categorySlug,
-      fictionType: input.edits?.fictionType ?? enrichment?.fictionType ?? undefined,
-      format: input.edits?.format ?? enrichment?.format ?? undefined,
-      ageMinMonths: input.edits?.ageMinMonths ?? enrichment?.ageMinMonths ?? undefined,
-      ageMaxMonths: input.edits?.ageMaxMonths ?? enrichment?.ageMaxMonths ?? undefined,
+      fictionType,
+      format,
+      ageMinMonths,
+      ageMaxMonths,
       readAloudMinutes: enrichment?.readAloudMinutes ?? undefined,
       visualMediaTypes: enrichment?.visualMediaTypes,
       visualRealism: enrichment?.visualRealism ?? undefined,
@@ -668,6 +749,15 @@ export async function abandonIntakeAction(ingestionItemId: string): Promise<void
 function categoryOf(error: unknown): string {
   if (error instanceof DriveProviderError) return error.category;
   return "unexpected_provider_failure";
+}
+
+/** Converts `validateCategorySuggestion()`'s result into `IntakeDraft.categorySuggestion`'s
+ * stored shape — `undefined` (no category could be confirmed) becomes `null`, never a
+ * fabricated fallback (AI-first catalog draft correction §3). */
+function toCategorySuggestionRecord(
+  validated: ReturnType<typeof validateCategorySuggestion>
+): IntakeDraft["categorySuggestion"] {
+  return validated ? { slug: validated.slug, label: validated.label, confidence: validated.confidence, reason: validated.reason } : null;
 }
 
 /**
