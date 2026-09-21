@@ -107,10 +107,18 @@ export const DuplicateOutcomeSchema = z.enum([
   "ambiguous_similar_title",
 ]);
 
+/** A teacher-chosen 90°-increment correction applied to the analysis derivative
+ * only (never the Drive source) — real-cover correction pass §6/§2. Persisted so
+ * a retry (e.g. after a vision failure) re-applies the same correction without
+ * the teacher having to remember or re-choose it. */
+export const AnalysisRotationDegreesSchema = z.union([z.literal(0), z.literal(90), z.literal(180), z.literal(270)]);
+export type AnalysisRotationDegrees = z.infer<typeof AnalysisRotationDegreesSchema>;
+
 export const IntakeDraftSchema = z.object({
   schemaVersion: z.literal(INTAKE_DRAFT_SCHEMA_VERSION),
   pipelineStage: PipelineStageSchema,
   driveSource: DriveSourceSchema,
+  analysisRotationDegrees: AnalysisRotationDegreesSchema.default(0),
   coverEvidence: CoverIdentificationSchema.nullable(),
   metadataCandidates: z.array(MetadataCandidateRecordSchema).default([]),
   selectedCandidateProviderIdentifier: z.string().nullable(),
@@ -149,6 +157,7 @@ export function createInitialDraft(driveSource: z.infer<typeof DriveSourceSchema
     schemaVersion: INTAKE_DRAFT_SCHEMA_VERSION,
     pipelineStage: "uploaded",
     driveSource,
+    analysisRotationDegrees: 0,
     coverEvidence: null,
     metadataCandidates: [],
     selectedCandidateProviderIdentifier: null,

@@ -68,6 +68,19 @@ export function buildFakeCoverEvidence(filename: string): CoverIdentification {
       visibleIsbn: "9780333710937",
     };
   }
+  if (filename.toLowerCase().includes("unreadable")) {
+    // Simulates a real vision call that runs without throwing but genuinely can't
+    // read the cover (real-cover correction pass §5/§8) — no visible title, no
+    // search evidence at all. Exercises the identify_recovery UI end to end
+    // without depending on a live, quota-limited Gemini call.
+    return {
+      ...BASE_EVIDENCE,
+      visibleTitle: null,
+      visibleAuthors: null,
+      identityConfidenceLevel: "low",
+      evidenceNotes: "E2E fixture evidence — simulates a cover Gemini could not read.",
+    };
+  }
   if (filename.toLowerCase().includes("similartitle")) {
     // Same real seeded title, deliberately no ISBN and a different author — lands
     // in same_title_different_edition (Phase 7 correction pass §3: title alone is

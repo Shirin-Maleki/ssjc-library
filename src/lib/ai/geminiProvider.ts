@@ -64,6 +64,17 @@ function stripMetaKeys(schema: unknown): Record<string, unknown> {
 
 const COVER_IDENTIFICATION_SYSTEM_INSTRUCTION = `You are extracting bibliographic evidence from a photograph of a children's book's front cover, for a school library catalog.
 
+This is a REAL PHONE PHOTO, not a clean scan. Before reading any text, account for how real phone photos are actually taken:
+- The image may be rotated 90, 180, or 270 degrees from upright — a photo's orientation metadata is not reliable, so judge orientation from the image content itself, not from any assumption that it arrives upright.
+- The photo may be slightly skewed, taken at an angle, or show mild perspective distortion (the cover photographed from slightly above/below/to one side).
+- The frame may include background clutter — a shelf, table, other books, hands, or the edge of a surface — alongside the actual book.
+
+Before extracting any text, work through these steps:
+1. Identify the likely front-cover rectangle in the image — the single book cover that is the actual subject of the photo, distinguishing it from any other books, spines, or objects also visible in the frame.
+2. Determine that rectangle's readable orientation (it may not match the orientation the image file arrives in).
+3. Mentally rotate/re-orient your reading of that rectangle as needed so the title and author text read normally, left to right.
+4. Only then read the cover's visible text (title, subtitle, author(s), illustrator(s), publisher/imprint, series, visible ISBN, visible language).
+
 ONLY report information you can actually see printed on the cover in the photograph. Report a field as null when the cover does not clearly show it.
 
 Do NOT invent or guess:
@@ -76,7 +87,7 @@ Do NOT invent or guess:
 - a read-aloud duration
 - publisher metadata not visible on the cover itself
 
-The image is evidence, not permission to guess. If the cover is blurry, obscured, in an unfamiliar script, or otherwise unclear, report lower confidence and leave the relevant fields null rather than guessing.`;
+The image is evidence, not permission to guess. Rotation, skew, an off-angle shot, or background clutter are normal photo conditions to work through, not reasons by themselves to report low confidence — reserve low confidence and null fields for when the cover's own text is genuinely blurry, obscured, in an unfamiliar script, or otherwise actually unclear once correctly oriented.`;
 
 function buildEnrichmentSystemInstruction(activeCategories: { slug: string; label: string }[]): string {
   const categoryList = activeCategories.map((c) => `- ${c.slug}: ${c.label}`).join("\n");

@@ -2044,3 +2044,111 @@ full architecture and `docs/COSTS.md` for observed latency/cost figures.
 `src/lib/metadataProviders/googleBooksProvider.ts`;
 `src/lib/metadataProviders/openLibraryProvider.ts`; `docs/AI_PIPELINE.md` (new);
 `docs/COSTS.md`.
+
+## Real cover-recognition failure: `prepareAnalysisImage` never auto-oriented, and EXIF metadata alone was not enough to fix it
+
+**The real failure this correction responds to.** A real teacher used the actual
+Add-a-Book UI and photographed a real book cover. The upload succeeded, but
+identification returned no usable title/author at all — the confirmation screen
+was left almost empty. This was reproduced from the real, still-present ingestion
+record (`ingestion_items.id = c4fd6bfc-d915-48ef-b215-7af27d340bbc`, real Drive
+file `IMG_2777.jpeg`, 4032x3024, real EXIF `Orientation` tag = 3) — the original
+Drive file was downloaded read-only (never modified) and run through the actual
+`prepareAnalysisImage()` code path exactly as `identifyCoverAction` calls it.
+
+**Root cause, confirmed by direct inspection, not inferred.** `prepareAnalysisImage`
+called `sharp(sourceBytes).resize(...).jpeg(...)` with no `.rotate()` call anywhere.
+`sharp` only applies EXIF-based auto-orientation when `.rotate()` (no arguments) is
+explicitly invoked in the pipeline; without it, the output buffer keeps the raw,
+as-captured sensor pixel order, and `sharp`'s own default metadata-stripping-on-
+output behavior discards the EXIF orientation tag as well — so nothing downstream
+(Gemini) had any way to know a correction was needed. Meanwhile, browsers render
+`<img>` EXIF-aware by default, so the teacher's own preview looked correctly
+upright the entire time. Visually confirmed: extracting the real photo at 0/90/
+180/270 degrees and inspecting each showed the raw (uncorrected) derivative was
+genuinely sideways (title running vertically), exactly matching the reported
+symptom (empty confirmation, "You photographed…" comparison useless).
+
+**A second, more surprising real finding: EXIF alone was not sufficient for this
+exact photo.** Applying `sharp`'s standard `.rotate()` auto-orientation (which
+correctly implements the EXIF `Orientation=3` → 180° transform per spec, confirmed
+by testing `orientation` values 1/3/6/8 against a synthetic fixture and checking
+for the expected dimension swap on 6/8) still left this specific real photo
+sideways — just sideways in the *other* direction, 180° from the raw, uncorrected
+version. Testing all four fixed angles (0/90/180/270) against this file's raw
+pixels directly showed the true required correction was 90°, not the 180° its own
+EXIF tag claimed. This means the file's own EXIF `Orientation` metadata does not
+match its actual content — a real, if uncommon, phenomenon (this can happen when
+a photo passes through an app or transfer step that rewrites pixels without
+correspondingly updating the orientation tag, or vice versa). This is the concrete
+reason the fix could not stop at "call `.rotate()` and be done": EXIF-based
+auto-orientation is the correct, necessary, standard fix — and does fix the
+overwhelming majority of real phone photos — but a teacher-facing manual
+correction and a vision prompt robust to arbitrary rotation are both required as a
+real safety net, not redundant defense-in-depth.
+
+**The fix, in three parts.**
+1. `prepareAnalysisImage` now calls `.rotate()` (EXIF auto-orient) unconditionally
+   before resizing, for every format `sharp` can decode (unchanged HEIC/HEIF
+   passthrough — see below). Real orientation tests prove actual pixel/dimension
+   correctness (a 90°-correction case via the expected dimension swap; a
+   180°-correction case via a marker pixel's position, since 180° never swaps
+   dimensions) — never merely that `sharp` returned *a* buffer.
+2. A new, small, teacher-facing manual rotation control (`RotatablePreview`,
+   `src/components/add/CoverCapture.tsx`) lets the teacher apply an additional
+   90°-increment correction on top of auto-orientation, judged against what they
+   actually see in the (already EXIF-corrected) preview — not against the raw
+   sensor pixels, since the teacher never sees those. Persisted in
+   `IntakeDraft.analysisRotationDegrees` so a retry reuses the same correction.
+   Real-verified against the exact failed photo: EXIF auto-orientation alone
+   still left it sideways; a further +270° (three taps) manual correction on top
+   produced a fully upright derivative — direct proof the mechanism works
+   correctly end to end, including for the one real case that needed it most.
+3. Gemini's cover-identification system instruction
+   (`src/lib/ai/geminiProvider.ts`) now explicitly tells the model a real phone
+   photo may be rotated 0/90/180/270 degrees, skewed, shot at an angle, or framed
+   with background clutter, and to identify the front-cover rectangle and mentally
+   re-orient it before reading text — a safety net for exactly the case an
+   inaccurate EXIF tag or an un-rotatable HEIC source can't otherwise cover. The
+   existing evidence boundary (never invent an ISBN/year/edition/etc.) is
+   unchanged.
+
+**HEIC/HEIF handling stays honest, not equivalent.** This sharp build cannot
+decode real HEIC/HEIF at all (pre-existing, documented finding) — orientation
+normalization, including the manual rotation control, cannot be applied to those
+bytes for the same reason. The passthrough behavior is unchanged; the more robust
+vision prompt (point 3 above) is the real mitigation for HEIC specifically, per
+the phase brief's own explicit preference against introducing a fragile
+non-default libheif dependency for this.
+
+**Failure UX was also fixed, not just the image processing.** `AddBookFlow.tsx`
+previously ignored `identifyCoverAction`'s result entirely and always continued
+into metadata lookup/enrichment, even when identification returned no usable
+title — producing exactly the almost-empty confirmation screen this correction is
+about. It now shows an explicit "We couldn't read this cover clearly." recovery
+screen (never Gemini/provider technical language) offering: retry with the same
+already-uploaded photo, rotate and retry, choose a different photo, or explicitly
+continue with a manual (Quick Edit) fallback — never a silent, uninformative
+dead end.
+
+**Live re-validation was attempted, honestly limited by a real, concrete quota.**
+Re-running the exact same real photo through the corrected pipeline was
+attempted; Gemini's real free-tier daily quota (`GenerateRequestsPerDayPerProjectPerModel-FreeTier`,
+`quotaValue: 20`, surfaced directly in Google's own error body during this
+attempt) was already exhausted for the day. The orientation fix itself was
+instead proven technically and visually (as described above) against the exact
+real failed photo, without claiming a live AI success that did not happen. The
+real ingestion record and Drive file were left completely untouched for a future
+bounded retry once quota resets.
+
+**Consequences:** `IntakeDraftSchema` gained `analysisRotationDegrees` (default 0,
+backward-compatible with existing drafts via Zod's `.default()`).
+`identifyCoverAction` gained a `manualRotationDegrees` parameter and a
+`hasUsableIdentification` result field. No database schema change (drafts are
+`jsonb`). No new environment variable, no new dependency.
+
+**Relevant files:** `src/lib/intake/imagePrep.ts`; `src/lib/intake/draft.ts`;
+`src/lib/intake/actions.ts`; `src/lib/ai/geminiProvider.ts`;
+`src/components/add/CoverCapture.tsx`; `src/components/add/AddBookFlow.tsx`;
+`tests/unit/intake/imagePrep.test.ts`; `tests/unit/components/CoverCapture.test.tsx`;
+`tests/unit/ai/geminiProvider.test.ts`; `tests/e2e/addBook.spec.ts`.

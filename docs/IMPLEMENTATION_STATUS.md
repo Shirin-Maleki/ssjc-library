@@ -1,23 +1,24 @@
 # Implementation Status
 
-Last updated: 2026-09-21 (Phase 7 implemented, correction pass and final closure pass both
-applied — review pending). This document is continuity insurance — it should always let another
-coding agent open this repository cold and know exactly where things stand. Keep it current at
-the end of every phase.
+Last updated: 2026-09-21 (Phase 7 implemented; correction pass, final closure pass, and a real
+teacher-reported cover-recognition correction all applied — review pending). This document is
+continuity insurance — it should always let another coding agent open this repository cold and
+know exactly where things stand. Keep it current at the end of every phase.
 
 ## Current phase
 
-**PHASE 7 IMPLEMENTED — FINAL CLOSURE PASS APPLIED / REVIEW PENDING.** Not yet marked approved by
-this document itself — that determination belongs to the reviewer, not to whichever agent last
-touched the code. See "Completed work (Phase 7, 2026-09-20/21)," "Completed work (Phase 7
-correction pass, 2026-09-21)," and "Completed work (Phase 7 final closure pass, 2026-09-21)"
-below for exactly what shipped and what's still genuinely open (real Google Books validation —
-no key available; a fresh live Gemini call against real HEIC bytes and a third full
-real-provider validation case — both blocked by a real, now concretely-identified Gemini
-free-tier daily quota of 20 requests/day plus real capacity constraints, despite substantial
-genuine retry effort across three separate sessions, not by a code defect). Phase 6 (Google
-Drive connection, including its 2026-09-20 correction pass) and Phase 5 (real search
-architecture, including its real-provider validation pass) remain complete and approved,
+**PHASE 7 IMPLEMENTED — REAL COVER-RECOGNITION CORRECTION APPLIED / REVIEW PENDING.** Not yet
+marked approved by this document itself — that determination belongs to the reviewer, not to
+whichever agent last touched the code. See "Completed work (Phase 7, 2026-09-20/21)," "Completed
+work (Phase 7 correction pass, 2026-09-21)," "Completed work (Phase 7 final closure pass,
+2026-09-21)," and "Completed work (Phase 7 real cover-recognition correction, 2026-09-21)" below
+for exactly what shipped and what's still genuinely open (real Google Books validation — no key
+available; a fresh live Gemini call against real HEIC bytes; a third full real-provider
+validation case; and a live re-identification of the real teacher-reported failed cover after the
+orientation fix — all blocked by a real, concretely-identified Gemini free-tier daily quota of 20
+requests/day, exhausted again during this pass's own bounded retry attempt, not by a code defect).
+Phase 6 (Google Drive connection, including its 2026-09-20 correction pass) and Phase 5 (real
+search architecture, including its real-provider validation pass) remain complete and approved,
 unaffected except where Phase 7 built directly on Phase 6's Drive infrastructure — approved as
 of commit `88b02752363649c297b6e6f3e38202cee2e51a6a` (Phase 5) and
 `3fc48d4c4961d71308f5de9b098c18413ad99db4` (Phase 6, the Phase 7 starting point).
@@ -800,13 +801,66 @@ unit tests (was 452), 94 integration tests (was 92), 117 E2E tests
 (unchanged) — all passing, real Chromium + real WebKit; `npm run
 evaluate:search` also re-run (1/1 passing, no relevance regression).
 
+## Completed work (Phase 7 real cover-recognition correction, 2026-09-21)
+
+A real teacher used the actual Add-a-Book UI, photographed a real book cover,
+and got an almost-empty confirmation screen — no title, no author, nothing
+useful. This is a genuine Phase 7 acceptance blocker, reproduced from the real,
+still-preserved ingestion record rather than asking for the photo again. Full
+before/after evidence: `docs/AI_PIPELINE.md` §10d; full technical root-cause
+narrative: `docs/DECISIONS.md`.
+
+1. **Root cause found and fixed**: `prepareAnalysisImage()` never called
+   `sharp`'s `.rotate()` — the analysis derivative sent to Gemini kept the raw,
+   as-captured sensor pixel orientation while the browser's own EXIF-aware
+   preview looked correctly upright the whole time. Fixed: `.rotate()` (EXIF
+   auto-orientation) now runs before resizing, for every format `sharp` can
+   decode. A further real finding: this exact failed photo's own EXIF
+   orientation tag did not match its true required correction — auto-
+   orientation alone was not enough for this specific file, confirmed by
+   testing all four fixed angles against the real raw pixels directly.
+2. **Manual rotate control added**: a small, teacher-facing 90°-increment
+   rotate affordance on the selected-cover preview (`RotatablePreview`), never
+   a photo editor. Applies on top of EXIF auto-orientation, persisted in the
+   intake draft so a retry reuses the same correction. Real-verified against
+   the exact failed photo: EXIF alone still left it sideways; a further
+   manual correction on top produced a fully upright derivative.
+3. **HEIC/HEIF handling stays honest**: unchanged passthrough (this `sharp`
+   build cannot decode real HEIC), documented as a real limitation rather than
+   silently treated as equivalent to the JPEG fix; the more robust vision
+   prompt (below) is the real mitigation for that format specifically.
+4. **Vision prompt strengthened**: Gemini's cover-identification instruction
+   now explicitly covers real phone-photo conditions — arbitrary rotation,
+   skew, off-angle shots, background clutter — and walks through isolating
+   the front-cover rectangle and mentally re-orienting before reading text.
+   The existing evidence boundary (never invent hidden bibliographic fields)
+   is unchanged.
+5. **Identification failure no longer continues silently**: `AddBookFlow.tsx`
+   previously ignored `identifyCoverAction`'s result and always proceeded into
+   metadata lookup — the direct cause of the almost-empty confirmation screen.
+   It now shows an explicit "We couldn't read this cover clearly." recovery
+   screen (never provider/technical language) offering retry, rotate-and-retry,
+   choose a different photo, or an explicit manual (Quick Edit) fallback.
+6. **Real re-test of the exact failed cover**: the orientation fix was proven
+   technically and visually against the real photo (real before/after
+   derivatives inspected directly). A live Gemini re-identification could not
+   be completed — the real free-tier daily quota (20 requests/day) was already
+   exhausted from this same day's earlier real calls, confirmed via a bounded
+   3-attempt real retry. The real ingestion record and Drive file were left
+   completely untouched for a future retry once quota resets. No AI success is
+   claimed for this exact retest.
+
+**Testing (this pass's own final counts)**: 470 unit tests (was 457), 94
+integration tests (unchanged), 125 E2E tests (was 117) — all passing, real
+Chromium + real WebKit.
+
 ## In-progress / not yet done for Phase 7
 
 **Not real-tested**: Google Books (no `GOOGLE_BOOKS_API_KEY` was available —
 Open Library alone was validated live twice, across both validation rounds,
 and is sufficient for metadata lookup to function); a fresh live Gemini
 vision call against real HEIC bytes (blocked by a real Gemini free-tier daily
-quota — now concretely confirmed at 20 requests/day, see above — across three
+quota — now concretely confirmed at 20 requests/day, see above — across four
 separate validation sessions, despite substantial genuine retry effort each
 time; the resize-skip/passthrough logic was confirmed correct with 4 real
 HEIC files total, and the HEIC input-support claim itself rests on Google's
@@ -816,8 +870,14 @@ and §5 of the final closure pass both asked for 3 full cases; across every
 attempt made, only 1 fully complete real end-to-end case exists, plus 1
 partial success that reached duplicate-check but not enrichment — both
 blocked by the same real, now concretely-quantified rate limit, not by a
-code defect). All recorded honestly in `docs/AI_PIPELINE.md` §10/§10b/§10c
-and `docs/COSTS.md`, not glossed over.
+code defect); a live re-identification of the real teacher-reported failed
+cover after the orientation fix (§10d of `docs/AI_PIPELINE.md` — the fix
+itself was proven technically/visually against the real photo, but Gemini's
+own text extraction from the corrected derivative was not re-obtained live,
+blocked by the same exhausted daily quota; the real ingestion record and
+Drive file remain untouched for a future bounded retry). All recorded
+honestly in `docs/AI_PIPELINE.md` §10/§10b/§10c/§10d and `docs/COSTS.md`, not
+glossed over.
 
 **Not built, by explicit design** (per the phase brief's own exclusions): no
 processing of the existing ~1,500-photo collection, no Phase 8 Admin Review

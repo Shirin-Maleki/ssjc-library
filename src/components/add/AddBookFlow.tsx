@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { CoverCapture, type SelectedCover } from "./CoverCapture";
+import { Button } from "@/components/ui/Button";
+import { CoverCapture, RotatablePreview, nextRotation, type SelectedCover, type RotationDegrees } from "./CoverCapture";
 import { ProcessingStatus, type ProcessingStage } from "./ProcessingStatus";
 import { ConfirmBook, type ConfirmBookViewData } from "./ConfirmBook";
 import { DuplicateCheck, type DuplicateCandidateViewData } from "./DuplicateCheck";
@@ -27,6 +28,11 @@ interface AddBookFlowProps {
 type Stage =
   | { name: "capture" }
   | { name: "processing"; processingStage: ProcessingStage; uploadProgressPercent?: number }
+  // Real-cover correction pass §5 — shown instead of silently continuing when
+  // identification either fails outright or succeeds with no usable title. Never
+  // exposes provider/technical language; offers retry, rotate, a fresh photo, or an
+  // explicit choice to continue with a manual (Quick Edit) fallback.
+  | { name: "identify_recovery"; itemId: string; previewUrl: string }
   | { name: "duplicate"; isExactMatch: boolean; candidate: DuplicateCandidateViewData; capturedTitle: string }
   | { name: "confirm"; data: ConfirmBookViewData }
   | { name: "success"; title: string; categoryLabel: string; isAnotherCopy: boolean }
@@ -40,6 +46,10 @@ export function AddBookFlow({ activeCategories }: AddBookFlowProps) {
   const [cover, setCover] = useState<SelectedCover | null>(null);
   const [ingestionItemId, setIngestionItemId] = useState<string | null>(null);
   const [categorySlug, setCategorySlug] = useState<string | null>(null);
+  // The teacher's current manual analysis-rotation choice (real-cover correction
+  // pass §6) — starts at whatever they chose on the capture-preview screen, and can
+  // be adjusted further from the identify-recovery screen without re-uploading.
+  const [rotationDegrees, setRotationDegrees] = useState<RotationDegrees>(0);
   // One shared in-flight guard (§5C of the correction pass) — Confirm/Add book,
   // Review Later, and Add another copy are never simultaneously actionable (only
   // one is ever rendered at a time, on the confirm or duplicate stage), so a single
@@ -63,12 +73,14 @@ export function AddBookFlow({ activeCategories }: AddBookFlowProps) {
     setCover(null);
     setIngestionItemId(null);
     setCategorySlug(null);
+    setRotationDegrees(0);
     setIsSubmitting(false);
     setActionError(null);
   }
 
   async function handleCoverConfirmed(selected: SelectedCover) {
     setCover(selected);
+    setRotationDegrees(selected.rotationDegrees);
     await runUpload(selected);
   }
 
@@ -89,19 +101,42 @@ export function AddBookFlow({ activeCategories }: AddBookFlowProps) {
     }
 
     setIngestionItemId(newIngestionItemId);
-    await runIdentify(newIngestionItemId, selected.previewUrl);
+    await runIdentify(newIngestionItemId, selected.previewUrl, selected.rotationDegrees);
   }
 
   // Each stage below is independently retryable and resumes AT that stage — a
   // later step's failure never re-runs an earlier, already-completed (and
   // possibly real-API-costing) one (§5D of the correction pass).
-  async function runIdentify(itemId: string, previewUrl: string) {
+  //
+  // Real-cover correction pass §5: this used to ignore identifyCoverAction's
+  // result entirely and always continue to metadata lookup, even when vision
+  // failed outright or found no usable title — producing an almost-empty
+  // confirmation screen with no clear explanation. Now: a hard failure OR "ran but
+  // found nothing usable" both show an explicit recovery choice instead of
+  // silently continuing. Only a genuinely usable identification proceeds
+  // automatically.
+  async function runIdentify(itemId: string, previewUrl: string, manualRotationDegrees: RotationDegrees) {
     setStage({ name: "processing", processingStage: "identifying" });
-    await identifyCoverAction(itemId);
-    // A vision failure still allows a partial/manual path — the action itself
-    // never throws for this case (evidence is simply absent), so there is nothing
-    // to retry at this specific step.
+    setRotationDegrees(manualRotationDegrees);
+    const result = await identifyCoverAction(itemId, manualRotationDegrees);
+    if (!result.ok || !result.hasUsableIdentification) {
+      setStage({ name: "identify_recovery", itemId, previewUrl });
+      return;
+    }
     await runLookup(itemId, previewUrl);
+  }
+
+  // The three recovery choices offered on the identify_recovery screen (§5).
+  function handleRetryIdentify(itemId: string, previewUrl: string) {
+    void runIdentify(itemId, previewUrl, rotationDegrees);
+  }
+
+  function handleRotateAndRetry(itemId: string, previewUrl: string) {
+    void runIdentify(itemId, previewUrl, nextRotation(rotationDegrees));
+  }
+
+  function handleContinueWithManualFallback(itemId: string, previewUrl: string) {
+    void runLookup(itemId, previewUrl);
   }
 
   async function runLookup(itemId: string, previewUrl: string) {
@@ -238,6 +273,39 @@ export function AddBookFlow({ activeCategories }: AddBookFlowProps) {
 
     case "processing":
       return <ProcessingStatus stage={stage.processingStage} uploadProgressPercent={stage.uploadProgressPercent} />;
+
+    case "identify_recovery":
+      return (
+        <div className="flex flex-col items-center gap-5 py-8 text-center">
+          <div>
+            <p className="text-lg font-semibold text-text-primary">We couldn&rsquo;t read this cover clearly.</p>
+            <p className="mt-1 max-w-sm text-sm text-text-secondary">
+              If the photo below looks sideways, tap Rotate. Otherwise, try again or choose a different photo.
+            </p>
+          </div>
+          <RotatablePreview
+            previewUrl={stage.previewUrl}
+            alt="Uploaded book cover preview"
+            rotationDegrees={rotationDegrees}
+            onRotate={() => handleRotateAndRetry(stage.itemId, stage.previewUrl)}
+          />
+          <div className="flex flex-col items-center gap-3 sm:flex-row">
+            <Button variant="primary" onClick={() => handleRetryIdentify(stage.itemId, stage.previewUrl)}>
+              Try again with this photo
+            </Button>
+            <button type="button" onClick={reset} className="text-sm font-medium text-text-muted underline underline-offset-4">
+              Choose a different photo
+            </button>
+          </div>
+          <button
+            type="button"
+            onClick={() => handleContinueWithManualFallback(stage.itemId, stage.previewUrl)}
+            className="text-sm font-medium text-brand-primary underline underline-offset-4"
+          >
+            Continue and enter the details myself
+          </button>
+        </div>
+      );
 
     case "duplicate":
       return (

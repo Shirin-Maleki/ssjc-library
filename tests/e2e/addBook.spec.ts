@@ -156,4 +156,75 @@ test.describe("Add a Book", () => {
     await expect(page.locator('p[role="alert"]')).toContainText(/JPEG, PNG, WebP, HEIC, or HEIF/);
     await expect(page.getByText("Photo selected")).toHaveCount(0);
   });
+
+  test("rotate control: repeated taps visibly rotate the selected-cover preview before upload (real-cover correction pass §6)", async ({ page }) => {
+    await page.goto("/add");
+    await page.locator('input[type="file"]').setInputFiles({ name: "rotate-control-test.png", mimeType: "image/png", buffer: tinySyntheticPng() });
+    await expect(page.getByText("Photo selected")).toBeVisible();
+
+    const preview = page.getByAltText("Selected book cover preview");
+    const initialTransform = await preview.evaluate((el) => getComputedStyle(el).transform);
+
+    await page.getByRole("button", { name: "Rotate 90°" }).click();
+    await expect(async () => {
+      const rotated = await preview.evaluate((el) => getComputedStyle(el).transform);
+      expect(rotated).not.toBe(initialTransform);
+    }).toPass();
+
+    // 4 taps returns to the original (unrotated) transform — proves increments of
+    // exactly 90 degrees, not an open-ended/unbounded rotation.
+    await page.getByRole("button", { name: "Rotate 90°" }).click();
+    await page.getByRole("button", { name: "Rotate 90°" }).click();
+    await page.getByRole("button", { name: "Rotate 90°" }).click();
+    await expect(async () => {
+      const backToStart = await preview.evaluate((el) => getComputedStyle(el).transform);
+      expect(backToStart).toBe(initialTransform);
+    }).toPass();
+  });
+
+  test("identification failure (no usable title): shows explicit recovery UI, never a silently-empty confirmation (real-cover correction pass §5/§8)", async ({
+    page,
+  }) => {
+    await uploadCover(page, "unreadable-cover-test.png");
+
+    await expect(page.getByText("We couldn’t read this cover clearly.")).toBeVisible({ timeout: 15000 });
+    // Never expose provider/technical language to the teacher.
+    await expect(page.getByText(/gemini|vision_failed|rate_limited/i)).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Try again with this photo" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Rotate 90°" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Choose a different photo" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Continue and enter the details myself" })).toBeVisible();
+  });
+
+  test("retry after identification failure re-runs identify on the SAME already-uploaded source — no re-upload dialog, still deterministic (real-cover correction pass §8)", async ({
+    page,
+  }) => {
+    await uploadCover(page, "unreadable-cover-test.png");
+    await expect(page.getByText("We couldn’t read this cover clearly.")).toBeVisible({ timeout: 15000 });
+
+    await page.getByRole("button", { name: "Try again with this photo" }).click();
+
+    // Lands back on the same recovery screen (the fixture is deterministic — the
+    // filename never changes on retry) without ever re-showing the file picker or
+    // an upload-progress screen, proving no re-upload occurred.
+    await expect(page.getByText("We couldn’t read this cover clearly.")).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText("Take or choose a photo")).toHaveCount(0);
+  });
+
+  test("continuing with the manual fallback after an identification failure reaches confirmation, never proceeding blindly with a pointless lookup (real-cover correction pass §5)", async ({
+    page,
+  }) => {
+    await uploadCover(page, "unreadable-cover-test.png");
+    await expect(page.getByText("We couldn’t read this cover clearly.")).toBeVisible({ timeout: 15000 });
+
+    await page.getByRole("button", { name: "Continue and enter the details myself" }).click();
+
+    await expect(page.getByRole("heading", { name: "Untitled" })).toBeVisible({ timeout: 15000 });
+    await page.getByRole("button", { name: "Quick edit" }).click();
+    await page.getByLabel("Title").fill("A Book The Teacher Typed In By Hand");
+    await page.getByLabel("Language").selectOption({ label: "English" });
+    await page.getByLabel("Physical category").selectOption({ label: "Stories & Imagination" });
+    await page.getByRole("button", { name: "Confirm / Add book" }).click();
+    await expect(page.getByText("Added to SSJC Library")).toBeVisible({ timeout: 15000 });
+  });
 });

@@ -53,6 +53,17 @@ confirmed Drive-stored source photo (§6) — Add a Book itself is unavailable
   or read duration. Schema-valid output still gets stored via
   `sourceType: "cover_visible"` provenance, distinct from `ai_inferred"` (used for
   enrichment guesses) — see `docs/DATA_MODEL.md` §"Provenance".
+- **Orientation/framing robustness (real-cover correction pass §4, `docs/DECISIONS.md`)**:
+  a real teacher's failed upload showed identification silently returning nothing
+  useful for a genuinely sideways photo. The system instruction now explicitly
+  tells Gemini a real phone photo may be rotated 0/90/180/270 degrees (photo
+  orientation metadata is not treated as reliable), skewed, shot at an angle, or
+  framed with background clutter (a shelf, other books, hands) — and walks
+  through identifying the front-cover rectangle, determining its true readable
+  orientation, mentally re-orienting, then reading text, before ever reporting
+  low confidence or a null field. This is a real safety net independent of the
+  image-processing fix below — it also covers real HEIC sources, which cannot be
+  pixel-rotated in this deployment at all (§5).
 - **Timeout**: 20 seconds (`VISION_TIMEOUT_MS`), enforced via `Promise.race`.
 - **Retry**: `src/lib/ai/retry.ts`'s `withGeminiRetry()` — up to 2 retries on
   429/500/502/503/504, exponential backoff (1s base, 6s cap) with jitter. Built
@@ -97,26 +108,64 @@ identity is `unresolved` regardless of how many candidates were returned.
 
 ## 5. Image handling
 
-`src/lib/intake/imagePrep.ts` — `prepareAnalysisImage()`. Builds a resized
-*analysis derivative* (longest edge 1024px, JPEG quality 82) purely for the vision
-call — never persisted, never sent to Drive, never affecting the source-of-record
-original (which Drive already has byte-for-byte, per Phase 6).
+`src/lib/intake/imagePrep.ts` — `prepareAnalysisImage()`. Builds a resized,
+upright *analysis derivative* (longest edge 1024px, JPEG quality 82) purely for
+the vision call — never persisted, never sent to Drive, never affecting the
+source-of-record original (which Drive already has byte-for-byte, per Phase 6).
 
-**Real, tested finding**: this deployment's `sharp`/libvips build reports
-`heif` input support as `{ fileSuffix: ['.avif'] }` only — it cannot decode real
-iPhone-style HEIC photos (full HEIC decode needs a separately-licensed libheif
-build this deployment doesn't have). `prepareAnalysisImage()` therefore skips
-resizing for `image/heic`/`image/heif` specifically and passes the original bytes
+**Real orientation bug found and fixed (real-cover correction pass §1/§2,
+`docs/DECISIONS.md`)**: this function used to resize with no orientation
+handling at all. `sharp` only applies EXIF-based auto-orientation when
+`.rotate()` (no arguments) is explicitly called; without it, the derivative kept
+the raw, as-captured sensor pixel order, while `sharp`'s own default metadata-
+stripping-on-output discarded the EXIF orientation tag too — so Gemini had no way
+to know a correction was needed, even though the browser's own `<img>` preview
+(EXIF-aware by default) showed the photo correctly upright the whole time. Fixed:
+`.rotate()` is now always called before resizing, for every format `sharp` can
+decode. A real, further finding from the actual failed photo that motivated this
+fix: EXIF-based auto-orientation, while necessary and correct, was not alone
+sufficient for that specific file — its own EXIF tag did not match its true
+required correction (confirmed by testing all four fixed angles against the raw
+pixels). This is why an additional, optional, teacher-chosen manual rotation
+(`manualRotationDegrees`, applied on top of EXIF auto-orientation, persisted in
+`IntakeDraft.analysisRotationDegrees`) and the more robust vision prompt (§2)
+both exist as a real, exercised safety net — not redundant decoration. See
+`docs/DECISIONS.md` for the full real before/after evidence.
+
+**Real, tested finding (unchanged)**: this deployment's `sharp`/libvips build
+reports `heif` input support as `{ fileSuffix: ['.avif'] }` only — it cannot
+decode real iPhone-style HEIC photos (full HEIC decode needs a
+separately-licensed libheif build this deployment doesn't have).
+`prepareAnalysisImage()` therefore skips resizing (and orientation normalization,
+including any manual rotation — it cannot be applied to bytes this build can't
+decode) for `image/heic`/`image/heif` specifically and passes the original bytes
 through unchanged, relying on Gemini's own documented HEIC/HEIF input support
-rather than a fragile custom conversion path. JPEG/PNG/WebP all resize
-successfully through the same tested code path. If `sharp` fails on any format for
-any other reason (corrupt bytes, an unexpected quirk), the function falls back to
-the original bytes rather than failing the whole intake over an optimization.
+plus the more robust vision prompt (§2) rather than a fragile custom conversion
+path. JPEG/PNG/WebP all resize (and now auto-orient) successfully through the
+same tested code path. If `sharp` fails on any format for any other reason
+(corrupt bytes, an unexpected quirk), the function falls back to the original
+bytes rather than failing the whole intake over an optimization.
 
 Client-side capture (`src/components/add/CoverCapture.tsx`) accepts
 `image/jpeg,image/png,image/webp,image/heic,image/heif`, max 25 MiB, with
 `capture="environment"` for a mobile camera hint — a standard accessible file
-input, not a custom camera UI.
+input, not a custom camera UI. A small manual rotate control
+(`RotatablePreview`, real-cover correction pass §6) lets the teacher apply a
+90°-increment correction to the preview before upload — never a photo editor,
+just enough to fix an obviously sideways photo. The chosen rotation reaches the
+analysis derivative (for decodable formats) via `identifyCoverAction`'s
+`manualRotationDegrees` parameter.
+
+**Identification failure no longer continues silently (real-cover correction
+pass §5, `docs/DECISIONS.md`)**: `AddBookFlow.tsx` previously ignored
+`identifyCoverAction`'s result and always proceeded into metadata lookup,
+producing an almost-empty confirmation screen whenever identification failed or
+found no usable title. It now checks a real `hasUsableIdentification` flag and,
+when identification didn't produce enough to make metadata lookup meaningful,
+shows an explicit "We couldn't read this cover clearly." recovery screen —
+never Gemini/provider technical language — offering to retry the same
+already-uploaded photo, rotate and retry, choose a different photo, or
+explicitly continue with a manual (Quick Edit) fallback.
 
 ## 6. Google Drive integration (source storage)
 
@@ -325,6 +374,75 @@ rather than just observing "still rate-limited after N minutes" — this
 finally gives a concrete, documented explanation for the rate-limiting
 pattern observed across every validation session so far, recorded in
 `docs/COSTS.md`.
+
+## 10d. Real teacher-reported failure: reproduction, fix, and before/after (real-cover correction pass, 2026-09-21)
+
+A real teacher used the actual Add-a-Book UI and photographed a real book,
+uploaded successfully, but got no useful title/author and an almost-empty
+confirmation screen. Reproduced from the real, unmodified ingestion record
+(`ingestion_items.id = c4fd6bfc-d915-48ef-b215-7af27d340bbc`) rather than asking
+for the photo again — the real Drive source (`IMG_2777.jpeg`, 4032x3024, real
+EXIF `Orientation` = 3) was downloaded read-only through the existing
+`CoverStorageProvider` and never modified.
+
+**BEFORE (the real bug)**:
+- Orientation: real EXIF `Orientation` tag = 3; `prepareAnalysisImage()` applied
+  no orientation handling at all (no `.rotate()` call anywhere in the pipeline).
+- The resulting analysis derivative was genuinely sideways — visually confirmed
+  by extracting it and inspecting it directly (title running vertically along an
+  edge instead of horizontally).
+- Identify result: with the real, current (already-quota-exhausted-that-day)
+  Gemini free tier unavailable for a live re-run, the ORIGINAL real failure
+  (from the teacher's own session) is the direct evidence: `coverEvidence` was
+  never populated (`null` in the stored draft) — Gemini could not extract
+  anything useful from the sideways derivative.
+- Extracted title / author: none (`proposedBookValues: null` in the real stored
+  draft).
+- Metadata candidates: 0 (`book_identity_candidates` had zero rows for this
+  item) — metadata lookup had no title to search with, so it correctly found
+  nothing; the empty confirmation screen was a direct, honest downstream
+  consequence of the orientation bug, not a separate defect.
+- Why metadata lookup had no signal: `lookupMetadataAction` only ever searches
+  by title or ISBN; with `coverEvidence` entirely absent, there was nothing to
+  search with at all.
+
+**AFTER (the fix, verified against this exact real photo)**:
+- Normalized analysis orientation: `prepareAnalysisImage()` (with the `.rotate()`
+  fix) applied EXIF auto-orientation to the real photo — but a real, further
+  finding is that doing so was **not enough on its own**: the file's own EXIF
+  tag (3, "180°") did not match its true required correction. Testing all four
+  fixed angles against the raw pixels directly confirmed the true correction was
+  90° from raw, not 180°. Applying the fixed `prepareAnalysisImage()` with no
+  manual override still produced a (differently) sideways derivative — visually
+  confirmed. Applying it again with a manual `+270°` correction (three rotate
+  taps, on top of the EXIF auto-orientation already applied) produced a fully
+  upright derivative — visually confirmed, dimensions/content correct.
+- Gemini result: **not re-obtained live this pass** — a bounded real attempt
+  (immediate + 2 retries with real ~20s gaps) hit the real
+  `GenerateRequestsPerDayPerProjectPerModel-FreeTier` daily quota (`quotaValue:
+  20`), already exhausted for the day from this same session's earlier real
+  calls. Reported honestly rather than claimed — no live AI success is claimed
+  for this exact retest.
+- Extracted title / author: not re-obtained (blocked by the same quota).
+- Metadata provider / reconciliation / category result: not re-obtained (all
+  downstream of the blocked Gemini call).
+- The real ingestion record and Drive file were left completely untouched
+  (no writes, no trashing) so a genuine live retry remains possible once
+  Gemini's daily quota resets.
+
+**What this validation DOES prove, honestly**: the root cause (missing
+orientation handling) is real, fixed, and unit/E2E-tested (`tests/unit/intake/imagePrep.test.ts`,
+`tests/e2e/addBook.spec.ts`); the fix's mechanics (auto-orientation, chained
+manual correction, the manual rotation actually reaching the analysis bytes) are
+proven correct against the exact real photo that failed, technically and
+visually; the failure-recovery UX (no more silent, empty-looking continuation)
+is real and E2E-tested, and was also captured live against the actual running
+dev server while Gemini was genuinely, currently rate-limited — see
+`docs/screenshots/phase-7-realcover/` (local only, gitignored) for the real
+screenshots of the rotate control and the resulting recovery screen, both
+captured at 390px and 320px. What remains unproven is Gemini's own text
+extraction from the corrected, now-upright derivative for this exact photo —
+blocked by a real, bounded, honestly-reported quota limit, not a code defect.
 
 ## 11. What's out of scope for Phase 7
 

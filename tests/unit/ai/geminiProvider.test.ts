@@ -99,6 +99,21 @@ describe("ai/geminiProvider — GeminiBookIntelligenceProvider", () => {
     expect(generateContentMock.mock.calls[0][0].model).toBe("gemini-3.8-flash");
   });
 
+  it("instructs the model to handle rotation, skew, and background clutter before reading cover text (real-cover correction pass §4)", async () => {
+    generateContentMock.mockResolvedValue({ text: validCoverIdentificationJson() });
+    const provider = new GeminiBookIntelligenceProvider("fake-key");
+    await provider.identifyCover({ imageBytes: Buffer.from("x"), mimeType: "image/jpeg" });
+    const instruction = generateContentMock.mock.calls[0][0].config.systemInstruction as string;
+    expect(instruction).toContain("90, 180, or 270 degrees");
+    expect(instruction).toMatch(/skew|angle/i);
+    expect(instruction).toMatch(/front-cover rectangle/i);
+    expect(instruction).toMatch(/distinguishing it from any other books/i);
+    // The evidence boundary must survive this addition unchanged — still no
+    // license to invent hidden bibliographic fields.
+    expect(instruction).toMatch(/Do NOT invent or guess/);
+    expect(instruction).toContain("an ISBN that is not visibly printed on the cover");
+  });
+
   it("throws invalid_response when Gemini's response is not valid JSON", async () => {
     generateContentMock.mockResolvedValue({ text: "not json at all" });
     const provider = new GeminiBookIntelligenceProvider("fake-key");

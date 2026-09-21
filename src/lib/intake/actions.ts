@@ -19,7 +19,7 @@ import { findDuplicateCandidates, type DuplicateCandidate } from "./duplicateMat
 import { validateCategorySuggestion } from "./categorySuggestion";
 import { selectTrustworthyDisplayCoverUrl } from "./displayCover";
 import { persistIdentityCandidates } from "./identityCandidates";
-import { readIntakeDraft, parseIntakeDraft, type IntakeDraft, type TeacherEdits } from "./draft";
+import { readIntakeDraft, parseIntakeDraft, type IntakeDraft, type TeacherEdits, type AnalysisRotationDegrees } from "./draft";
 import { isE2EFakeProvidersEnabled, buildFakeCoverEvidence, buildFakeMetadataCandidates } from "./e2eFixtures";
 import { saveNewBook, addAnotherCopy, saveForReview, type ProvenanceInput } from "./persistence";
 import { isLanguageCode } from "@/lib/catalog/languages";
@@ -80,13 +80,34 @@ function failure(category: string, message: string): ActionFailure {
 
 export type IdentifyCoverResult =
   | ActionFailure
-  | { ok: true; visibleTitle: string | null; visibleAuthors: string[] | null; identityConfidenceLevel: "high" | "medium" | "low" };
+  | {
+      ok: true;
+      visibleTitle: string | null;
+      visibleAuthors: string[] | null;
+      identityConfidenceLevel: "high" | "medium" | "low";
+      /** `false` when identification produced no usable title — real-cover
+       * correction pass §5. The caller must not silently continue into metadata
+       * lookup/enrichment in this case; it should show the teacher a recovery
+       * choice instead (retry, rotate, or explicitly continue with a manual
+       * fallback). A vision-provider call that succeeds but genuinely can't read
+       * the cover is not a thrown error — this is how that real case surfaces. */
+      hasUsableIdentification: boolean;
+    };
 
-export async function identifyCoverAction(ingestionItemId: string): Promise<IdentifyCoverResult> {
+/**
+ * Runs (or re-runs) cover identification for an already-uploaded Drive source.
+ * `manualRotationDegrees` (default 0, real-cover correction pass §6) is the
+ * teacher's chosen correction on top of EXIF auto-orientation — persisted into the
+ * draft so a later retry of this exact action (no rotation argument needed) reuses
+ * whatever was last chosen, without the browser having to remember it across a
+ * reload.
+ */
+export async function identifyCoverAction(ingestionItemId: string, manualRotationDegrees: AnalysisRotationDegrees = 0): Promise<IdentifyCoverResult> {
   await requireStaffSession();
   assertValidId(ingestionItemId);
 
   const { draft } = await loadDraft(ingestionItemId);
+  draft.analysisRotationDegrees = manualRotationDegrees;
 
   // E2E fixture path — see e2eFixtures.ts's own doc comment. Skips both the real
   // Drive download and the real Gemini vision call; the rest of the pipeline
@@ -97,7 +118,13 @@ export async function identifyCoverAction(ingestionItemId: string): Promise<Iden
     draft.coverEvidence = evidence;
     draft.pipelineStage = "identified";
     await saveDraft(ingestionItemId, draft);
-    return { ok: true, visibleTitle: evidence.visibleTitle, visibleAuthors: evidence.visibleAuthors, identityConfidenceLevel: evidence.identityConfidenceLevel };
+    return {
+      ok: true,
+      visibleTitle: evidence.visibleTitle,
+      visibleAuthors: evidence.visibleAuthors,
+      identityConfidenceLevel: evidence.identityConfidenceLevel,
+      hasUsableIdentification: Boolean(evidence.visibleTitle?.trim()),
+    };
   }
 
   const driveProvider = getConfiguredCoverStorageProvider();
@@ -112,12 +139,13 @@ export async function identifyCoverAction(ingestionItemId: string): Promise<Iden
     return failure(categoryOf(error), "Couldn't read the uploaded photo back. Please try again.");
   }
 
-  const analysisImage = await prepareAnalysisImage(downloaded.bytes, draft.driveSource.mimeType);
+  const analysisImage = await prepareAnalysisImage(downloaded.bytes, draft.driveSource.mimeType, manualRotationDegrees);
 
   let evidence;
   try {
     evidence = await aiProvider.identifyCover({ imageBytes: analysisImage.bytes, mimeType: analysisImage.mimeType });
   } catch {
+    await saveDraft(ingestionItemId, draft); // still persist the chosen rotation for the next retry
     return failure("vision_failed", "Couldn't automatically identify this book. You can still continue and enter details yourself.");
   }
 
@@ -125,7 +153,13 @@ export async function identifyCoverAction(ingestionItemId: string): Promise<Iden
   draft.pipelineStage = "identified";
   await saveDraft(ingestionItemId, draft);
 
-  return { ok: true, visibleTitle: evidence.visibleTitle, visibleAuthors: evidence.visibleAuthors, identityConfidenceLevel: evidence.identityConfidenceLevel };
+  return {
+    ok: true,
+    visibleTitle: evidence.visibleTitle,
+    visibleAuthors: evidence.visibleAuthors,
+    identityConfidenceLevel: evidence.identityConfidenceLevel,
+    hasUsableIdentification: Boolean(evidence.visibleTitle?.trim()),
+  };
 }
 
 // ---------------------------------------------------------------------------

@@ -2,7 +2,6 @@
 
 import { useId, useRef, useState } from "react";
 import { Button } from "@/components/ui/Button";
-import { cn } from "@/lib/utils/cn";
 
 /** Mirrors `src/lib/googleDrive/validation.ts`'s server-side contract — duplicated
  * as plain string/number constants (not imported) because that module lives under
@@ -14,9 +13,19 @@ import { cn } from "@/lib/utils/cn";
 const ALLOWED_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"]);
 const MAX_SIZE_BYTES = 25 * 1024 * 1024;
 
+export type RotationDegrees = 0 | 90 | 180 | 270;
+
 export interface SelectedCover {
   file: File;
   previewUrl: string;
+  /** The teacher's chosen correction on top of whatever the browser preview already
+   * shows (real-cover correction pass §6) — 0 unless they tapped Rotate. Applied to
+   * the AI analysis derivative only; the original file/Drive upload is unaffected. */
+  rotationDegrees: RotationDegrees;
+}
+
+export function nextRotation(current: RotationDegrees): RotationDegrees {
+  return ((current + 90) % 360) as RotationDegrees;
 }
 
 interface CoverCaptureProps {
@@ -26,6 +35,50 @@ interface CoverCaptureProps {
 function formatFileSize(bytes: number): string {
   const mb = bytes / (1024 * 1024);
   return mb >= 1 ? `${mb.toFixed(1)} MB` : `${Math.round(bytes / 1024)} KB`;
+}
+
+/**
+ * A small, deliberately simple rotate affordance (real-cover correction pass §6) —
+ * not a photo editor. A square preview box means any 90-degree increment fits
+ * without clipping (the rotated image's bounding box never exceeds a square it was
+ * already contained within), so no separate portrait/landscape box logic is needed.
+ * Shared between the initial cover-selection preview and the post-identification
+ * recovery UI (`AddBookFlow`'s "we couldn't read this cover clearly" state), since
+ * both need the same "let the teacher fix an obviously sideways photo" affordance.
+ */
+export function RotatablePreview({
+  previewUrl,
+  alt,
+  rotationDegrees,
+  onRotate,
+}: {
+  previewUrl: string;
+  alt: string;
+  rotationDegrees: RotationDegrees;
+  onRotate: () => void;
+}) {
+  return (
+    <div className="flex flex-col items-center gap-2">
+      <div className="flex h-40 w-40 items-center justify-center overflow-hidden rounded-md border border-border bg-surface-subtle sm:h-48 sm:w-48">
+        <img
+          src={previewUrl}
+          alt={alt}
+          style={{ transform: `rotate(${rotationDegrees}deg)` }}
+          className="max-h-full max-w-full object-contain"
+        />
+      </div>
+      <button
+        type="button"
+        onClick={onRotate}
+        className="inline-flex items-center gap-1 text-sm font-medium text-brand-primary underline underline-offset-4 hover:text-brand-secondary"
+      >
+        <svg viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4" aria-hidden="true">
+          <path d="M10 4a6 6 0 1 0 5.917 5H14.9a5 5 0 1 1-1.348-4.243L11 7h5V2l-2.028 2.028A5.98 5.98 0 0 0 10 4Z" />
+        </svg>
+        Rotate 90°
+      </button>
+    </div>
+  );
 }
 
 /**
@@ -60,7 +113,14 @@ export function CoverCapture({ onConfirm }: CoverCaptureProps) {
 
     setError(null);
     if (selected) URL.revokeObjectURL(selected.previewUrl);
-    setSelected({ file, previewUrl: URL.createObjectURL(file) });
+    // A freshly selected file always starts at 0 — any rotation choice belongs to
+    // the specific photo the teacher is looking at, never carried over from a
+    // previous selection.
+    setSelected({ file, previewUrl: URL.createObjectURL(file), rotationDegrees: 0 });
+  }
+
+  function handleRotate() {
+    setSelected((prev) => (prev ? { ...prev, rotationDegrees: nextRotation(prev.rotationDegrees) } : prev));
   }
 
   function handleChangePhoto() {
@@ -108,16 +168,20 @@ export function CoverCapture({ onConfirm }: CoverCaptureProps) {
       {selected && (
         <div className="flex flex-col gap-4">
           <div className="flex items-start gap-4">
-            <img
-              src={selected.previewUrl}
+            <RotatablePreview
+              previewUrl={selected.previewUrl}
               alt="Selected book cover preview"
-              className={cn("h-40 w-28 shrink-0 rounded-md border border-border object-cover sm:h-48 sm:w-32")}
+              rotationDegrees={selected.rotationDegrees}
+              onRotate={handleRotate}
             />
             <div className="flex flex-col gap-1 pt-1">
               <p className="text-sm font-medium text-text-primary">Photo selected</p>
               <p className="text-xs text-text-muted">
                 {selected.file.name} · {formatFileSize(selected.file.size)}
               </p>
+              {selected.rotationDegrees !== 0 && (
+                <p className="text-xs text-text-muted">If the photo looks sideways above, tap Rotate until it looks upright.</p>
+              )}
               <button
                 type="button"
                 onClick={handleChangePhoto}
