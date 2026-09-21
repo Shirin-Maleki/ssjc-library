@@ -1,5 +1,6 @@
 import type { Page } from "@playwright/test";
 import { expect } from "@playwright/test";
+import zlib from "node:zlib";
 import { E2E_STAFF_PASSWORD } from "../../playwright.config";
 
 export async function loginAsStaff(page: Page) {
@@ -31,4 +32,52 @@ export function uniqueName(base: string): string {
  */
 export async function openCreateListDialog(page: Page) {
   await page.getByRole("button", { name: /^(New list|Create a Reading List)$/ }).click();
+}
+
+function pngChunk(type: string, data: Buffer): Buffer {
+  const typeBuffer = Buffer.from(type, "ascii");
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(data.length, 0);
+  const crcInput = Buffer.concat([typeBuffer, data]);
+  const crc = Buffer.alloc(4);
+  crc.writeInt32BE(zlibCrc32(crcInput), 0);
+  return Buffer.concat([length, typeBuffer, data, crc]);
+}
+
+// A minimal, dependency-free CRC-32 (PNG's own checksum algorithm) — avoids
+// pulling in a real image-encoding library just to produce one throwaway pixel.
+function zlibCrc32(buffer: Buffer): number {
+  let crc = ~0;
+  for (const byte of buffer) {
+    crc ^= byte;
+    for (let i = 0; i < 8; i++) {
+      crc = crc & 1 ? (crc >>> 1) ^ 0xedb88320 : crc >>> 1;
+    }
+  }
+  return ~crc;
+}
+
+/**
+ * A tiny, synthetic, single-pixel PNG built by hand at test time — never a real
+ * book cover, never checked into the repo as a binary asset, no copyright/privacy
+ * concerns whatsoever (§46/§49 of the Phase 7 brief). Same technique as
+ * `scripts/google/smokeOrchestration.ts`'s own `generateTinySyntheticPng`, kept as
+ * a separate small copy here since E2E tests and the Drive smoke test are
+ * independent concerns with no reason to share a helper module.
+ */
+export function tinySyntheticPng(): Buffer {
+  const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const ihdrData = Buffer.alloc(13);
+  ihdrData.writeUInt32BE(1, 0);
+  ihdrData.writeUInt32BE(1, 4);
+  ihdrData[8] = 8;
+  ihdrData[9] = 2;
+  ihdrData[10] = 0;
+  ihdrData[11] = 0;
+  ihdrData[12] = 0;
+  const ihdr = pngChunk("IHDR", ihdrData);
+  const rawScanline = Buffer.from([0, 200, 180, 150]);
+  const idat = pngChunk("IDAT", zlib.deflateSync(rawScanline));
+  const iend = pngChunk("IEND", Buffer.alloc(0));
+  return Buffer.concat([signature, ihdr, idat, iend]);
 }

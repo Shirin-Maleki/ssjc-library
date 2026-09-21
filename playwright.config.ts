@@ -73,6 +73,27 @@ export default defineConfig({
       // Postgres — `globalSetup` above migrates and seeds this exact database once
       // before the run.
       DATABASE_URL: E2E_DATABASE_URL,
+      // Phase 7 (§49 of the phase brief: "never live APIs in ordinary CI") — see
+      // src/lib/intake/e2eFixtures.ts's own doc comment for the full design. Setting
+      // this flag makes the upload route and cover-identification action skip Drive
+      // and Gemini entirely; getConfiguredMetadataProviders() short-circuits to an
+      // empty list. The four Drive variables below are harmless non-blank
+      // placeholders — real enough to satisfy isDriveConfigured()'s presence check
+      // (so /add renders the real flow instead of its "not configured" placeholder),
+      // but never used for a real network call, since the fake-mode branches return
+      // before any provider is constructed. GEMINI_API_KEY/GOOGLE_BOOKS_API_KEY are
+      // explicitly blanked — not merely omitted — because this machine's own
+      // .env.local (a normal thing for local development to have) would otherwise
+      // be picked up by Next.js's own env loading and leak a real key into the
+      // enrichment step, which does NOT check this flag and would otherwise make a
+      // real Gemini call.
+      E2E_FAKE_INTAKE_PROVIDERS: "true",
+      GOOGLE_OAUTH_CLIENT_ID: "e2e-fake-client-id",
+      GOOGLE_OAUTH_CLIENT_SECRET: "e2e-fake-client-secret",
+      GOOGLE_OAUTH_REFRESH_TOKEN: "e2e-fake-refresh-token",
+      GOOGLE_DRIVE_ROOT_FOLDER_ID: "e2e-fake-root-folder-id",
+      GEMINI_API_KEY: "",
+      GOOGLE_BOOKS_API_KEY: "",
     },
   },
 });

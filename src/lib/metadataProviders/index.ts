@@ -2,6 +2,7 @@ import "server-only";
 import { GoogleBooksMetadataProvider } from "./googleBooksProvider";
 import { OpenLibraryMetadataProvider } from "./openLibraryProvider";
 import type { BookMetadataProvider } from "./provider";
+import { isE2EFakeProvidersEnabled } from "@/lib/e2eTestFlags";
 
 export type {
   BookMetadataProvider,
@@ -23,6 +24,11 @@ export { MetadataProviderError } from "./provider";
  * one.
  */
 export function getConfiguredMetadataProviders(): BookMetadataProvider[] {
+  // E2E fixture path (§49 of the phase brief: "never live APIs in ordinary CI") —
+  // see src/lib/intake/e2eFixtures.ts's own doc comment. Open Library needs no key
+  // and would otherwise always be included below.
+  if (isE2EFakeProvidersEnabled()) return [];
+
   const providers: BookMetadataProvider[] = [];
   const googleBooksApiKey = process.env.GOOGLE_BOOKS_API_KEY;
   if (googleBooksApiKey) {

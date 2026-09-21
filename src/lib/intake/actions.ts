@@ -17,6 +17,7 @@ import { lookupMetadataCandidates } from "./metadataLookup";
 import { findDuplicateCandidates, type DuplicateCandidate } from "./duplicateMatcher";
 import { validateCategorySuggestion } from "./categorySuggestion";
 import { readIntakeDraft, parseIntakeDraft, type IntakeDraft, type TeacherEdits } from "./draft";
+import { isE2EFakeProvidersEnabled, buildFakeCoverEvidence } from "./e2eFixtures";
 import { saveNewBook, addAnotherCopy, saveForReview, type ProvenanceInput } from "./persistence";
 import { isLanguageCode } from "@/lib/catalog/languages";
 import type { LanguageCode } from "@/lib/catalog/types";
@@ -82,12 +83,24 @@ export async function identifyCoverAction(ingestionItemId: string): Promise<Iden
   await requireStaffSession();
   assertValidId(ingestionItemId);
 
+  const { draft } = await loadDraft(ingestionItemId);
+
+  // E2E fixture path — see e2eFixtures.ts's own doc comment. Skips both the real
+  // Drive download and the real Gemini vision call; the rest of the pipeline
+  // (metadata lookup, reconciliation, real duplicate-check against the real
+  // seeded catalog, save) runs unmodified against this fixture evidence.
+  if (isE2EFakeProvidersEnabled()) {
+    const evidence = buildFakeCoverEvidence(draft.driveSource.filename);
+    draft.coverEvidence = evidence;
+    draft.pipelineStage = "identified";
+    await saveDraft(ingestionItemId, draft);
+    return { ok: true, visibleTitle: evidence.visibleTitle, visibleAuthors: evidence.visibleAuthors, identityConfidenceLevel: evidence.identityConfidenceLevel };
+  }
+
   const driveProvider = getConfiguredCoverStorageProvider();
   const aiProvider = getConfiguredBookIntelligenceProvider();
   if (!driveProvider) return failure("configuration_missing", "Photo storage isn't configured.");
   if (!aiProvider) return failure("configuration_missing", "Book identification isn't configured.");
-
-  const { draft } = await loadDraft(ingestionItemId);
 
   let downloaded;
   try {
@@ -331,9 +344,18 @@ export async function confirmSaveAction(input: ConfirmSaveInput): Promise<Confir
 
   const enrichment = draft.enrichmentSuggestion;
   const provenance: ProvenanceInput[] = [];
-  if (draft.coverEvidence?.visibleTitle) provenance.push({ fieldKey: "title", sourceType: "cover_visible", confidenceLevel: draft.coverEvidence.identityConfidenceLevel });
+  // Mutually exclusive per field — `book_field_provenance` enforces at most one
+  // *current* row per (book, field) (its own partial unique index), so a field a
+  // teacher touched in Quick Edit must replace its cover/provider-sourced
+  // provenance entry, never add a second row alongside it (a real, reproducible
+  // unique-constraint failure caught by this exact scenario during Phase 7 E2E
+  // testing, not a hypothetical).
+  if (input.edits?.title) {
+    provenance.push({ fieldKey: "title", sourceType: "human_corrected" });
+  } else if (draft.coverEvidence?.visibleTitle) {
+    provenance.push({ fieldKey: "title", sourceType: "cover_visible", confidenceLevel: draft.coverEvidence.identityConfidenceLevel });
+  }
   if (draft.selectedCandidateProviderIdentifier) provenance.push({ fieldKey: "isbn", sourceType: "external_provider" });
-  if (input.edits?.title) provenance.push({ fieldKey: "title", sourceType: "human_corrected" });
   if (input.edits?.physicalCategorySlug) provenance.push({ fieldKey: "physical_category", sourceType: "human_verified" });
   else if (draft.categorySuggestion) provenance.push({ fieldKey: "physical_category", sourceType: "ai_inferred", confidenceLevel: draft.categorySuggestion.confidence ?? undefined });
 

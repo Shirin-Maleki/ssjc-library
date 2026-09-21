@@ -144,9 +144,14 @@ export function AddBookFlow({ activeCategories }: AddBookFlowProps) {
   }
 
   async function handleConfirmSave(edits: TeacherEdits) {
-    if (!ingestionItemId || !categorySlug) return;
+    if (!ingestionItemId) return;
     setStage((current) => (current.name === "confirm" ? { ...current } : current));
-    const result = await confirmSaveAction({ ingestionItemId, categorySlug, edits });
+    // categorySlug may still be null here (no category was AI-suggested, e.g. when
+    // no vision/enrichment provider is configured) — passed through as-is rather
+    // than silently no-op'ing, so the server's own minimum-data check
+    // (assertMinimumData, §32) can return a real, visible error unless the
+    // teacher's Quick Edit selection (edits.physicalCategorySlug) supplies one.
+    const result = await confirmSaveAction({ ingestionItemId, categorySlug: categorySlug ?? "", edits });
     if (!result.ok) {
       setStage({ name: "error", message: result.message });
       return;

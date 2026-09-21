@@ -10,8 +10,36 @@ import {
   MAX_SOURCE_COVER_SIZE_BYTES,
 } from "@/lib/googleDrive";
 import { createInitialDraft } from "@/lib/intake/draft";
+import { isE2EFakeProvidersEnabled } from "@/lib/intake/e2eFixtures";
 
 export const runtime = "nodejs";
+
+interface ConfirmedUpload {
+  fileId: string;
+  filename: string;
+  mimeType: string;
+  sizeBytes: number;
+  checksum: string | null;
+}
+
+async function createIngestionRecord(confirmed: ConfirmedUpload): Promise<string> {
+  const [job] = await db
+    .insert(ingestionJobs)
+    .values({ jobType: "single_add", source: "teacher_capture", status: "running", totalItems: 1 })
+    .returning({ id: ingestionJobs.id });
+  const draft = createInitialDraft({
+    fileId: confirmed.fileId,
+    filename: confirmed.filename,
+    mimeType: confirmed.mimeType,
+    sizeBytes: confirmed.sizeBytes,
+    checksum: confirmed.checksum,
+  });
+  const [item] = await db
+    .insert(ingestionItems)
+    .values({ jobId: job.id, driveFileId: confirmed.fileId, contentHash: confirmed.checksum, status: "processing", intakeDraft: draft })
+    .returning({ id: ingestionItems.id });
+  return item.id;
+}
 
 /**
  * Server-mediated cover upload — the corrected Phase 7 upload architecture.
@@ -73,6 +101,21 @@ export async function POST(request: Request): Promise<Response> {
     return NextResponse.json({ ok: false, category: "invalid_file", message: "The uploaded photo was empty or too large." }, { status: 400 });
   }
 
+  // E2E fixture path — see e2eFixtures.ts's own doc comment. Skips Drive entirely
+  // (no provider call, no network PUT); everything downstream (ingestion row
+  // creation, the rest of the intake pipeline) runs exactly as it does for a real
+  // upload.
+  if (isE2EFakeProvidersEnabled()) {
+    const ingestionItemId = await createIngestionRecord({
+      fileId: `e2e-fake-drive-file-${crypto.randomUUID()}`,
+      filename,
+      mimeType,
+      sizeBytes: bytes.length,
+      checksum: null,
+    });
+    return NextResponse.json({ ok: true, ingestionItemId });
+  }
+
   const provider = getConfiguredCoverStorageProvider();
   if (!provider) {
     return NextResponse.json(
@@ -111,23 +154,15 @@ export async function POST(request: Request): Promise<Response> {
       expectedSizeBytes: bytes.length,
     });
 
-    const [job] = await db
-      .insert(ingestionJobs)
-      .values({ jobType: "single_add", source: "teacher_capture", status: "running", totalItems: 1 })
-      .returning({ id: ingestionJobs.id });
-    const draft = createInitialDraft({
+    const ingestionItemId = await createIngestionRecord({
       fileId: metadata.id,
       filename: metadata.name,
       mimeType: metadata.mimeType,
       sizeBytes: metadata.size ?? bytes.length,
       checksum: metadata.md5Checksum ?? null,
     });
-    const [item] = await db
-      .insert(ingestionItems)
-      .values({ jobId: job.id, driveFileId: metadata.id, contentHash: metadata.md5Checksum, status: "processing", intakeDraft: draft })
-      .returning({ id: ingestionItems.id });
 
-    return NextResponse.json({ ok: true, ingestionItemId: item.id });
+    return NextResponse.json({ ok: true, ingestionItemId });
   } catch (error) {
     const category = error instanceof DriveProviderError ? error.category : "unexpected_provider_failure";
     return NextResponse.json({ ok: false, category, message: "Couldn't upload the photo. Please try again." }, { status: 502 });
