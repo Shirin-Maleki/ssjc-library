@@ -46,6 +46,14 @@ import type { AnalysisRotationDegrees } from "./draft";
  * support plus its now-more-robust orientation-handling instructions. jpeg/png/webp
  * all resize (and now auto-orient) successfully through the same real, tested code
  * path (`docs/DECISIONS.md`).
+ *
+ * **A manual rotation that can't be physically applied is never silently
+ * discarded (real-cover correction pass, final round, §1)**: when a teacher
+ * rotates a HEIC/HEIF preview, `manualRotationApplied` is honestly `false` — but
+ * `resolveRotationHint()` (below) turns that into an explicit structured hint
+ * passed to the vision provider instead (`CoverIdentificationInput.teacherRotationHintDegrees`),
+ * so the teacher's signal still reaches Gemini even though the pixels themselves
+ * couldn't be rotated.
  */
 
 /** Longest-edge target for the analysis derivative — comfortably enough resolution
@@ -115,4 +123,26 @@ export async function prepareAnalysisImage(
   } catch {
     return { bytes: sourceBytes, mimeType: sourceMimeType, wasResized: false, manualRotationApplied: false };
   }
+}
+
+/**
+ * Makes the teacher's manual rotation meaningful even when it couldn't be
+ * physically applied (real-cover correction pass §1, final round) — real HEIC/HEIF
+ * sources, or the rare resize-failure passthrough. Rather than silently discarding
+ * the teacher's rotation choice (misleading: the control visibly moved, but Gemini
+ * received unrotated bytes with no way to know), this surfaces it as an explicit
+ * structured hint the vision provider can act on instead.
+ *
+ * Returns `undefined` whenever no hint is needed: rotation was physically applied
+ * (`manualRotationApplied: true` — the pixels themselves already show the
+ * correction, a hint would be redundant), or the teacher never requested a
+ * rotation at all (`manualRotationDegrees === 0`).
+ */
+export function resolveRotationHint(
+  analysisImage: Pick<AnalysisImage, "manualRotationApplied">,
+  manualRotationDegrees: AnalysisRotationDegrees
+): AnalysisRotationDegrees | undefined {
+  if (analysisImage.manualRotationApplied) return undefined;
+  if (manualRotationDegrees === 0) return undefined;
+  return manualRotationDegrees;
 }

@@ -22,6 +22,11 @@ export { isE2EFakeProvidersEnabled };
  * "unconfigured" path of their own — the Drive upload route
  * (`src/app/api/intake/cover/route.ts`) and cover identification
  * (`identifyCoverAction` in `actions.ts`) — branch directly on this flag instead.
+ * One filename-keyed fixture scenario lives directly in `identifyCoverAction`
+ * rather than as a `buildFakeCoverEvidence`/`buildFakeMetadataCandidates` branch
+ * here — a filename containing "serviceunavailable" makes it return a real
+ * `identification_unavailable` failure result (real-cover correction pass, final
+ * round §2), since there is no real provider call to make throw in fake mode.
  *
  * The vision fixture is keyed off the uploaded filename (the one thing an E2E test
  * controls without any new protocol): a filename containing "gruffalo" produces

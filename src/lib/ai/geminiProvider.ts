@@ -71,7 +71,7 @@ This is a REAL PHONE PHOTO, not a clean scan. Before reading any text, account f
 
 Before extracting any text, work through these steps:
 1. Identify the likely front-cover rectangle in the image — the single book cover that is the actual subject of the photo, distinguishing it from any other books, spines, or objects also visible in the frame.
-2. Determine that rectangle's readable orientation (it may not match the orientation the image file arrives in).
+2. Determine that rectangle's readable orientation (it may not match the orientation the image file arrives in). If this message tells you the teacher provided an explicit rotation correction, treat that as a stronger, more reliable signal of the intended viewing orientation than whatever you would otherwise infer from the pixels alone — apply it rather than overriding it with your own guess.
 3. Mentally rotate/re-orient your reading of that rectangle as needed so the title and author text read normally, left to right.
 4. Only then read the cover's visible text (title, subtitle, author(s), illustrator(s), publisher/imprint, series, visible ISBN, visible language).
 
@@ -88,6 +88,21 @@ Do NOT invent or guess:
 - publisher metadata not visible on the cover itself
 
 The image is evidence, not permission to guess. Rotation, skew, an off-angle shot, or background clutter are normal photo conditions to work through, not reasons by themselves to report low confidence — reserve low confidence and null fields for when the cover's own text is genuinely blurry, obscured, in an unfamiliar script, or otherwise actually unclear once correctly oriented.`;
+
+/**
+ * Real-cover correction pass (final round, §1) — when the teacher's manual
+ * rotation could NOT be physically applied to the analysis bytes (real HEIC/HEIF
+ * sources this deployment can't decode/rotate), the rotation is instead surfaced
+ * here as explicit per-request text, never silently dropped. Only appended when a
+ * hint is actually present and non-zero; the base instruction text is unchanged
+ * otherwise, so this never regresses the JPEG/PNG/WebP path (which already
+ * physically rotates the bytes and needs no hint at all).
+ */
+function buildIdentifyCoverPromptText(teacherRotationHintDegrees: CoverIdentificationInput["teacherRotationHintDegrees"]): string {
+  const base = "Extract bibliographic evidence visible on this book cover.";
+  if (!teacherRotationHintDegrees) return base;
+  return `${base}\n\nExplicit teacher-provided orientation correction: the teacher visually inspected this exact photo and indicated it should be interpreted with an additional ${teacherRotationHintDegrees}-degree clockwise rotation applied before reading. This image format could not be automatically pixel-rotated, so the bytes you are given are NOT already rotated — apply this correction yourself when determining the cover's readable orientation. Treat this as a stronger, more reliable signal of the intended viewing orientation than your own automatic inference from the pixels alone.`;
+}
 
 function buildEnrichmentSystemInstruction(activeCategories: { slug: string; label: string }[]): string {
   const categoryList = activeCategories.map((c) => `- ${c.slug}: ${c.label}`).join("\n");
@@ -132,6 +147,8 @@ export class GeminiBookIntelligenceProvider implements BookVisionProvider, BookE
       throw new AIProviderError("invalid_image", "The image has no bytes to analyze.");
     }
 
+    const promptText = buildIdentifyCoverPromptText(input.teacherRotationHintDegrees);
+
     const raw = await this.callWithTimeout(
       () =>
         withGeminiRetry(() =>
@@ -141,7 +158,7 @@ export class GeminiBookIntelligenceProvider implements BookVisionProvider, BookE
               {
                 role: "user",
                 parts: [
-                  { text: "Extract bibliographic evidence visible on this book cover." },
+                  { text: promptText },
                   { inlineData: { mimeType: input.mimeType, data: input.imageBytes.toString("base64") } },
                 ],
               },

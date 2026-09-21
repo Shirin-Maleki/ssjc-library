@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import sharp from "sharp";
-import { prepareAnalysisImage } from "@/lib/intake/imagePrep";
+import { prepareAnalysisImage, resolveRotationHint } from "@/lib/intake/imagePrep";
 
 async function realJpeg(width: number, height: number): Promise<Buffer> {
   return sharp({ create: { width, height, channels: 3, background: { r: 200, g: 180, b: 150 } } }).jpeg().toBuffer();
@@ -153,5 +153,39 @@ describe("intake/imagePrep — prepareAnalysisImage", () => {
     expect(result.wasResized).toBe(false);
     expect(result.bytes).toBe(corrupt);
     expect(result.mimeType).toBe("image/jpeg");
+  });
+});
+
+describe("intake/imagePrep — resolveRotationHint (real-cover correction pass, final round §1)", () => {
+  it("HEIC + rotation 90: a hint is needed, since the rotation could not be physically applied", async () => {
+    const heicResult = await prepareAnalysisImage(Buffer.from("not-a-real-heic-file"), "image/heic", 90);
+    expect(heicResult.manualRotationApplied).toBe(false); // sanity: confirms the premise
+    expect(resolveRotationHint(heicResult, 90)).toBe(90);
+  });
+
+  it("HEIC + rotation 0: no hint — the teacher never asked for a correction", async () => {
+    const heicResult = await prepareAnalysisImage(Buffer.from("not-a-real-heic-file"), "image/heic", 0);
+    expect(resolveRotationHint(heicResult, 0)).toBeUndefined();
+  });
+
+  it("JPEG with a successful physical rotation: no hint — the pixels already show the correction, a hint would be redundant", async () => {
+    const jpegResult = await prepareAnalysisImage(await realJpeg(300, 200), "image/jpeg", 90);
+    expect(jpegResult.manualRotationApplied).toBe(true); // sanity: confirms the premise
+    expect(resolveRotationHint(jpegResult, 90)).toBeUndefined();
+  });
+
+  it("a resize failure (corrupt bytes) also needs a hint if rotation was requested, since it falls back to an unrotated passthrough exactly like HEIC", async () => {
+    const corrupt = Buffer.from([0xff, 0xd8, 0xff, 0x00, 0x01, 0x02, 0x03]);
+    const fallbackResult = await prepareAnalysisImage(corrupt, "image/jpeg", 180);
+    expect(fallbackResult.manualRotationApplied).toBe(false); // sanity: confirms the premise
+    expect(resolveRotationHint(fallbackResult, 180)).toBe(180);
+  });
+
+  it("manual rotation is never falsely reported as applied to HEIC pixel bytes, regardless of the requested angle", async () => {
+    for (const degrees of [90, 180, 270] as const) {
+      const result = await prepareAnalysisImage(Buffer.from("not-a-real-heic-file"), "image/heic", degrees);
+      expect(result.manualRotationApplied).toBe(false);
+      expect(result.bytes.toString()).toBe("not-a-real-heic-file"); // bytes genuinely untouched
+    }
   });
 });

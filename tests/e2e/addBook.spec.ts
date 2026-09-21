@@ -196,6 +196,25 @@ test.describe("Add a Book", () => {
     await expect(page.getByRole("button", { name: "Continue and enter the details myself" })).toBeVisible();
   });
 
+  test("automatic recognition unavailable: a distinct screen from 'unreadable cover', never suggesting the teacher retake/rotate the photo (real-cover correction pass, final round §2)", async ({
+    page,
+  }) => {
+    await uploadCover(page, "serviceunavailable-cover-test.png");
+
+    await expect(page.getByText("Automatic book recognition is temporarily unavailable.")).toBeVisible({ timeout: 15000 });
+    // A genuinely different screen from the "unreadable cover" case — never the
+    // same copy, and never a rotate control (rotating won't fix an unavailable
+    // service).
+    await expect(page.getByText("We couldn’t read this cover clearly.")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Rotate 90°" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Choose a different photo" })).toHaveCount(0);
+    // Never expose provider/technical language.
+    await expect(page.getByText(/gemini|429|503|quota|rate_limited|identification_unavailable/i)).toHaveCount(0);
+
+    await expect(page.getByRole("button", { name: "Retry" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Continue and enter the details myself" })).toBeVisible();
+  });
+
   test("retry after identification failure re-runs identify on the SAME already-uploaded source — no re-upload dialog, still deterministic (real-cover correction pass §8)", async ({
     page,
   }) => {

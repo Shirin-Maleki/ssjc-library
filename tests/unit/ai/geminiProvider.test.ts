@@ -114,6 +114,44 @@ describe("ai/geminiProvider — GeminiBookIntelligenceProvider", () => {
     expect(instruction).toContain("an ISBN that is not visibly printed on the cover");
   });
 
+  it("includes an explicit teacher-provided rotation hint in the prompt text when the analysis bytes couldn't be physically rotated (real-cover correction pass, final round §1)", async () => {
+    generateContentMock.mockResolvedValue({ text: validCoverIdentificationJson() });
+    const provider = new GeminiBookIntelligenceProvider("fake-key");
+    await provider.identifyCover({ imageBytes: Buffer.from("x"), mimeType: "image/heic", teacherRotationHintDegrees: 90 });
+    const call = generateContentMock.mock.calls[0][0];
+    const textPart = call.contents[0].parts.find((p: { text?: string }) => p.text).text as string;
+    expect(textPart).toMatch(/90-degree clockwise rotation/);
+    expect(textPart).toMatch(/could not be automatically pixel-rotated/i);
+    expect(textPart).toMatch(/stronger, more reliable signal/i);
+  });
+
+  it("sends no rotation-hint text when no rotation was requested (0/undefined) — never an unnecessary correction", async () => {
+    generateContentMock.mockResolvedValue({ text: validCoverIdentificationJson() });
+    const provider = new GeminiBookIntelligenceProvider("fake-key");
+    await provider.identifyCover({ imageBytes: Buffer.from("x"), mimeType: "image/heic", teacherRotationHintDegrees: 0 });
+    let call = generateContentMock.mock.calls[0][0];
+    let textPart = call.contents[0].parts.find((p: { text?: string }) => p.text).text as string;
+    expect(textPart).not.toMatch(/rotation/i);
+
+    generateContentMock.mockClear();
+    await provider.identifyCover({ imageBytes: Buffer.from("x"), mimeType: "image/jpeg" }); // omitted entirely
+    call = generateContentMock.mock.calls[0][0];
+    textPart = call.contents[0].parts.find((p: { text?: string }) => p.text).text as string;
+    expect(textPart).not.toMatch(/rotation/i);
+  });
+
+  it("a JPEG whose bytes were already physically rotated needs no hint — real behavior unchanged from the orientation fix", async () => {
+    generateContentMock.mockResolvedValue({ text: validCoverIdentificationJson() });
+    const provider = new GeminiBookIntelligenceProvider("fake-key");
+    // The caller (identifyCoverAction) never passes a hint once prepareAnalysisImage
+    // reports manualRotationApplied: true — simulated here by simply omitting it,
+    // exactly as that real call site does.
+    await provider.identifyCover({ imageBytes: Buffer.from("x"), mimeType: "image/jpeg" });
+    const call = generateContentMock.mock.calls[0][0];
+    const textPart = call.contents[0].parts.find((p: { text?: string }) => p.text).text as string;
+    expect(textPart).toBe("Extract bibliographic evidence visible on this book cover.");
+  });
+
   it("throws invalid_response when Gemini's response is not valid JSON", async () => {
     generateContentMock.mockResolvedValue({ text: "not json at all" });
     const provider = new GeminiBookIntelligenceProvider("fake-key");

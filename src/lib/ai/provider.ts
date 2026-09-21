@@ -41,6 +41,20 @@ export interface CoverIdentificationInput {
    * exists. */
   imageBytes: Buffer;
   mimeType: string;
+  /**
+   * A teacher-provided clockwise rotation correction that could NOT be physically
+   * applied to `imageBytes` (real-cover correction pass §1, final round) — set only
+   * when `manualRotationApplied` was `false` on the `AnalysisImage` these bytes came
+   * from (in practice: a real HEIC/HEIF source, which this deployment's `sharp`
+   * build cannot decode/rotate) AND the teacher chose a non-zero rotation on the
+   * preview. Never set when the bytes were already physically rotated — that case
+   * needs no hint, the pixels already show the correction.
+   *
+   * Explicit, structured teacher input, not a guess — the system instruction treats
+   * this as stronger evidence of intended viewing orientation than the model's own
+   * automatic inference from the (possibly still-sideways) pixels themselves.
+   */
+  teacherRotationHintDegrees?: 0 | 90 | 180 | 270;
 }
 
 export interface EnrichmentInput {

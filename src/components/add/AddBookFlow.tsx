@@ -28,11 +28,15 @@ interface AddBookFlowProps {
 type Stage =
   | { name: "capture" }
   | { name: "processing"; processingStage: ProcessingStage; uploadProgressPercent?: number }
-  // Real-cover correction pass §5 — shown instead of silently continuing when
-  // identification either fails outright or succeeds with no usable title. Never
-  // exposes provider/technical language; offers retry, rotate, a fresh photo, or an
-  // explicit choice to continue with a manual (Quick Edit) fallback.
-  | { name: "identify_recovery"; itemId: string; previewUrl: string }
+  // Real-cover correction pass §5, refined in the final round §2 — shown instead
+  // of silently continuing when identification either fails outright or succeeds
+  // with no usable title. Never exposes provider/technical language. Two distinct
+  // teacher-facing outcomes, since "the photo is unreadable" and "the service is
+  // temporarily unavailable" call for different actions: "unreadable" offers
+  // rotate/retry/choose-a-different-photo/manual-fallback; "unavailable" never
+  // suggests retaking or rotating the photo (the photo was never the problem) —
+  // just retry later or continue manually.
+  | { name: "identify_recovery"; kind: "unreadable" | "unavailable"; itemId: string; previewUrl: string }
   | { name: "duplicate"; isExactMatch: boolean; candidate: DuplicateCandidateViewData; capturedTitle: string }
   | { name: "confirm"; data: ConfirmBookViewData }
   | { name: "success"; title: string; categoryLabel: string; isAnotherCopy: boolean }
@@ -119,8 +123,19 @@ export function AddBookFlow({ activeCategories }: AddBookFlowProps) {
     setStage({ name: "processing", processingStage: "identifying" });
     setRotationDegrees(manualRotationDegrees);
     const result = await identifyCoverAction(itemId, manualRotationDegrees);
-    if (!result.ok || !result.hasUsableIdentification) {
-      setStage({ name: "identify_recovery", itemId, previewUrl });
+    if (!result.ok) {
+      // Real-cover correction pass, final round §2: "the photo is unreadable" and
+      // "the service is temporarily unavailable" are different teacher-facing
+      // outcomes — only the former offers/implies retaking or rotating the photo.
+      const kind = result.category === "identification_unavailable" ? "unavailable" : "unreadable";
+      setStage({ name: "identify_recovery", kind, itemId, previewUrl });
+      return;
+    }
+    if (!result.hasUsableIdentification) {
+      // The provider responded successfully but genuinely found nothing usable —
+      // this is always the "unreadable" outcome, never "unavailable" (the service
+      // demonstrably IS available; it just couldn't read this specific cover).
+      setStage({ name: "identify_recovery", kind: "unreadable", itemId, previewUrl });
       return;
     }
     await runLookup(itemId, previewUrl);
@@ -275,6 +290,35 @@ export function AddBookFlow({ activeCategories }: AddBookFlowProps) {
       return <ProcessingStatus stage={stage.processingStage} uploadProgressPercent={stage.uploadProgressPercent} />;
 
     case "identify_recovery":
+      // Real-cover correction pass, final round §2 — "the photo is unreadable" and
+      // "the service is temporarily unavailable" are deliberately different
+      // screens. Never suggest retaking/rotating the photo when the service
+      // itself is the problem.
+      if (stage.kind === "unavailable") {
+        return (
+          <div className="flex flex-col items-center gap-5 py-16 text-center">
+            <div>
+              <p className="text-lg font-semibold text-text-primary">Automatic book recognition is temporarily unavailable.</p>
+              <p className="mt-1 max-w-sm text-sm text-text-secondary">
+                This isn&rsquo;t a problem with your photo — the identification service just isn&rsquo;t responding right now. You can
+                try again, or continue and enter the details yourself. You&rsquo;re welcome to come back and try again later, too.
+              </p>
+            </div>
+            <div className="flex flex-col items-center gap-3 sm:flex-row">
+              <Button variant="primary" onClick={() => handleRetryIdentify(stage.itemId, stage.previewUrl)}>
+                Retry
+              </Button>
+              <button
+                type="button"
+                onClick={() => handleContinueWithManualFallback(stage.itemId, stage.previewUrl)}
+                className="text-sm font-medium text-brand-primary underline underline-offset-4"
+              >
+                Continue and enter the details myself
+              </button>
+            </div>
+          </div>
+        );
+      }
       return (
         <div className="flex flex-col items-center gap-5 py-8 text-center">
           <div>

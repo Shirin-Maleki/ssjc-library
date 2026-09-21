@@ -11,7 +11,8 @@ import { getConfiguredBookIntelligenceProvider } from "@/lib/ai";
 import { getConfiguredMetadataProviders } from "@/lib/metadataProviders";
 import { getConfiguredEmbeddingProvider } from "@/lib/embeddings";
 import { generateEmbeddingForBook } from "@/lib/embeddings/generation";
-import { prepareAnalysisImage } from "./imagePrep";
+import { prepareAnalysisImage, resolveRotationHint } from "./imagePrep";
+import { classifyVisionFailure } from "./visionFailureClassification";
 import { reconcileIdentity } from "./reconciliation";
 import { resolveCandidateAcceptance, wasSelected as candidateWasSelected } from "./candidateAcceptance";
 import { lookupMetadataCandidates } from "./metadataLookup";
@@ -114,6 +115,14 @@ export async function identifyCoverAction(ingestionItemId: string, manualRotatio
   // (metadata lookup, reconciliation, real duplicate-check against the real
   // seeded catalog, save) runs unmodified against this fixture evidence.
   if (isE2EFakeProvidersEnabled()) {
+    // Deterministic simulation of the "service temporarily unavailable" outcome
+    // (real-cover correction pass, final round §2) — a filename-keyed fixture,
+    // exactly like every other E2E scenario in this seam, since there is no real
+    // provider call to make throw in fake mode.
+    if (draft.driveSource.filename.toLowerCase().includes("serviceunavailable")) {
+      await saveDraft(ingestionItemId, draft);
+      return failure("identification_unavailable", "Automatic book recognition is temporarily unavailable.");
+    }
     const evidence = buildFakeCoverEvidence(draft.driveSource.filename);
     draft.coverEvidence = evidence;
     draft.pipelineStage = "identified";
@@ -140,13 +149,19 @@ export async function identifyCoverAction(ingestionItemId: string, manualRotatio
   }
 
   const analysisImage = await prepareAnalysisImage(downloaded.bytes, draft.driveSource.mimeType, manualRotationDegrees);
+  const rotationHint = resolveRotationHint(analysisImage, manualRotationDegrees);
 
   let evidence;
   try {
-    evidence = await aiProvider.identifyCover({ imageBytes: analysisImage.bytes, mimeType: analysisImage.mimeType });
-  } catch {
+    evidence = await aiProvider.identifyCover({
+      imageBytes: analysisImage.bytes,
+      mimeType: analysisImage.mimeType,
+      teacherRotationHintDegrees: rotationHint,
+    });
+  } catch (error) {
     await saveDraft(ingestionItemId, draft); // still persist the chosen rotation for the next retry
-    return failure("vision_failed", "Couldn't automatically identify this book. You can still continue and enter details yourself.");
+    const classified = classifyVisionFailure(error);
+    return failure(classified.category, classified.message);
   }
 
   draft.coverEvidence = evidence;
