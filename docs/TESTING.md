@@ -1,8 +1,8 @@
 # Testing
 
-Status: reflects what's actually built and run through Phase 6, including its real Google
-Drive validation — every command below was executed against the real project, not just
-written.
+Status: reflects what's actually built and run through Phase 7, including its real
+Google Drive/Gemini/Open Library validation — every command below was executed
+against the real project, not just written.
 
 ## Running the suite
 
@@ -65,6 +65,15 @@ against an actual Postgres instance, never a mocked Drizzle client.
 | `embeddings/geminiProvider.test.ts` (Phase 5 correction pass; extended in the real-provider validation pass) | The asymmetric retrieval input contract actually reaches the network request: `embedQuery` wraps its input as `"task: search result \| query: …"`, `embedDocuments` wraps each input as `"title: none \| text: …"`, and the two differ for identical underlying text — `fetch` is mocked, so this proves the contract is applied, never real semantic quality; plus (real-provider validation) retry-on-429 behavior: retries once then succeeds, respects a numeric `Retry-After` header, gives up after `MAX_RETRIES` and surfaces the real HTTP error, never retries a 400 |
 | `components/SearchInput.autocomplete.test.tsx` (Phase 5 correction pass) | A topic suggestion renders with the "Topic" type label and a language suggestion with the "Language" label — UI-level proof that `AutocompleteRow`'s always-declared types actually reach the screen |
 
+| `intake/reconciliation.test.ts` (Phase 7) | `resolveProviderLanguage` (ISO code passthrough, MARC mapping, display-name resolution, unrecognized→`undefined`); `reconcileIdentity` outcome thresholds (ISBN-alone high-confidence, title+author high-confidence, title-only ambiguous, no-evidence never producing a false positive, multi-candidate ranking, conflicting-language not falsely credited, publisher substring match, punctuation-normalized ISBN match) |
+| `intake/categorySuggestion.test.ts` (Phase 7) | `validateCategorySuggestion` accepts a genuinely active slug, returns `undefined` for null/invented/deactivated slugs, and the label always comes from the real active category, never the model |
+| `intake/draft.test.ts` (Phase 7) | `IntakeDraftSchema` round-trips a valid draft unchanged; `readIntakeDraft` returns `undefined` (never throws) for null/garbage/stale-schema-version input; `parseIntakeDraft` throws on a genuinely invalid draft and strips any `teacherEdits` field outside the limited correction surface |
+| `intake/imagePrep.test.ts` (Phase 7) | Real `sharp` resize of a real oversized JPEG/PNG (aspect ratio preserved, never upscaled), real HEIC/HEIF passthrough (the documented sharp limitation), and a genuinely corrupt-bytes fallback that never throws |
+| `ai/retry.test.ts` (Phase 7) | `withGeminiRetry` succeeds immediately, retries on 429/503 then succeeds, gives up after `MAX_RETRIES` with the real error, never retries a 400 or a status-less error — real timers faked, not slept |
+| `ai/geminiProvider.test.ts` (Phase 7) | `GeminiBookIntelligenceProvider` against a mocked `@google/genai` SDK: configuration-missing/invalid-image guards, a well-formed response Zod-validates correctly, the image is sent as base64 `inlineData` with the given MIME type, the documented model id is used, malformed/schema-violating/empty responses all map to `invalid_response`, 429/503 map to `rate_limited`/`transient_provider_failure` after internal retries, a single transient 503 recovers via retry, no raw provider error text leaks into the mapped error, enrichment never sends image bytes, injects only the real active category list into the prompt, and rejects an out-of-vocabulary `fictionType` |
+| `metadataProviders/googleBooksProvider.test.ts` / `openLibraryProvider.test.ts` (Phase 7) | Configuration-missing guard (Google Books); no-signal short-circuit (no `fetch` call); ISBN query preferred over title/author; real-shaped result normalization including split ISBN-10/13; no-results never fabricates a candidate; genuine HTTP error/malformed-JSON/timeout mapping; Open Library's descriptive `User-Agent`, current `/search.json` endpoint (never the legacy one), and MARC language passthrough |
+| `metadataProviders/cache.test.ts` (Phase 7) | `buildCacheKey`: ISBN-based key normalization, ISBN preferred over title/author, genuinely different keys for different evidence shapes, author-order-independent, stable with no signal at all |
+
 Environment note: tests run with `environment: "node"`, not `jsdom` — an early attempt to use
 `jsdom` caused `jose`'s WebCrypto key handling to see cross-realm `Uint8Array` instances and
 fail with a cryptic key-type error. Since Phase 1's unit tests are pure logic with no DOM
@@ -86,6 +95,8 @@ result; every assertion is a real round-trip to a real running Postgres instance
 | `db/searchRepository.test.ts` (Phase 5, extended in the correction pass) | Catalog visibility (pending/archived books never appear in candidates, facet rows, or autocomplete, active/incomplete-metadata books still do); exact/near-exact matching (author full name, exact title); full-text OR-semantics (a multi-word descriptive query returns real results; a filler query returns none — the "read"-label regression); trigram floor (a real typo is a candidate, an unrelated query isn't); language hard-filtering via primary+additional; incomplete metadata never producing an invented format/realism/duration value; structured intent producing real SQL candidates, not just a ranking bonus; vector storage/distance retrieval; **topic/tag and language autocomplete** (a real tag/language autocompletes, one used only by a `pending_review` book never does, and one used only as an ADDITIONAL language on an active book still does) |
 | `db/migrationUpgrade.test.ts` (Phase 5 correction pass) | The exact scenario `docs/SEARCH.md` §4 describes: a fresh database is brought to precisely the Phase 4 (migration `0000`) schema state with real relational data inserted directly, the real Phase 5 migrations (`0001`/`0002`) are applied via drizzle's own `migrate()` — not a stripped-down copy of the migrations folder — confirming `search_text`/`search_vector` are NULL/empty immediately after (reproducing the bug), then correctly backfilled (title, contributor, publisher, category, tag, and additional-language content, each independently verified as full-text-searchable), backfilling twice is a no-op (idempotent), the book's id/copy count/Reading List reference all survive unchanged, and editing the book's metadata afterward both updates conventional search and makes a previously-stored embedding's source hash detectably stale |
 | `db/boundedPagination.test.ts` (Phase 5 correction pass) | 300 synthetic active books sharing one category (substantially more than any candidate-retrieval limit elsewhere in this codebase) — `findVisibleBookIdsPage` never returns more than `limit + 1` rows regardless of the real total, returns deterministic `sort_title` order, `countVisibleBooks` returns the exact real total (not a capped candidate-pool size), `hasMore` is `false` once `limit` reaches the true total, and (the actual proof, via `vi.spyOn(bookRepository, "getBooksByIds")`) a 5-result and a 15-result ("Show More") page each project only that many books, never all 300 |
+| `db/duplicateMatcher.test.ts` (Phase 7) | `findDuplicateCandidates` against the real seeded catalog — exact ISBN match, exact title+author+language match, same-title-different-language, same-title-no-author-overlap, an empirically-measured `pg_trgm` similarity case for `ambiguous_similar_title` (the real score was measured against this database, not assumed), no-match for a genuinely unrelated title, and an archived book never surfacing as a duplicate even on an exact ISBN match |
+| `db/persistence.test.ts` (Phase 7) | `saveNewBook` creates a book + its physical copy + marks the ingestion item completed, all in one transaction; a title-less save is rejected before any transaction opens; an invalid category slug rolls back the *entire* transaction (no orphaned book row, ingestion item stays `processing`); `addAnotherCopy` inserts a copy without mutating the existing book and throws for a nonexistent book id; `saveForReview` marks `needs_review` with the full draft and creates no book when no `pendingBook` is given, or a real `pending_review` book + `review_flags` row when one is |
 
 ## Search evaluation (Phase 5, expanded in the correction pass) — `tests/evaluation/`
 
@@ -177,11 +188,12 @@ used heavily on phones, so testing only against Chromium would have missed a rea
 | File | Covers |
 |---|---|
 | `auth.spec.ts` | Welcome screen rendering, Tap to Enter reveal, wrong/right password, show/hide toggle, full keyboard-only login, route protection on every protected path, logout, admin unlock (wrong/right password), admin elevation clearing on logout |
-| `navigation.spec.ts` | Every remaining placeholder Home destination (Add, Lists, Guide, Teacher Catalog) reaches its "coming later" state and can navigate back; the two primary tiles are meaningfully larger than secondary nav items |
+| `navigation.spec.ts` | The one remaining placeholder Home destination (Teacher Catalog) reaches its "coming later" state and can navigate back; the two primary tiles are meaningfully larger than secondary nav items — Find/Reading Lists/Guide/Add a Book each graduated to a real experience with its own spec file (Phase 7 removed Add a Book from this file's placeholder list) |
 | `find.spec.ts` | The ten numbered flows the brief requires — see below |
 | `voice.spec.ts` | A scripted fake `SpeechRecognition` (installed via `page.addInitScript()`, never a real microphone) exercising the real production UI: Home → Find → voice → mocked transcript → normal results; existing filters survive a voice search; no-speech, permission-denied, cancel, and an unsupported-browser fallback |
 | `readingLists.spec.ts` (Phase 4: desktop project only, serial order — see the comment at the top of the file) | Empty/populated overview, the Add-to-list dialog's no-lists-yet state, create (required name, optional/whitespace/trimmed creator), a list surviving reload, rename, delete with confirmation (and cancelling it), an empty list's guidance, add-to-list from both Search Results and Book Detail (including that it never accidentally navigates to Book Detail), duplicate-add idempotency and "Already added" messaging scoped to the test's own list, remove (without touching the catalog), Book Detail↔list-detail return navigation, a malformed/external `from=` value falling back safely, a nonexistent list id's not-found state, a full keyboard-only create flow, and (Phase 4 correction pass) the **actual two-independent-browser-context acceptance test**: two separate `browser.newContext()`s, each with its own login/cookies, proving a list Context A creates — and a book Context A adds to it — is visible to Context B without Context B doing anything itself |
 | `guide.spec.ts` | The real Guide renders with one `<h1>` and the expected section headings; the physical-category-vs-tags example matches real fixture data; the alphabetical-return rule is stated; Add a Book/Review Later are described in the future tense with no fake button; links to Find a Book and Reading Lists work; the shared-across-staff nature of Reading Lists is disclosed (Phase 4: no longer "device-local") |
+| `addBook.spec.ts` (Phase 7) | The full Add-a-Book flow against deterministic fixtures (`E2E_FAKE_INTAKE_PROVIDERS=true`, real Drive/Gemini/metadata calls skipped entirely — never a live API in this suite; see `docs/AI_PIPELINE.md` §9): cover selection preview + Change Photo; a full new-book save requiring a Quick Edit category (no AI configured in E2E); a real, visible save-time error instead of a silent no-op (see the two real bugs below); exact-duplicate detection against the real seeded "The Gruffalo" fixture leading to Add Another Copy; Review Later preserving the intake; an unsupported file type rejected before any upload begins. Runs on both the desktop and mobile (real WebKit) projects — unauthenticated `/add` access is already covered by `auth.spec.ts`'s own route-protection test. **Two real bugs this suite caught and fixed**: `AddBookFlow`'s save handler silently no-op'd when no category had been AI-suggested and Quick Edit was never opened; `confirmSaveAction`'s provenance list wrote two competing "title" rows whenever Quick Edit was opened at all, violating `book_field_provenance`'s real one-current-row-per-field unique index. See `docs/DECISIONS.md`/`docs/CHANGELOG.md` for both. |
 
 Phase 4 correction pass also added two `find.spec.ts` cases (run on both projects, like the
 rest of that file): a malformed Book Detail id (`/books/not-a-uuid`) and a valid-but-nonexistent
@@ -570,11 +582,14 @@ comes from an actual `EXPLAIN ANALYZE` run, not an estimate.
 
 ## What's not tested yet (by design)
 
-Nothing in Add or the Admin dashboard beyond their placeholder states — there's no real
-functionality there yet to test. Google Drive/Sheets integration has no tests because nothing
-is connected yet (Phases 6, 9). Find a Book, voice search, Reading Lists, and the Library Guide
-are all fully tested at the unit, integration, and E2E level for everything Phases 2–5 actually
-built.
+Nothing in the Admin dashboard beyond its placeholder state — there's no real functionality
+there yet to test. Google Sheets integration has no tests because nothing is connected yet
+(Phase 9). Find a Book, voice search, Reading Lists, the Library Guide, Google Drive, and
+Add a Book (Phase 7) are all fully tested at the unit, integration, and E2E level for
+everything each phase actually built. Phase 7's own genuinely-untested items (real Google
+Books validation — no key available; a fresh live Gemini call against real HEIC bytes —
+blocked by a real rate limit during validation) are recorded honestly in
+`docs/AI_PIPELINE.md` §10 and `docs/IMPLEMENTATION_STATUS.md`, not glossed over here.
 
 **Genuinely not tested in Phase 5, and reported honestly rather than glossed over:**
 

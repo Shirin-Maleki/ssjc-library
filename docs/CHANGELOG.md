@@ -4,6 +4,38 @@ A simple, phase-level record of what actually shipped — not a verbose release 
 Entries are dated by when the work was completed; see `docs/IMPLEMENTATION_STATUS.md` for the
 current state and `docs/DECISIONS.md` for the reasoning behind any of these.
 
+## Phase 7 complete — Add a Book, end to end — 2026-09-20/21
+
+A teacher can now photograph a book cover and, ~30-60 seconds later, have it shelved:
+identify → look up bibliographic metadata → check the real catalog for duplicates →
+AI enrichment → confirm/Quick Edit/Review Later → save. Full detail:
+`docs/AI_PIPELINE.md` (new), `docs/IMPLEMENTATION_STATUS.md`.
+
+**A real, significant architecture correction**: the Phase 6-approved direct-browser-
+to-Drive upload was proven, via real Chromium testing (not assumed), to be blocked
+by Drive's CORS behavior — the `Origin` bound to a resumable session is fixed at
+session-creation time, which happens server-side, so no browser origin is ever
+authorized. Corrected to a server-mediated upload through this codebase's first
+Route Handler; re-validated live afterward. Full evidence: `docs/DECISIONS.md`.
+
+**Two real bugs the new E2E suite caught and fixed**: a silent no-op when saving
+without an AI-suggested category, and a provenance-insert bug that violated a real
+database constraint whenever Quick Edit was opened at all (`docs/DECISIONS.md`).
+**A third gap found by comparing the built UI against the phase brief's own spec**:
+Quick Edit was missing a Format field despite the wiring already existing
+end-to-end — added.
+
+**Real-provider validation**: one real photo from the actual SSJC Drive collection
+("Kenny and the Little Kickers") went through the complete real pipeline —
+Gemini identification, Open Library lookup, reconciliation, duplicate check, and a
+real transactional save — successfully. Four more real photos (including 3 real
+iPhone HEIC files, explicitly approved for this one-time bounded validation) hit a
+real, investigated Gemini daily quota limit; reported honestly rather than retried
+indefinitely or glossed over. See `docs/AI_PIPELINE.md` §10.
+
+**Testing**: 342→420 unit tests, 68→82 integration tests, 101→113 E2E tests (real
+Chromium + real WebKit), all passing.
+
 ## Phase 6 complete — real Google Drive validation passed — 2026-09-20
 
 `npm run google:smoke` ran against the real, configured SSJC Drive folder ("Corridor

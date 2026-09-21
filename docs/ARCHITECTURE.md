@@ -186,28 +186,52 @@ Unchanged from the first draft: a service-account-authenticated, read-mostly pro
 a hidden stable `book_id` column, synchronous incremental writes plus an admin "Sync Now" and
 scheduled full reconciliation as a safety net. See [`docs/DECISIONS.md`](DECISIONS.md).
 
-## 9. AI provider abstraction
+## 9. AI provider abstraction (as built, Phase 7)
 
-Unchanged from the first draft: `VisionProvider`, `LLMProvider`, `EmbeddingProvider`,
-`SpeechToTextProvider`, `BookMetadataProvider` interfaces, each with a deterministic mock
-implementation (`MOCK_AI=true`). Concrete vendor remains a recommendation (Claude for
-vision/structured output, a low-cost dedicated embeddings model), not a lock — genuinely
-pending your API/billing access decision.
+The planning-stage `VisionProvider`/`LLMProvider`/`SpeechToTextProvider` split and
+`MOCK_AI=true` toggle described in earlier drafts of this document were not what
+got built. What Phase 7 actually implemented: two narrow interfaces,
+`BookVisionProvider` and `BookEnrichmentProvider` (`src/lib/ai/provider.ts`), both
+satisfied by one concrete class, `GeminiBookIntelligenceProvider`
+(`src/lib/ai/geminiProvider.ts`) — real Google `gemini-3.8-flash`, not a mock
+toggle. `src/lib/ai/index.ts`'s `getConfiguredBookIntelligenceProvider()` (`import
+"server-only"`) is the one factory production code calls, returning `undefined`
+when `GEMINI_API_KEY` is unset — the same "unconfigured is a normal, gracefully-
+degrading state" pattern Phase 5's embedding provider established, not a new
+convention. Deterministic testing without a live API happens two ways: unit tests
+mock the `@google/genai` SDK directly (`tests/unit/ai/geminiProvider.test.ts`),
+and the E2E suite uses a narrow, explicitly-labeled fixture seam
+(`src/lib/intake/e2eFixtures.ts`) rather than a parallel mock-provider class
+hierarchy. Full detail: `docs/AI_PIPELINE.md`.
 
-## 10. Book metadata provider abstraction
+## 10. Book metadata provider abstraction (as built, Phase 7)
 
-Unchanged from the first draft: Open Library + Google Books behind `BookMetadataProvider`,
-reconciled (ISBN exact match → high title/contributor similarity → lower-confidence fuzzy),
-every candidate retained in `book_identity_candidates`, responses cached in
-`metadata_provider_cache`.
+Built as planned: `BookMetadataProvider` (`src/lib/metadataProviders/provider.ts`)
+with two adapters, `GoogleBooksMetadataProvider` and `OpenLibraryMetadataProvider`
+— Google Books first when `GOOGLE_BOOKS_API_KEY` is configured, Open Library
+always (needs no key). Every candidate that survives reconciliation
+(`src/lib/intake/reconciliation.ts` — a deterministic scored match, not "ask
+Gemini which result is correct") is recorded, and results are cached in
+`metadata_provider_cache` keyed by normalized ISBN or title+author+language. Full
+detail, including the real API-endpoint corrections found by re-checking current
+docs (Open Library's `/search.json`, not the legacy `/api/books`): `docs/AI_PIPELINE.md`.
 
-## 11. Cover identification & enrichment pipeline
+## 11. Cover identification & enrichment pipeline (as built, Phase 7)
 
-Unchanged in shape from the first draft (validate → upload to Drive → hash/dedupe check →
-vision identification → metadata reconciliation → catalog duplicate check → enrichment
-→ category suggestion → confidence scoring → teacher confirmation), now producing a
-`book_copies` row rather than incrementing a counter when the outcome is "new copy of an
-existing edition." See `docs/DATA_MODEL.md` §7 for the exact duplicate-resolution mapping.
+Same shape as originally planned (capture → upload → identify → metadata lookup →
+reconciliation → duplicate check → enrichment → category suggestion → teacher
+confirmation), with one architecturally significant correction: the upload step
+is **server-mediated**, not a direct browser-to-Drive PUT as originally approved
+in Phase 6 — real Chromium testing proved that specific mechanic is blocked by
+Drive's CORS behavior (full evidence in `docs/DECISIONS.md`). The browser now
+POSTs to this app's own `src/app/api/intake/cover/route.ts` (a Route Handler —
+the first one in this codebase; every other mutation is a Server Action, but
+Server Actions expose no upload-progress events), which relays bytes to Drive
+server-side. Everything downstream of a confirmed upload is Server Actions
+(`src/lib/intake/actions.ts`), matching every other authenticated mutation in
+this codebase. A confident "same edition" outcome produces a `book_copies` row
+(never a second `books` row); see `docs/DATA_MODEL.md` §7 for the exact
+duplicate-resolution mapping and `docs/AI_PIPELINE.md` for the full pipeline.
 
 ## 12. Search architecture: layered retrieval with graceful degradation
 
@@ -644,6 +668,20 @@ Not created in Phase 0 — this is the target structure Phase 1 will actually cr
 Unchanged — see [`docs/IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md).
 
 ## 28. Changelog
+
+**2026-09-20/21 — Phase 7 implementation (Add a Book):**
+- §9/§10/§11 rewritten from planning-stage descriptions ("unchanged from the
+  first draft," `MOCK_AI=true`) to what was actually built — see each section
+  and `docs/AI_PIPELINE.md` for full detail.
+- New Route Handler pattern introduced: `src/app/api/intake/cover/route.ts` is
+  the first Route Handler in this codebase (every other mutation is a Server
+  Action) — needed because Server Actions expose no upload-progress events. Added
+  after real Chromium testing proved the Phase 6-approved direct-browser-to-Drive
+  upload doesn't survive browser CORS enforcement; full evidence in
+  `docs/DECISIONS.md`.
+- New directories: `src/lib/ai/`, `src/lib/metadataProviders/`, `src/lib/intake/`
+  (the domain/orchestration layer — providers, reconciliation, duplicate
+  matching, transactional persistence), `src/components/add/`.
 
 **2026-09-13 — Phase 0 review revision:**
 - §3: data access layer changed from Kysely to Drizzle (schema + migrations + queries).

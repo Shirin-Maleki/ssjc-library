@@ -628,9 +628,27 @@ synthetic "unknown" option (`isDefined` guard, §7). `getReadDurationBand()`
 TypeScript side, mirroring the database's generated `read_duration_band` column exactly — both
 return `undefined`/`NULL` for a missing estimate rather than defaulting to a band.
 
+## Targeted single-book embedding (Phase 7)
+
+Add a Book needs one new book's embedding immediately after it saves — not a
+nightly/batch rebuild, and never a whole-catalog backfill for one book.
+`src/lib/embeddings/generation.ts`'s `generateEmbeddingForBook(db, provider, bookId)`
+is the targeted primitive this calls: reuses the same `buildEmbeddingDocument()`
+composition every other embedding path uses, but scoped to one already-fetched
+book. It never throws on provider failure — returns `{ succeeded: false, error }`
+instead — because embedding failure must never block or roll back book creation
+(`docs/DECISIONS.md`/`docs/AI_PIPELINE.md`: "BOOK CREATION STILL SUCCEEDS"
+regardless of embedding outcome). `confirmSaveAction` calls it fire-and-forget
+after the save transaction has already committed, swallowing any error — a
+teacher is never shown a technical embedding failure, and the existing embedding
+backfill script (`npm run embeddings:generate --mode=missing`) recovers any book
+this leaves without one.
+
 ## What's deliberately not here
 
 No generative/LLM query interpretation, no LLM-written explanations, no separate vector
-database, no production search telemetry, no Google Drive/Sheets ingestion, no Admin Review
-workflow changes. These are out of scope for Phase 5; see `docs/IMPLEMENTATION_STATUS.md` for
-the phase roadmap.
+database, no production search telemetry, no Google Sheets ingestion, no Admin Review
+workflow changes. These were out of scope through Phase 5; Phase 7 added Google Drive as a
+source-photo store (`docs/GOOGLE_INTEGRATION.md`) and the targeted embedding call above, but
+did not otherwise change this document's search/ranking architecture. See
+`docs/IMPLEMENTATION_STATUS.md` for the phase roadmap.

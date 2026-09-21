@@ -66,7 +66,7 @@ reviewed decision — not a default to reach for.
 | Client ID / client secret | Until rotated in Cloud Console | `.env.local` / deployment secrets | Never |
 | Refresh token | Until revoked/rotated | `.env.local` / deployment secrets | Never |
 | Access token | ~1 hour | In-memory only (`oauthClient.ts`) | Never |
-| Resumable upload session URI | Up to Google's own documented lifetime | Passed server→browser for one upload, never persisted | **Yes — the one exception, by design (see below)** |
+| Resumable upload session URI | Up to Google's own documented lifetime | Created and used entirely server-side (Phase 7 correction — see below) | **No, as implemented** — originally planned to cross to the browser (see below); real testing proved that specific mechanic doesn't survive browser CORS enforcement |
 
 `src/lib/googleDrive/oauthClient.ts` exchanges the refresh token for a short-lived access
 token, caches it in memory until shortly before expiry, and transparently refreshes when
@@ -157,9 +157,9 @@ fetching Drive's authorized binary content (`alt=media`). Never used to proxy an
 photo into an ordinary teacher-facing screen — the only caller in this phase is
 `google:smoke`'s own disposable test file.
 
-## Resumable upload architecture
+## Resumable upload architecture — originally planned, corrected in Phase 7
 
-Designed for a future browser (Phase 7), not implemented as UI in Phase 6:
+Phase 6 designed this for a future browser (not implemented as UI in Phase 6):
 
 ```
 browser File/Blob
@@ -171,11 +171,26 @@ browser File/Blob
   → server calls confirmUploadedFile() to independently re-verify from Drive
 ```
 
-The browser never receives an OAuth token or client secret — only the resumable session
-URI, treated as sensitive ephemeral capability data (never logged, never persisted beyond
-the immediate upload, never in analytics or error messages). `initiateResumableUpload()`
-binds the session narrowly to an exact filename, MIME type, declared size, and verified
-parent folder before ever contacting Drive.
+**This does not work.** Real Playwright/Chromium testing during Phase 7
+implementation proved it structurally impossible: Google's resumable-upload CORS
+behavior is bound to the `Origin` header present at *session-creation* time, that
+request is necessarily made server-side (no real browser `Origin`), and Drive's
+own upload documentation exposes no CORS configuration surface at all (unlike
+Cloud Storage buckets, which have one). A real browser PUT to a server-created
+session is unconditionally blocked by CORS — reproduced live, not assumed. Full
+evidence and reasoning in `docs/DECISIONS.md`, "Phase 7: the Phase 6-approved
+direct-browser-to-Drive upload does not survive a real browser."
+
+**What Phase 7 actually built** (`src/app/api/intake/cover/route.ts`): the
+browser POSTs raw bytes to this app's own same-origin Route Handler (real
+`xhr.upload.onprogress` for that leg), which performs `initiateResumableUpload()`,
+the PUT, and `confirmUploadedFile()` entirely server-side (server-to-server
+traffic is never subject to browser CORS, exactly like `scripts/google/smoke.ts`'s
+own real PUT). The browser never receives a Drive URL, a session URI, or a token
+at any point — a *stronger* version of the original security property, not a
+weaker one. `initiateResumableUpload()` still binds the session narrowly to an
+exact filename, MIME type, declared size, and verified parent folder before ever
+contacting Drive; that part of the design was correct and unchanged.
 
 ## Completion verification
 
@@ -232,16 +247,14 @@ own documented decision when it's made.
 compressed phone photo, bounded against an absurd upload. No teacher-facing validation UI
 exists yet; only server/provider-level enforcement.
 
-## How Phase 7 should use this
+## How Phase 7 actually used this
 
-Phase 7 (Add Book intake) is expected to: call `initiateResumableUpload()` from an
-authenticated Server Action after validating the intended target folder and file
-metadata, hand the browser only the resulting session URI, let the browser upload bytes
-directly to Google, then call `confirmUploadedFile()` server-side before writing the
-resulting Drive file id into `books.cover_drive_file_id` (and friends). Phase 7 owns
-choosing exactly *which* folder under the root a new upload's parent should be (e.g. a
-per-batch or per-date subfolder) — Phase 6 only proves the mechanism works for any
-verified-in-root parent.
+Add a Book uploads directly under the configured root (`GOOGLE_DRIVE_ROOT_FOLDER_ID`)
+— never into an existing photographer subfolder (`Shirin`/`Diamond`/`Ray` in the
+real Drive folder, which hold the pre-existing ~1,500-photo collection and are
+never written to by this application). See "Resumable upload architecture" above
+for the corrected server-mediated flow, and `docs/AI_PIPELINE.md` for the full
+pipeline this upload feeds into.
 
 ## How Phase 10 should enumerate this
 
@@ -264,3 +277,23 @@ collection, not just the mocked test suite: the configured root ("Corridor books
 after the test; a real resumable upload, server-side confirmation (with a real MD5
 checksum), byte-for-byte download, and trash-based cleanup all completed successfully
 against Google's actual API — not a simulation of it.
+
+## Real validation evidence (2026-09-21, Phase 7)
+
+Two further real-browser/real-Drive validation passes, both against the real
+configured folder, both cleaned up (disposable synthetic test file trashed, its
+`ingestion_items`/`ingestion_jobs` rows deleted):
+
+1. **The direct-browser-to-Drive upload was tested in a real Chromium browser**
+   (Playwright, not a server-side `fetch`, which cannot detect a CORS failure at
+   all) — reproduced the real CORS block described above, then re-tested after
+   the server-mediated fix and confirmed it works: real staff login, real file
+   selection, real click-through, reaching the post-upload "Identifying book…"
+   stage with zero console errors.
+2. **A bounded, explicitly-approved sample of 5 real existing photos** (2 JPEG, 3
+   real iPhone HEIC) was read from the real collection's `Shirin`/`Diamond`/`Ray`
+   subfolders via one bounded `listChildren` call per folder (never a recursive
+   scan) to validate the AI pipeline end to end — full results in
+   `docs/AI_PIPELINE.md` §10. All 5 real files were confirmed unchanged
+   (`trashed: false`, original size) after the pass; nothing was renamed, moved,
+   or modified.

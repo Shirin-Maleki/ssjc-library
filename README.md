@@ -16,25 +16,21 @@ exactly what exists right now versus what is planned.
 
 ## Project status
 
-**Current phase: Phase 6 — Google Drive connection — COMPLETE, real Google Drive validation
-PASSED (2026-09-20).** Phase 5 (real search architecture, including real-provider validation
-against a live Gemini API key) is complete and approved. Find a Book runs a real, bounded,
-database-backed hybrid search pipeline — structured SQL filters, Postgres full-text + trigram
-fuzzy matching, and real optional pgvector semantic retrieval, combined by a transparent scorer
-on top of the unchanged deterministic Phase 2–4 ranking engine. Reading Lists (genuinely shared
-Postgres persistence, Phase 4) and voice search (Phase 3) are unaffected. Staff/admin
-authentication (Phase 1) still gates everything and is completely separate from the Google
-account this phase authorizes for Drive infrastructure — no teacher ever signs in with Google.
-Phase 6 built a `CoverStorageProvider` abstraction, OAuth token management, a root-folder
-security boundary, and resumable-upload infrastructure for a future Add Book flow (Phase 7) —
-see `docs/GOOGLE_INTEGRATION.md`. The real end-to-end connectivity test (`npm run google:smoke`)
-has run against the actual configured SSJC Drive folder and passed every step — see
-`docs/IMPLEMENTATION_STATUS.md`, "Real Google validation, 2026-09-20," for the full transcript.
-(Authorization currently runs through a personal Gmail account rather than the SSJC Workspace
-account directly, because Workspace policy blocks third-party OAuth pending admin review — a
-working setup for development, not yet a finalized production credential strategy; see
-`docs/GOOGLE_SETUP.md`.) See `docs/IMPLEMENTATION_STATUS.md` for exactly what's built, `docs/DATABASE_SETUP.md`
-for the database itself, `docs/SEARCH.md` for the full search architecture, and
+**Current phase: Phase 7 — Add a Book (single-book intake) — COMPLETE, real-provider
+validation performed (2026-09-20/21).** A teacher can photograph a book's front cover and,
+through one continuous flow, have it identified (Google Gemini vision), looked up against
+Google Books/Open Library, checked for duplicates against the real catalog, enriched with a
+description/tags/physical-category suggestion, confirmed or Quick-Edited, and saved — ending
+in a real shelving instruction. Full architecture: `docs/AI_PIPELINE.md`. One real,
+significant architecture correction happened this phase: the Phase 6-approved direct-
+browser-to-Drive upload was proven, via real browser testing, to be blocked by Drive's CORS
+behavior, and was corrected to a server-mediated upload — see `docs/DECISIONS.md`. Phase 6
+(Google Drive connection) and Phase 5 (real search architecture, including real-provider
+validation against a live Gemini API key) remain complete and approved, unaffected except
+where Phase 7 built directly on Phase 6's Drive infrastructure. Find a Book, Reading Lists,
+voice search, and staff/admin authentication are all unaffected. See
+`docs/IMPLEMENTATION_STATUS.md` for exactly what's built, `docs/DATABASE_SETUP.md` for the
+database itself, `docs/SEARCH.md` for the full search architecture, and
 `docs/GOOGLE_INTEGRATION.md`/`docs/GOOGLE_SETUP.md` for the Drive integration.
 
 ## Local setup
@@ -67,11 +63,13 @@ npm run google:smoke         # real, opt-in Google Drive connectivity proof — 
 ```
 
 No Google Sheets credentials exist yet — that integration doesn't exist yet (Phase 9). An
-optional `GEMINI_API_KEY` (see [`docs/DATABASE_SETUP.md`](docs/DATABASE_SETUP.md)) activates real
-semantic search retrieval and embedding generation; every other feature, including conventional
-search, works completely without it. An optional Google Drive OAuth setup (see
-[`docs/GOOGLE_SETUP.md`](docs/GOOGLE_SETUP.md)) activates real cover-photo storage
-infrastructure for future phases; nothing currently teacher-facing depends on it.
+optional `GEMINI_API_KEY` (see [`docs/DATABASE_SETUP.md`](docs/DATABASE_SETUP.md)) activates
+real semantic search retrieval/embedding generation (Phase 5) and Add-a-Book cover
+vision/enrichment (Phase 7); every other feature, including conventional search, works
+completely without it. An optional Google Drive OAuth setup (see
+[`docs/GOOGLE_SETUP.md`](docs/GOOGLE_SETUP.md)) is required for Add a Book (source cover
+storage) but nothing else depends on it. An optional `GOOGLE_BOOKS_API_KEY` improves
+Add-a-Book's metadata lookup; Open Library (no key needed) is used regardless.
 
 ## How to read this repository
 
@@ -83,6 +81,7 @@ Start here, in order:
 4. [`docs/PRODUCT_SPEC.md`](docs/PRODUCT_SPEC.md) — the product requirements this project is building toward.
 5. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — the technical architecture: frontend, backend, database, AI, Google integrations, search, deployment.
 6. [`docs/DATA_MODEL.md`](docs/DATA_MODEL.md) — the relational schema in full detail.
+7. [`docs/AI_PIPELINE.md`](docs/AI_PIPELINE.md) — the Add-a-Book AI/external-provider pipeline (Phase 7): vision, metadata lookup, reconciliation, duplicate detection, enrichment.
 
 Phase-specific detail, split out once a subject becomes operationally real (per the "don't
 create placeholder docs" rule): [`docs/SECURITY.md`](docs/SECURITY.md),

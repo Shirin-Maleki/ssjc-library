@@ -606,26 +606,94 @@ detail in `docs/DECISIONS.md`; test detail in `docs/TESTING.md`.
    database migration, no OAuth setup, no real Google validation performed in this pass —
    out of scope per the correction brief.
 
+## Completed work (Phase 7, 2026-09-20/21)
+
+The full single Add-a-Book flow — real end to end, from a photographed cover to
+a shelved catalog entry. Full technical detail: `docs/AI_PIPELINE.md`; every
+architectural decision and its evidence: `docs/DECISIONS.md`; every test:
+`docs/TESTING.md`.
+
+1. **Schema**: `provenance_source_type` gains `cover_visible`; `ingestion_items`
+   gains `intake_draft` (jsonb, Zod-validated contract). One migration
+   (`drizzle/0003_naive_silver_surfer.sql`).
+2. **Three new provider boundaries**: `src/lib/ai/` (Gemini vision + enrichment,
+   `gemini-3.8-flash`), `src/lib/metadataProviders/` (Google Books + Open
+   Library), reusing the existing `src/lib/googleDrive/` boundary from Phase 6.
+3. **The full intake domain layer** (`src/lib/intake/`): image prep (real,
+   tested HEIC/HEIF passthrough finding), metadata lookup + caching,
+   deterministic identity reconciliation, duplicate detection against the real
+   catalog, category-suggestion enforcement, the versioned intake draft, and
+   transactional persistence (new book / another copy / review later).
+4. **A real, significant architecture correction**: the Phase 6-approved
+   direct-browser-to-Drive upload was proven, via real Chromium testing, to be
+   blocked by Drive's CORS behavior. Corrected to a server-mediated upload
+   (`src/app/api/intake/cover/route.ts`, this codebase's first Route Handler) —
+   re-validated live afterward. Full evidence in `docs/DECISIONS.md`.
+5. **A complete, mobile-first UI** (`src/components/add/`): cover capture,
+   staged processing states, duplicate resolution, Quick Edit confirmation
+   (including a Format field added after the brief's own spec named it as a
+   Quick Edit field but the first implementation pass omitted it), and the
+   final shelving-instruction success state.
+6. **Test coverage added this phase**: 78 new unit tests (342→420), 14 new
+   integration tests against real Postgres (68→82), 12 new E2E tests across
+   real Chromium and real WebKit (101→113) — the E2E suite caught and fixed two
+   real bugs (a silent no-op on an incomplete save, and a provenance-insert bug
+   that violated a real database constraint whenever Quick Edit was opened at
+   all). Full breakdown: `docs/TESTING.md`.
+7. **Real-provider validation**: the corrected upload architecture was
+   validated live twice (once reproducing the real CORS failure, once
+   confirming the fix); 5 real photos from the actual SSJC Drive collection
+   (explicitly, narrowly approved for this one-time bounded validation) were
+   run through the real pipeline — one full success end to end including a
+   real transactional save, the rest hitting a real, investigated Gemini daily
+   quota limit. Full results and honesty caveats: `docs/AI_PIPELINE.md` §10.
+8. **Documentation**: this file, plus `docs/AI_PIPELINE.md` (new),
+   `docs/DECISIONS.md`, `docs/SECURITY.md`, `docs/GOOGLE_INTEGRATION.md`,
+   `docs/DATA_MODEL.md`, `docs/SEARCH.md`, `docs/ARCHITECTURE.md`,
+   `docs/TESTING.md`, `docs/COSTS.md`, `.env.example`, `docs/AGENT_HANDOFF.md`,
+   `docs/CHANGELOG.md`.
+
+## In-progress / not yet done for Phase 7
+
+**Not real-tested**: Google Books (no `GOOGLE_BOOKS_API_KEY` was available —
+Open Library alone was validated live and is sufficient for metadata lookup to
+function); a fresh live Gemini vision call against real HEIC bytes (blocked by
+the real rate limit encountered during validation — the resize-skip/passthrough
+logic was still confirmed correct with 3 real HEIC files, and the HEIC
+input-support claim itself rests on Google's documentation from
+implementation-time re-confirmation, not a fresh call this session). Both
+recorded honestly in `docs/AI_PIPELINE.md` §10, not glossed over.
+
+**Not built, by explicit design** (per the phase brief's own exclusions): no
+processing of the existing ~1,500-photo collection, no Phase 8 Admin Review
+interface, no taxonomy-management UI, no Google Sheets/Sheet sync, no
+generalized workflow engine, no new display-image storage service (display
+cover uses a verified provider thumbnail URL or the existing placeholder — no
+new architecture).
+
 ## In-progress / not yet done for Phase 6
 
 None. Real Google OAuth setup was completed (via a personal Gmail account — see "Real Google
 validation, 2026-09-20" above for why) and `npm run google:smoke` passed against the real
-configured Drive folder. Phase 6 is complete per its own acceptance criteria.
+configured Drive folder. Phase 6 is complete per its own acceptance criteria. (Phase 7 built
+directly on this infrastructure — see "Completed work (Phase 7...)" above for what changed,
+including the one architectural correction to the upload mechanism Phase 6 designed.)
 
 ## Blocked work
 
 None. Real Google Drive validation, previously blocked on OAuth Cloud setup, was completed
 2026-09-20 — see "Real Google validation, 2026-09-20" above. The one standing limitation (the
 OAuth app runs in External + Testing mode, not a finalized production credential strategy) is
-a deployment/security decision for a later phase, not a blocker on Phase 6 itself — see that
+a deployment/security decision for a later phase, not a blocker on Phase 6 or 7 — see that
 section for the full explanation.
 
 ## Deferred work
 
-Everything in Phases 7–13, by design: a single Add-a-Book flow (Phase 7 will consume Phase 6's
-resumable-upload infrastructure), Admin Review + taxonomy tooling, Google Sheets, bulk import,
-and the school's final physical taxonomy (still the 8 provisional development categories — see
-`docs/PRODUCT_SPEC.md` and `src/lib/catalog/categories.ts`, seed-only source material).
+Everything in Phases 8–13, by design, remains deferred: the Phase 8 Admin Review interface +
+taxonomy tooling, Google Sheets, bulk import of the existing ~1,500-photo collection, and the
+school's final physical taxonomy (still the 8 provisional development categories — see
+`docs/PRODUCT_SPEC.md` and `src/lib/catalog/categories.ts`, seed-only source material). Phase
+7 (single Add-a-Book flow) is now complete — see "Completed work (Phase 7...)" above.
 
 ## Pending user inputs
 
@@ -722,6 +790,28 @@ check) — silently doubling real Drive API calls in production, not just a test
 Fixed with `assertMetadataWithinRoot`, which starts the ancestry walk from metadata already
 in hand. See `docs/DECISIONS.md`. No known open bugs.
 
+Phase 7 found and fixed three real bugs:
+1. **The Phase 6-approved direct-browser-to-Drive upload architecture itself** —
+   real browser CORS enforcement blocks it structurally, not a code-level bug in
+   this codebase but a real, load-bearing architectural assumption that didn't
+   survive contact with a real browser. Corrected to a server-mediated upload.
+   Full evidence and fix: `docs/DECISIONS.md`.
+2. `AddBookFlow.handleConfirmSave` silently did nothing when no category had
+   been AI-suggested and the teacher hadn't opened Quick Edit — no error, no
+   feedback, just an inert button click. Found by writing the E2E happy-path
+   test. Fixed to always call the server so its real validation failure is
+   shown.
+3. `confirmSaveAction`'s provenance-building logic had two independent `if`
+   statements that both wrote a "title" provenance row whenever Quick Edit was
+   opened at all (`cover_visible` + `human_corrected`), violating
+   `book_field_provenance`'s real partial unique index
+   (`(book_id, field_key) WHERE is_current`) and failing the entire save
+   transaction. Found by the same E2E test once bug #2 was fixed and the save
+   actually reached the database. Fixed by making the two sources mutually
+   exclusive.
+
+No known open bugs.
+
 ## Environment variables
 
 Phase 1's four (`STAFF_PASSWORD_HASH`, `ADMIN_PASSWORD_HASH`, `SESSION_SECRET`, optional
@@ -734,7 +824,11 @@ values recorded here. **Phase 6 adds four optional variables**: `GOOGLE_OAUTH_CL
 live-validated as of 2026-09-20 — see "Real Google validation, 2026-09-20" above for the
 authorization path used (a personal Gmail account, not the SSJC Workspace account — see that
 section for why). Nothing else in the app depends on any of these four — every existing
-feature works identically whether or not Drive is configured.
+feature works identically whether or not Drive is configured. **Phase 7 adds one optional
+variable**, `GOOGLE_BOOKS_API_KEY` (`docs/AI_PIPELINE.md`, `.env.example`) — not set in this
+environment; Google Books validation was not performed live this phase, Open Library alone was
+(see "Completed work (Phase 7...)" above). `GEMINI_API_KEY` (already present from Phase 5) is
+now also used by Phase 7's vision/enrichment calls — never a second Gemini key.
 
 ## Migrations
 
@@ -755,7 +849,9 @@ correction pass adds no third migration file — an existing-database upgrade's 
 backfill is instead handled by a script folded into `db:migrate` itself, a deliberate choice
 explained in `docs/DECISIONS.md`. **Phase 6 adds no migration at all** — `books.cover_drive_*`
 and `ingestion_items.drive_file_id` already existed from the Phase 0 schema review; OAuth
-credentials live in environment/deployment secrets, never PostgreSQL. See
+credentials live in environment/deployment secrets, never PostgreSQL. **Phase 7 adds one
+migration**, `drizzle/0003_naive_silver_surfer.sql` (the `cover_visible` enum value and
+`ingestion_items.intake_draft` column — see `docs/DATA_MODEL.md` §15/§6/§10). See
 `docs/DATABASE_SETUP.md` for the full command reference, including pgvector-capable local
 setup.
 
@@ -764,27 +860,30 @@ setup.
 A local, disposable PostgreSQL 16 instance (three databases: dev/test/e2e), now with the
 `vector` and `pg_trgm` extensions enabled — still not actually external (see
 `docs/DATABASE_SETUP.md`). Voice search still talks only to the browser's own built-in speech
-recognition. **Optionally, Google's Gemini embedding API** (`gemini-embedding-2`) when
-`GEMINI_API_KEY` is configured — configured in this environment as of 2026-09-17 and live-tested
-(see "Completed work (Phase 5 real-provider validation)" above); search still works completely
-without it if the key is removed. **Phase 6 adds the Google Drive API** as a connected external
-service, real-validated 2026-09-20 (`docs/GOOGLE_SETUP.md`, "Real Google validation" above) —
-see `docs/COSTS.md` for the cost picture. No Supabase or Sheets service is connected.
+recognition. **Google's Gemini API** (`gemini-embedding-2` since Phase 5, plus
+`gemini-3.8-flash` vision/enrichment since Phase 7) when `GEMINI_API_KEY` is configured —
+configured and live-tested in this environment (see "Completed work (Phase 5 real-provider
+validation)" and "Completed work (Phase 7...)" above); every feature that depends on it
+degrades gracefully without it. **The Google Drive API**, connected since Phase 6, real-
+validated again in Phase 7 (both the corrected upload architecture and a bounded real-photo
+pipeline validation — see `docs/AI_PIPELINE.md` §10 and `docs/GOOGLE_INTEGRATION.md`).
+**Open Library**, connected and live-tested since Phase 7 (needs no key). **Google Books**,
+supported but not connected in this environment (no `GOOGLE_BOOKS_API_KEY` available — see
+`docs/COSTS.md`). No Supabase or Sheets service is connected.
 
 ## Git status
 
-Repository is linked to `github.com/Shirin-Maleki/ssjc-library` (`origin`, `main`). Phase 5 —
-including its real-provider validation pass — is approved as of commit
-`88b02752363649c297b6e6f3e38202cee2e51a6a`. The original Phase 6 implementation was committed
-as `ab515aae0d321464154c444c8fe2f534c0ec636a`; the 2026-09-20 code-safety correction pass as
-`72c5c8a33b55262e2cd906913883d3a85e2d31d7`. This documentation-only closure (recording the
-passed real Google validation) is committed and pushed on top of that commit — see the final
-report for the exact commit SHA and push confirmation.
+Repository is linked to `github.com/Shirin-Maleki/ssjc-library` (`origin`, `main`). Phase 6
+(including its 2026-09-20 correction pass) is approved as the Phase 7 starting point, commit
+`3fc48d4c4961d71308f5de9b098c18413ad99db4`. Phase 7's commits are listed in the Phase 7 final
+report's own "Git Status" section — see that report for the exact SHAs, push confirmation, and
+final working-tree state; never inferred or assumed here.
 
 ## Next recommended task
 
-Await explicit review/approval of Phase 6 as complete. Phase 7 (single Add-a-Book flow) must
-not begin until that approval — this pass did not start any Phase 7 work. Whoever picks up
-Phase 7 should read `docs/GOOGLE_INTEGRATION.md`'s "How Phase 7 should use this" and the
-production-OAuth-strategy note in "Real Google validation, 2026-09-20" above before building
-the upload UI.
+Await explicit review/approval of Phase 7 as complete. **Phase 8 must not begin until that
+approval** — this pass did not start any Phase 8 work (no Admin Review interface, no taxonomy-
+management UI). Whoever picks up Phase 8 should read `docs/AI_PIPELINE.md` in full (the
+pipeline Phase 8's review interface would act on), `docs/DATA_MODEL.md` §8 (review/flags), and
+this file's "Completed work (Phase 7...)" section's "not real-tested"/"not built" notes before
+starting.

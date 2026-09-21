@@ -526,8 +526,13 @@ The schema was deliberately trimmed from 25 to 23 tables during review (removed 
 array column, or an application-level constant already covers the need before normalizing
 further.
 
-AI provider, embedding model, and exact Google auth mechanism remain genuinely open pending
-real credentials and the requester's input — don't lock these in silently.
+**Resolved, not open anymore**: AI provider is Google Gemini throughout (`gemini-embedding-2`
+for search embeddings since Phase 5, `gemini-3.8-flash` for Add-a-Book vision/enrichment since
+Phase 7 — the same `GEMINI_API_KEY`, never a second key); Google auth is OAuth 2.0 Web
+Application credentials (Phase 6, `docs/GOOGLE_INTEGRATION.md`). Re-confirm current model/API
+availability against official docs before relying on either name in new work — both were
+re-checked as current/stable as of their respective implementation dates, not assumed from
+training data, and a model name can go stale.
 
 **Reading Lists (Phase 3 design, Phase 4 real implementation) are genuinely shared Postgres
 data, entirely behind a `ReadingListRepository` interface**
@@ -544,3 +549,27 @@ Reading List mutation method. Voice search (also Phase 3) is the browser's own W
 only — no server-side speech key, no AI interpretation of the transcript; it becomes a query
 through the exact same `buildFindHref()`/`searchBooks()` path typed search already uses. See
 `docs/DECISIONS.md` for the full reasoning behind both.
+
+**Add a Book (Phase 7) is a real, complete pipeline** — read `docs/AI_PIPELINE.md` before
+touching any of `src/lib/ai/`, `src/lib/metadataProviders/`, `src/lib/intake/`,
+`src/components/add/`, or `src/app/api/intake/cover/route.ts`. Three things a future agent
+must not silently re-decide or re-break:
+1. **The upload is server-mediated, not direct-browser-to-Drive**, despite what
+   `docs/GOOGLE_INTEGRATION.md`'s original Phase 6 design section describes — real browser
+   testing proved that design doesn't survive Drive's CORS behavior. Don't "fix" the Route
+   Handler back toward the originally-planned direct upload; read `docs/DECISIONS.md` first.
+2. **`book_field_provenance` allows at most one *current* row per (book, field)** — a real
+   partial unique index, not a suggestion. Any new code path that writes provenance for a
+   field a teacher might also edit must be mutually exclusive per field (see
+   `confirmSaveAction`'s real bug/fix in `docs/DECISIONS.md`/`docs/CHANGELOG.md`), never two
+   independent `if`s that can both fire for the same field.
+3. **`E2E_FAKE_INTAKE_PROVIDERS`** (`src/lib/e2eTestFlags.ts`,
+   `src/lib/intake/e2eFixtures.ts`) is a narrow, real, load-bearing test seam — it is not dead
+   code even though it's "only" checked by three call sites. Don't remove it without replacing
+   Add-a-Book's E2E coverage with something else that avoids live API calls in CI.
+
+Phase 8 (Admin Review) is the next phase in the plan — it must not begin without explicit
+approval, per the process above. Before starting it, read `docs/AI_PIPELINE.md` §10 for what
+Phase 7's real-provider validation did and didn't confirm (Google Books untested — no key;
+HEIC-with-Gemini not freshly re-confirmed this session — real rate limit), since a
+review/retry UI is exactly where those gaps become relevant.

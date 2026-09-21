@@ -5,13 +5,54 @@ to cost as later phases add real external services. Updated as each phase change
 picture — never asserted from memory without checking the provider's own current
 documentation first.
 
-## Current external services (through Phase 6)
+## Current external services (through Phase 7)
 
 | Service | Phase | Cost model |
 |---|---|---|
 | PostgreSQL (local dev; Supabase in production) | 4 | Supabase free tier covers this project's tiny scale; see `docs/DATABASE_SETUP.md`. |
 | Google Gemini embedding API (`gemini-embedding-2`) | 5 | Optional — only used when `GEMINI_API_KEY` is configured. Free-tier quota observed to be rate-limited under heavy back-to-back testing in a single session (`docs/DECISIONS.md`); ordinary usage (one query embedding per real teacher search, one document batch per catalog embedding run) is far below that. |
 | Google Drive API | 6 | See below. |
+| Google Gemini vision + enrichment (`gemini-3.8-flash`) | 7 | Shares the same `GEMINI_API_KEY` as embeddings — never a second key. See below. |
+| Google Books API | 7 | Optional (`GOOGLE_BOOKS_API_KEY`). Free tier, ~10,000 requests/day. Not real-tested this session (no key available) — see "Add a Book (Phase 7)" below. |
+| Open Library Search API | 7 | Free, no key, no published rate limit found in its own docs beyond "identify your client" — kept low-volume and cached regardless. |
+
+## Add a Book (Phase 7)
+
+**Per-book real cost, at most 2 Gemini calls** (one vision identification, one
+enrichment) **+ at most 2 metadata-provider searches** (Google Books if
+configured, Open Library always) **+ 1 Drive upload/confirm pair**. This is a
+low-volume staff library — teachers add books in the tens to low hundreds per
+year, not per day — so absolute cost is expected to be negligible; the
+observation below is about *rate limits*, not dollar cost.
+
+**Real-provider validation observed a genuine free-tier daily quota limit.**
+During implementation and again during a dedicated real-provider validation pass
+(2026-09-21, `docs/AI_PIPELINE.md` §10), sustained back-to-back real Gemini calls
+to `gemini-3.8-flash` — mostly structured-output (`responseSchema`) calls —
+eventually returned `rate_limited` on every subsequent call, and this did **not**
+recover after waits of 25 seconds, 90 seconds, or 3 minutes within the same
+session. This pattern (persists across minutes, not just a burst) indicates a
+**daily** quota, not a short per-minute rate limit — ordinary single-book-at-a-time
+teacher usage is very unlikely to hit it (one identify + one enrichment call per
+book, with real gaps between books), but a developer/tester making many real
+calls in one sitting (as this implementation and validation pass did) can. No
+per-request cost was observed or billed — this was free-tier quota exhaustion,
+not a paid overage.
+
+**Latency observed** (one real, complete success — "Kenny and the Little
+Kickers," `docs/AI_PIPELINE.md` §10): image resize 93ms; Gemini identify ~5.1s;
+Open Library lookup ~4.4s cold / ~6ms cache-hit on retry (real cache behavior
+confirmed); reconciliation and duplicate check <10ms each (in-process,
+DB-only). A full identify-through-enrichment round trip is expected in the
+5-15 second range end to end under normal (non-rate-limited) conditions —
+consistent with the "Identifying book…" / "Finding book details…" / "Preparing
+details…" staged UI (`docs/PRODUCT_SPEC.md`) actually having real work to show
+during each stage, not a decorative delay.
+
+**Google Books was not real-tested this session** — no `GOOGLE_BOOKS_API_KEY` was
+available. Open Library alone was validated live (see above) and is sufficient for
+metadata lookup to function; Google Books activates automatically once a key is
+added to `.env.local`, no code change required.
 
 ## Google Drive API
 

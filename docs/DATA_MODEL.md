@@ -232,7 +232,7 @@ value.
 | `id` | uuid PK | |
 | `book_id` | uuid, FK → `books.id`, not null | |
 | `field_key` | text, not null | validated against a centralized registry (`src/lib/metadata/fieldRegistry.ts`, implemented in the Phase 4 correction pass — a Zod-validated type, not a database enum), so adding a newly-tracked field is a code change, not a migration |
-| `source_type` | enum(`external_provider`,`ai_inferred`,`human_corrected`,`human_verified`), not null | see below |
+| `source_type` | enum(`external_provider`,`ai_inferred`,`cover_visible`,`human_corrected`,`human_verified`), not null | see below |
 | `source_label` | text | nullable, e.g. "Google Books", "Claude vision v1" |
 | `confidence` | numeric(3,2) | nullable |
 | `confidence_level` | enum(`high`,`medium`,`low`) | nullable, derived from `confidence` against `system_settings` thresholds |
@@ -247,6 +247,13 @@ product does:
 
 - `external_provider` — an authoritative external source (Google Books, Open Library).
 - `ai_inferred` — vision/LLM-derived, not yet reviewed by a human.
+- `cover_visible` (Phase 7) — the value is genuinely visible/printed on the book's
+  front cover, extracted by Gemini vision but grounded in real visual evidence on
+  the cover itself — distinct from `ai_inferred`, which covers a model's broader
+  inference/enrichment guesses (description, tags, category) not directly backed
+  by cover text. Use it only when the stored field is genuinely supported by
+  visible cover evidence (e.g., a title/author/ISBN actually printed on the
+  cover); do not use it merely because AI looked at the image.
 - `human_corrected` — a human (teacher or admin) changed the value from what it was.
 - `human_verified` — a human reviewed an existing (often AI-inferred) value and explicitly
   accepted it without changing it — e.g., tapping **Confirm** on the Add-a-Book screen
@@ -349,11 +356,28 @@ books/copies split rather than pointing at two overlapping targets.
 | `content_hash` / `perceptual_hash` | text | |
 | `status` | enum(`pending`,`processing`,`completed`,`needs_review`,`failed`,`skipped_duplicate`), not null default `pending` | |
 | `review_reason` | text | nullable, e.g. `multiple_books_or_ambiguous_image` |
+| `intake_draft` | jsonb | nullable (Phase 7) — see below |
 | `resulting_copy_id` | uuid, FK → `book_copies.id` | nullable |
 | `error_message` | text | nullable |
 | `retry_count` | smallint, not null default 0 | |
 | `started_at` / `completed_at` | timestamptz | nullable |
 | `created_at` | timestamptz | |
+
+**`intake_draft` (Phase 7)** — everything needed to resume a single-book intake
+without re-uploading the photo or re-running any provider call: confirmed Drive
+source metadata (file id/filename/MIME/size/checksum — never the ephemeral
+resumable upload session URI), validated cover-identification evidence, normalized
+metadata candidates, the reconciliation result, duplicate-candidate outcome,
+enrichment suggestion, category suggestion, and any teacher edits already made.
+Postgres enforces no schema on a `jsonb` column — the real contract is
+`src/lib/intake/draft.ts`'s `IntakeDraftSchema` (Zod), validated on every write
+(`parseIntakeDraft`) and read (`readIntakeDraft`, which degrades to "start a fresh
+intake" rather than throwing on a shape it doesn't recognize — e.g. after a future
+schema-version bump). Explicit boundary: a validated **application-domain**
+draft, never an arbitrary raw AI response dump — it never contains a secret, an
+image byte, or a resumable Drive upload session URI, and never persists verbose
+model chain-of-thought or raw AI prose, only the already-schema-validated
+structures the vision/enrichment provider calls produce.
 
 ### `book_identity_candidates` / `metadata_provider_cache`
 
@@ -599,3 +623,12 @@ design:**
 - **No third `.sql` migration for the existing-database `search_text` backfill** — a deliberate
   choice, explained in `docs/DECISIONS.md`, to avoid reimplementing `buildSearchIndexText()`'s
   composition logic a second time in raw SQL. See `docs/SEARCH.md` §4.
+
+**2026-09-20/21 — Phase 7 implementation (Add a Book):**
+- **`provenance_source_type` enum gains `cover_visible`**, inserted before
+  `human_corrected` — see §6 for the exact evidence-boundary distinction from
+  `ai_inferred`.
+- **`ingestion_items.intake_draft` (jsonb, nullable) added** — see §10 for the
+  full contract and its `IntakeDraftSchema` validation boundary.
+- **No other schema changes.** One migration
+  (`drizzle/0003_naive_silver_surfer.sql`, both statements above).

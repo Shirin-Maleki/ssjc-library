@@ -1967,3 +1967,80 @@ changed.
 **Relevant files:** `src/app/api/intake/cover/route.ts` (new);
 `src/components/add/uploadToSession.ts`; `src/components/add/AddBookFlow.tsx`;
 `src/lib/intake/actions.ts`.
+
+## Phase 7: vision/enrichment model, API surface, and metadata provider order
+
+**Vision/enrichment model: `gemini-3.8-flash`.** Re-confirmed against
+`ai.google.dev`'s live documentation on 2026-09-20 (the same date this pipeline was
+implemented, per the phase brief's own mandate to re-check current docs rather than
+rely on training-data knowledge) — current stable/GA multimodal Flash model at that
+date, with documented JPEG/PNG/WebP/HEIC/HEIF image input and structured JSON
+output support, real `@google/genai` JavaScript SDK support. This is the same model
+name the phase brief itself tentatively suggested; re-confirmation found no reason
+to deviate.
+
+**API surface: the SDK's `ai.models.generateContent` (legacy-shaped) method, not
+the newer "Interactions API" (`ai.interactions.create`).** Both are current and
+officially supported as of the implementation date — the Interactions API reached
+GA on 2026-06-22 and is now the default shown across most of Google's own doc
+pages, but Google's own documentation still describes `generateContent` as "fully
+supported... for the foreseeable future" for exactly this kind of single-turn model
+call. This pipeline does one bounded, single-turn structured-extraction call per
+step (cover identification, enrichment) — none of the Interactions API's
+differentiating capabilities (managed agents, long-running/background execution,
+multi-turn agentic orchestration) apply here, and `generateContent`'s
+request/response shape was already the one this codebase's Phase 5 embedding
+adapter and every other provider boundary already work with, making it the lower-
+friction, equally-correct choice rather than adopting a newer surface for its own
+sake.
+
+**Real, reproducible finding during implementation**: live calls to
+`gemini-3.8-flash` with `responseSchema` set (structured output) intermittently
+returned real HTTP 503 ("This model is currently experiencing high demand")
+responses that plain-text/`responseMimeType`-only calls to the same model did not
+reproduce — suggesting the schema-constrained-decoding code path has its own, more
+constrained serving capacity. A retry resolved it every time observed during
+implementation. This is the direct justification for `src/lib/ai/retry.ts`'s
+bounded retry-with-backoff (2 retries, exponential backoff with jitter, capped
+delay) — a real, reproduced condition, not defensive speculation.
+
+**Metadata providers, in preference order: Google Books (when
+`GOOGLE_BOOKS_API_KEY` is configured) then Open Library (always).** Re-confirmed
+against current official documentation the same date: Google Books' `volumes`
+search endpoint works without a key for light use but Google's own guidance is
+that a key is needed for reliable/production use (free tier, ~10,000
+requests/day) — comfortably enough for a low-volume single-book intake workflow.
+Open Library's *current* Search API is `/search.json`, not the legacy `/api/books`
+endpoint some older tutorials reference; it needs a descriptive `User-Agent`
+identifying the calling application per Open Library's own guidance, and its
+`language` field values are 3-letter MARC codes (e.g. `"eng"`), not ISO 639-1 —
+reconciliation (`src/lib/intake/reconciliation.ts`) maps the small set of codes it
+can confidently map and leaves the rest unmapped rather than guessing.
+
+**Real-provider validation (2026-09-21, using 5 real photos from the actual SSJC
+Drive collection, explicitly approved as a bounded, temporary validation set — see
+`docs/AI_PIPELINE.md` for the full results and honesty caveats)**: one real JPEG
+cover ("Kenny and the Little Kickers") was successfully identified end to end —
+real Gemini vision call, real Open Library match, real reconciliation
+(`high_confidence`, score 95), real duplicate check (correct `no_match`), and a
+real `saveNewBook` transaction (verified, then cleaned up from the test database).
+The remaining 4 real photos (1 JPEG, 3 real iPhone HEIC) hit a real, sustained
+Gemini rate limit (`rate_limited`, confirmed non-recoverable after waits of 25s,
+90s, and 3 minutes within the same session) — almost certainly a free-tier daily
+quota exhausted by this same session's cumulative real API usage, not a code
+defect. HEIC-specific findings: real Drive download and the documented
+resize-skip/passthrough behavior both worked correctly for all 3 real HEIC files;
+the actual Gemini vision response for a real HEIC file could not be captured in
+this session due to the rate limit, so that specific claim (Gemini accepting real
+iPhone HEIC bytes) rests on Google's documentation, not a fresh live call this
+session — reported honestly rather than claimed as freshly re-verified.
+
+**Consequences:** none of this required a code change — the model/provider/retry
+decisions were already correctly implemented; this entry records the reasoning and
+real evidence that was previously undocumented. See `docs/AI_PIPELINE.md` for the
+full architecture and `docs/COSTS.md` for observed latency/cost figures.
+
+**Relevant files:** `src/lib/ai/geminiProvider.ts`; `src/lib/ai/retry.ts`;
+`src/lib/metadataProviders/googleBooksProvider.ts`;
+`src/lib/metadataProviders/openLibraryProvider.ts`; `docs/AI_PIPELINE.md` (new);
+`docs/COSTS.md`.

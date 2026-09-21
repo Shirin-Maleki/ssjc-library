@@ -198,11 +198,12 @@ posture specifically:
   never sent to a browser, cached only in `oauthClient.ts`'s own module-level variable
   until shortly before expiry.
 - **The resumable upload session URI is ephemeral capability data, not a credential in
-  the OAuth sense — but still sensitive.** It is the ONE Google-related value ever allowed
-  to cross the server/browser boundary (the future Phase 7 upload flow), because it grants
-  only the narrow ability to complete one specific, already-server-validated upload
-  (exact filename/MIME/size/parent), not standing Drive access. It is never logged, never
-  put in analytics, never included in a thrown error message
+  the OAuth sense — but still sensitive**, and (as of Phase 7's corrected upload
+  architecture — see below and `docs/DECISIONS.md`) it now never crosses the
+  server/browser boundary at all; the browser was originally meant to receive it
+  directly, but real testing proved that specific mechanic doesn't survive
+  browser CORS enforcement. It is never logged, never put in analytics, never
+  included in a thrown error message
   (`tests/unit/googleDrive/googleDriveProvider.test.ts` asserts this).
 - **No teacher Google login exists or is planned for this integration.** SSJC staff
   authenticate exactly as before (shared password + signed session cookie, above) —
@@ -235,15 +236,57 @@ posture specifically:
   content; this rule is a standing constraint for whoever does capture future photos, not
   something Phase 6's own code enforces (it has no way to inspect image *content*).
 
-## What's explicitly out of scope through Phase 6
+## Add a Book / AI intake (Phase 7)
+
+Full architecture in `docs/AI_PIPELINE.md`; the upload-architecture correction
+(and why) is in `docs/DECISIONS.md`. Security posture specifically:
+
+- **Every intake Server Action and the upload Route Handler independently require
+  a valid staff session** — `requireStaffSession()` (redirect-on-failure, used by
+  every `src/lib/intake/actions.ts` export, matching every other authenticated
+  mutation in this codebase) or a direct `getSession()`/401-JSON check in the
+  Route Handler (which can't use a redirecting guard, since it's an XHR endpoint,
+  not a page navigation). No Google Sign-In, no individual teacher accounts —
+  Add a Book is gated by the same shared staff session as everything else.
+- **`GEMINI_API_KEY` and `GOOGLE_BOOKS_API_KEY` never reach the browser** — read
+  only inside `src/lib/ai/index.ts`/`src/lib/metadataProviders/index.ts`
+  (`import "server-only"`) and the concrete provider classes they construct.
+  Every Gemini/metadata-provider call happens inside a Server Action or the
+  upload Route Handler; the browser never talks to `generativelanguage.googleapis.com`,
+  `googleapis.com/books`, or `openlibrary.org` directly.
+- **The corrected upload architecture (server-mediated, not direct-to-Drive) does
+  not weaken the Drive security model** — OAuth tokens/client secret still never
+  reach the browser (unchanged from Phase 6); the browser now only ever talks to
+  this app's own same-origin `/api/intake/cover` endpoint, never a Drive URL at
+  all. See `docs/DECISIONS.md` for the full real-CORS-testing record.
+- **Every Server Action input is Zod-validated or otherwise checked before use** —
+  ids are checked with `isUuid()` before any database query; category slugs are
+  checked against the live active-category list (`validateCategorySuggestion()`),
+  never trusted as a raw string from the client or the model; enum-shaped fields
+  (language code, fiction type, format) are checked against the app's own real
+  vocabularies before being persisted.
+- **Every external provider's output is treated as untrusted input, not a trusted
+  fact** — Gemini's JSON response is Zod-validated (`CoverIdentificationSchema`/
+  `EnrichmentSuggestionSchema`) before any field is read; Google Books/Open
+  Library responses are normalized through a fixed shape
+  (`NormalizedMetadataCandidate`) that never lets a raw provider JSON field reach
+  the database directly.
+- **The intake draft (`ingestion_items.intake_draft`) is a validated
+  application-domain object, never a raw AI dump** — `src/lib/intake/draft.ts`'s
+  `IntakeDraftSchema` is enforced on every write (`parseIntakeDraft`) and read
+  (`readIntakeDraft`, degrading to "start fresh" on a shape mismatch rather than
+  throwing). It never contains a secret, an image byte, or a resumable upload
+  session URI — the Drive source is stored as its already-durable file id plus
+  safe metadata, never the ephemeral session used to create it.
+
+## What's explicitly out of scope through Phase 7
 
 - The rate limiter is still in-memory, not backed by the now-real `login_attempts` table (see
   above).
-- No file uploads yet, so upload validation (type/size allowlisting) isn't implemented —
-  lands with the Add-a-Book flow in Phase 7. Phase 6 builds the *provider-level* validation
-  (`src/lib/googleDrive/validation.ts`) that Phase 7 will call into; there is still no
-  teacher-facing upload UI.
 - No Google Sheets credentials exist yet — Phase 9 owns that decision.
+- No Phase 8 Admin Review interface exists yet — a `needs_review`/`pending_review`
+  intake is persisted (Phase 7) but there is no staff UI to act on it beyond the
+  same Add a Book flow resuming it.
 
 ## Verified, not assumed
 
