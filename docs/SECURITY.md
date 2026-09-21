@@ -1,9 +1,11 @@
 # Security
 
-Status: reflects what's actually implemented through Phase 5 (in progress). High-level security architecture
-was proposed in `docs/ARCHITECTURE.md` §14/§21 during Phase 0; this document tracks the real,
-built mechanism and is the first doc in the target structure to graduate out of
-`ARCHITECTURE.md`, per the plan to split docs out once their subject is operationally real.
+Status: reflects what's actually implemented through Phase 7 (implemented, correction pass
+applied — review pending; see `docs/IMPLEMENTATION_STATUS.md` for the exact current phase
+state). High-level security architecture was proposed in `docs/ARCHITECTURE.md` §14/§21 during
+Phase 0; this document tracks the real, built mechanism and is the first doc in the target
+structure to graduate out of `ARCHITECTURE.md`, per the plan to split docs out once their
+subject is operationally real.
 
 ## Database credential handling (Phase 4)
 
@@ -241,24 +243,31 @@ posture specifically:
 Full architecture in `docs/AI_PIPELINE.md`; the upload-architecture correction
 (and why) is in `docs/DECISIONS.md`. Security posture specifically:
 
-- **Every intake Server Action and the upload Route Handler independently require
-  a valid staff session** — `requireStaffSession()` (redirect-on-failure, used by
-  every `src/lib/intake/actions.ts` export, matching every other authenticated
-  mutation in this codebase) or a direct `getSession()`/401-JSON check in the
-  Route Handler (which can't use a redirecting guard, since it's an XHR endpoint,
-  not a page navigation). No Google Sign-In, no individual teacher accounts —
-  Add a Book is gated by the same shared staff session as everything else.
+- **Every intake Server Action and both upload Route Handlers independently
+  require a valid staff session** — `requireStaffSession()` (redirect-on-failure,
+  used by every `src/lib/intake/actions.ts` export, matching every other
+  authenticated mutation in this codebase) or a direct `getSession()`/401-JSON
+  check in `/api/intake/cover/init` and `/api/intake/cover/chunk` (which can't use
+  a redirecting guard, since both are XHR endpoints, not a page navigation). No
+  Google Sign-In, no individual teacher accounts — Add a Book is gated by the same
+  shared staff session as everything else.
 - **`GEMINI_API_KEY` and `GOOGLE_BOOKS_API_KEY` never reach the browser** — read
   only inside `src/lib/ai/index.ts`/`src/lib/metadataProviders/index.ts`
   (`import "server-only"`) and the concrete provider classes they construct.
   Every Gemini/metadata-provider call happens inside a Server Action or the
   upload Route Handler; the browser never talks to `generativelanguage.googleapis.com`,
   `googleapis.com/books`, or `openlibrary.org` directly.
-- **The corrected upload architecture (server-mediated, not direct-to-Drive) does
-  not weaken the Drive security model** — OAuth tokens/client secret still never
-  reach the browser (unchanged from Phase 6); the browser now only ever talks to
-  this app's own same-origin `/api/intake/cover` endpoint, never a Drive URL at
-  all. See `docs/DECISIONS.md` for the full real-CORS-testing record.
+- **The corrected upload architecture (server-mediated and chunked, not
+  direct-to-Drive) does not weaken the Drive security model** — OAuth tokens/
+  client secret still never reach the browser (unchanged from Phase 6); the
+  browser only ever talks to this app's own same-origin `/api/intake/cover/init`
+  and `/api/intake/cover/chunk` endpoints, never a Drive URL at all. The real
+  Drive resumable-session URI never reaches the browser in any form either — it's
+  encrypted inside an opaque, short-lived (2h) token (`jose` `EncryptJWT`,
+  `A256GCM`, key derived from `SESSION_SECRET` via HKDF with a distinct context
+  string — no new secret) that the browser holds meaninglessly and echoes back on
+  each chunk request. See `docs/DECISIONS.md` for the full real-CORS-testing
+  record and the later deployment-size correction (Phase 7 correction pass §1).
 - **Every Server Action input is Zod-validated or otherwise checked before use** —
   ids are checked with `isUuid()` before any database query; category slugs are
   checked against the live active-category list (`validateCategorySuggestion()`),

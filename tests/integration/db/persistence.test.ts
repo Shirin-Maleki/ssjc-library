@@ -3,6 +3,8 @@ import { eq } from "drizzle-orm";
 import { books, bookCopies, ingestionItems, ingestionJobs, auditLog, reviewFlags } from "@/db/schema";
 import { saveNewBook, addAnotherCopy, saveForReview, type NewBookInput } from "@/lib/intake/persistence";
 import { createInitialDraft } from "@/lib/intake/draft";
+import { DrizzleSearchRepository } from "@/db/repositories/searchRepository";
+import { EMPTY_FILTERS } from "@/lib/search/filters";
 import { requireTestDatabaseUrl, createTestDb } from "./testDb";
 
 const hasTestDb = (() => {
@@ -16,6 +18,7 @@ const hasTestDb = (() => {
 
 describe.skipIf(!hasTestDb)("intake/persistence (against a real Postgres database)", () => {
   const { db, client } = hasTestDb ? createTestDb() : ({} as ReturnType<typeof createTestDb>);
+  const searchRepository = hasTestDb ? new DrizzleSearchRepository(db) : (undefined as unknown as DrizzleSearchRepository);
   const createdBookIds: string[] = [];
   const createdIngestionItemIds: string[] = [];
   const createdJobIds: string[] = [];
@@ -178,7 +181,7 @@ describe.skipIf(!hasTestDb)("intake/persistence (against a real Postgres databas
     expect(job.completedAt).not.toBeNull();
   });
 
-  it("saveForReview leaves the parent job running, never falsely 'completed' (§6 — no ingestion_job_status value exists for 'awaiting review')", async () => {
+  it("saveForReview marks the parent job completed — the automated run is done even though the ITEM still needs human review (Phase 7 final closure pass §2)", async () => {
     const ingestionItemId = await makeIngestionItem();
     const [item] = await db.select({ jobId: ingestionItems.jobId }).from(ingestionItems).where(eq(ingestionItems.id, ingestionItemId)).limit(1);
     const draft = createInitialDraft({ fileId: "drive-3", filename: "cover.jpg", mimeType: "image/jpeg", sizeBytes: 100, checksum: null });
@@ -186,12 +189,16 @@ describe.skipIf(!hasTestDb)("intake/persistence (against a real Postgres databas
     await saveForReview(db, { ingestionItemId, draft, reviewReason: "Needs a human look.", actorLabel: "staff" });
 
     const [job] = await db.select().from(ingestionJobs).where(eq(ingestionJobs.id, item.jobId)).limit(1);
-    expect(job.status).toBe("running");
-    expect(job.processedItems).toBe(0);
-    expect(job.completedAt).toBeNull();
+    expect(job.status).toBe("completed");
+    expect(job.processedItems).toBe(1);
+    expect(job.completedAt).not.toBeNull();
+
+    const [itemRow] = await db.select().from(ingestionItems).where(eq(ingestionItems.id, ingestionItemId)).limit(1);
+    expect(itemRow.status).toBe("needs_review");
+    expect(itemRow.intakeDraft).not.toBeNull();
   });
 
-  it("saveForReview creates a real pending_review book + review_flags row when real minimum data was established", async () => {
+  it("saveForReview creates a real pending_review book + review_flags row when real minimum data was established, and it stays excluded from normal Find", async () => {
     const ingestionItemId = await makeIngestionItem();
     const draft = createInitialDraft({ fileId: "drive-2", filename: "cover.jpg", mimeType: "image/jpeg", sizeBytes: 100, checksum: null });
 
@@ -218,5 +225,10 @@ describe.skipIf(!hasTestDb)("intake/persistence (against a real Postgres databas
     const flags = await db.select().from(reviewFlags).where(eq(reviewFlags.bookId, result.bookId!));
     expect(flags.length).toBe(1);
     expect(flags[0].flagType).toBe("low_identification_confidence");
+
+    // The pending_review book this Review Later run created must never surface in
+    // normal teacher Find, exactly like any other non-"active" book (visibility.ts).
+    const { ids } = await searchRepository.findVisibleBookIdsPage({ filters: EMPTY_FILTERS, limit: 500 });
+    expect(ids).not.toContain(result.bookId);
   });
 });

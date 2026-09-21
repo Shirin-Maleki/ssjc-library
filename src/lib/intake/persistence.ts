@@ -335,14 +335,16 @@ export interface SaveForReviewResult {
  * `review_status` visibility rule) plus a `review_flags` row, only when real
  * minimum bibliographic data was actually established.
  *
- * **Deliberately leaves the parent `ingestion_jobs` row at `"running"`** (Phase 7
- * correction pass §6) rather than marking it completed — the outcome genuinely
- * isn't settled yet (that's the whole point of Review Later), and the existing
- * `ingestion_job_status` enum has no distinct "awaiting human review" value of its
- * own (only `ingestion_item_status` does, via `needs_review`) — adding one would be
- * exactly the "new workflow engine" this correction pass was told not to build.
- * `processed_items` is correspondingly left unincremented. A future review action
- * (Phase 8) is what should eventually move this job to a real terminal state.
+ * **Marks the parent `ingestion_jobs` row `"completed"`** (Phase 7 final closure
+ * pass §2, revising the correction pass's earlier "leave it running" choice): the
+ * automated single-add *processing run* is what a job tracks, and that run is done
+ * — cover captured, identified (or honestly not), reconciled, duplicate-checked —
+ * the same as any other single-item job. What remains is a future HUMAN review of
+ * the resulting ITEM, which `ingestion_items.status = 'needs_review'` (plus the
+ * preserved draft) already represents; that pending work belongs to the item, not
+ * to the job that produced it. No new `ingestion_job_status` enum value, no
+ * workflow engine — this reuses the exact same `completeParentJob()` helper the
+ * other two terminal save paths already use.
  */
 export async function saveForReview(db: Database, input: SaveForReviewInput): Promise<SaveForReviewResult> {
   return db.transaction(async (tx) => {
@@ -379,10 +381,13 @@ export async function saveForReview(db: Database, input: SaveForReviewInput): Pr
       });
     }
 
-    await tx
+    const [updatedItem] = await tx
       .update(ingestionItems)
       .set({ status: "needs_review", reviewReason: input.reviewReason, intakeDraft: input.draft })
-      .where(eq(ingestionItems.id, input.ingestionItemId));
+      .where(eq(ingestionItems.id, input.ingestionItemId))
+      .returning({ jobId: ingestionItems.jobId });
+
+    await completeParentJob(tx, updatedItem.jobId);
 
     await tx.insert(auditLog).values({
       actorLabel: input.actorLabel,

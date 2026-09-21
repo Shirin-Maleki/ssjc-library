@@ -44,23 +44,39 @@ pass on the same date, several hours later, found the quota had reset (a real
 canary call succeeded on the first attempt). However, sustained real testing
 during that same later pass reproduced a *second*, related pattern: real
 `rate_limited`/timeout responses returned intermittently even with 25-90
-second gaps between calls, recovering for some calls (one full real
-identify→enrichment-attempt succeeded) but not others (two further real cases
-failed on identify across ~5 minutes of retries each). This looks like a
-real, live Gemini capacity constraint on the structured-output
-(`responseSchema`) code path specifically — consistent with the original
-implementation-time finding that structured-output calls have their own,
-more constrained serving capacity — rather than a strict per-key quota
-counter. See `docs/AI_PIPELINE.md` §10b for the full case-by-case record.
+second gaps between calls, recovering for some calls (one real
+identify-through-duplicate-check attempt succeeded, though its own
+enrichment call was separately rate-limited — a partial, not a full,
+success) but not others (two further real cases failed on identify across
+~5 minutes of retries each). This looks like a real, live Gemini capacity
+constraint on the structured-output (`responseSchema`) code path specifically
+— consistent with the original implementation-time finding that
+structured-output calls have their own, more constrained serving capacity —
+rather than a strict per-key quota counter. See `docs/AI_PIPELINE.md` §10b
+for the full case-by-case record.
 
-**Latency observed** (real, complete successes — "Kenny and the Little
-Kickers" and "The Cat Food Mystery," `docs/AI_PIPELINE.md` §10/§10b): image
-resize 85-93ms; Gemini identify ~5-19s (real variance observed, not a fixed
-number); Open Library lookup ~1.2-4.4s cold / ~6ms cache-hit on retry (real
-cache behavior confirmed); reconciliation and duplicate check <10ms each
-(in-process, DB-only). A full identify-through-enrichment round trip is
-expected in the 5-20 second range end to end under normal (non-rate-limited)
-conditions —
+**A concrete daily quota number, finally observed directly (final closure
+pass §5, `docs/AI_PIPELINE.md` §10c)**: one bounded real-attempt round during
+the closure pass got Google's own error body back, naming the exact
+constraint — `GenerateRequestsPerDayPerProjectPerModel-FreeTier`,
+`quotaValue: 20`. This project's free tier allows only **20 real
+`gemini-3.8-flash` requests per day, total**, across every real call made
+that day (implementation, every validation round, and every closure-pass
+retry combined) — a very small budget that fully explains why sustained
+real-provider validation repeatedly ran into a wall within the same session,
+across every session so far. This is the first time a session has seen the
+literal number rather than inferring "some kind of daily limit" from
+retry behavior.
+
+**Latency observed** (the one real, fully complete success — "Kenny and the
+Little Kickers," `docs/AI_PIPELINE.md` §10; "The Cat Food Mystery,"
+`docs/AI_PIPELINE.md` §10b, reached the same latencies through
+duplicate-check but did not complete enrichment): image resize 85-93ms;
+Gemini identify ~5-19s (real variance observed, not a fixed number); Open
+Library lookup ~1.2-4.4s cold / ~6ms cache-hit on retry (real cache behavior
+confirmed); reconciliation and duplicate check <10ms each (in-process,
+DB-only). A full identify-through-enrichment round trip is expected in the
+5-20 second range end to end under normal (non-rate-limited) conditions —
 consistent with the "Identifying book…" / "Finding book details…" / "Preparing
 details…" staged UI (`docs/PRODUCT_SPEC.md`) actually having real work to show
 during each stage, not a decorative delay.

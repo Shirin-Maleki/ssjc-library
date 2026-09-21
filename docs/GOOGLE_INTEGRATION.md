@@ -181,16 +181,52 @@ session is unconditionally blocked by CORS — reproduced live, not assumed. Ful
 evidence and reasoning in `docs/DECISIONS.md`, "Phase 7: the Phase 6-approved
 direct-browser-to-Drive upload does not survive a real browser."
 
-**What Phase 7 actually built** (`src/app/api/intake/cover/route.ts`): the
-browser POSTs raw bytes to this app's own same-origin Route Handler (real
-`xhr.upload.onprogress` for that leg), which performs `initiateResumableUpload()`,
-the PUT, and `confirmUploadedFile()` entirely server-side (server-to-server
-traffic is never subject to browser CORS, exactly like `scripts/google/smoke.ts`'s
-own real PUT). The browser never receives a Drive URL, a session URI, or a token
-at any point — a *stronger* version of the original security property, not a
-weaker one. `initiateResumableUpload()` still binds the session narrowly to an
-exact filename, MIME type, declared size, and verified parent folder before ever
-contacting Drive; that part of the design was correct and unchanged.
+**What Phase 7 first built, and what it looks like now**: the first
+server-mediated version had the browser POST the *entire* source photo to one
+same-origin Route Handler in a single request. That worked, but the correction
+pass (§1) found it was itself deployment-blocking: Vercel's real serverless
+Function request-body limit is 4.5 MB, and source covers here are allowed up to
+25 MiB — any cover over the limit would fail to deploy correctly. The final
+architecture (`src/app/api/intake/cover/init/route.ts` +
+`src/app/api/intake/cover/chunk/route.ts`) keeps the same server-mediated shape
+but splits the relay into <=4 MiB chunks:
+
+```
+browser File/Blob
+  → POST /api/intake/cover/init
+      server performs initiateResumableUpload() (same call as before, same
+      narrow binding to filename/MIME type/declared size/verified parent
+      folder before ever contacting Drive)
+      server encrypts the resulting Drive session URI into an opaque token
+      (jose EncryptJWT/A256GCM, src/lib/intake/uploadSessionToken.ts) and
+      returns ONLY that token to the browser
+  → browser slices the file into <=4 MiB chunks and PUTs each to
+      /api/intake/cover/chunk, echoing the same opaque token every time
+      (real xhr.upload.onprogress per chunk, src/components/add/uploadToSession.ts)
+  → server decrypts the token, relays each chunk to the real Drive session
+      with a real Content-Range header (src/lib/intake/uploadChunking.ts),
+      entirely server-side (never subject to browser CORS, exactly like
+      scripts/google/smoke.ts's own real PUT)
+  → Drive's 308 "Resume Incomplete" response (or an explicit empty-body
+      Content-Range status-check request) tells the server exactly which
+      bytes Drive actually has, driving real resume/retry of one chunk —
+      never a blind resend of already-received bytes
+  → once Drive reports the file complete, confirmUploadedFile() independently
+      re-verifies it from Drive exactly as before, then the ingestion record
+      is created (src/lib/intake/ingestionRecord.ts)
+```
+
+The browser still never receives a Drive URL, a real Drive session URI, an
+OAuth token, or a client secret at any point — the encrypted opaque token it
+holds is meaningless outside this server (2-hour TTL, `A256GCM`, key derived
+from the existing `SESSION_SECRET` via HKDF with a distinct context string —
+no new secret to manage). This is the same security property the original
+design cared about, preserved through the chunking change, plus a new one:
+no individual request this app makes to itself ever exceeds the chosen
+deployment-safe chunk size, real-validated against live Drive with an
+11.62 MB file — 3 chunks, each confirmed <=4 MiB, local MD5 matching Drive's
+own returned `md5Checksum` exactly (original bytes preserved, no destructive
+recompression).
 
 ## Completion verification
 

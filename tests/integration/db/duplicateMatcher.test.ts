@@ -5,6 +5,9 @@ import { findDuplicateCandidates } from "@/lib/intake/duplicateMatcher";
 import { requireTestDatabaseUrl, createTestDb } from "./testDb";
 import { normalizeTitle } from "@/lib/search/normalize";
 import { computeSortTitle } from "@/lib/catalog/sortTitle";
+import { reconcileIdentity } from "@/lib/intake/reconciliation";
+import { resolveCandidateAcceptance } from "@/lib/intake/candidateAcceptance";
+import type { CoverIdentification } from "@/lib/ai/schemas";
 
 /**
  * Real-database duplicate-detection coverage (Phase 7, §17 of the phase brief)
@@ -32,6 +35,48 @@ describe.skipIf(!hasTestDb)("findDuplicateCandidates (against a real Postgres da
 
   it("finds an exact ISBN match as exact_copy_same_edition, detected by isbn_match", async () => {
     const result = await findDuplicateCandidates(db, { title: "Some Other Title Entirely", isbn13: "9780333710937" });
+    expect(result.outcome).toBe("exact_copy_same_edition");
+    expect(result.candidates[0].detectedBy).toBe("isbn_match");
+    expect(result.candidates[0].book.title).toBe("The Gruffalo");
+  });
+
+  it("E (Phase 7 final closure pass §1): a high-confidence candidate's real ISBN survives the acceptance gate and still exercises the exact-edition path end to end", async () => {
+    // The full real chain: cover evidence + a provider candidate whose ISBN
+    // genuinely matches what's visible on the cover -> reconcileIdentity scores an
+    // isbn match alone at 100 (high_confidence) -> resolveCandidateAcceptance
+    // adopts the ISBN into proposed values (proven independently in
+    // candidateAcceptance.test.ts) -> findDuplicateCandidates, given that adopted
+    // ISBN, correctly classifies it against the real seeded "The Gruffalo" row.
+    const coverEvidence: CoverIdentification = {
+      visibleTitle: "A Gruffalo Story",
+      visibleSubtitle: null,
+      visibleAuthors: null,
+      visibleIllustrators: null,
+      visiblePublisherOrImprint: null,
+      visibleLanguage: null,
+      visibleIsbn: "9780333710937",
+      visibleSeries: null,
+      candidateSearchTerms: [],
+      identityConfidenceLevel: "high",
+      evidenceNotes: "",
+    };
+    const providerCandidate = {
+      provider: "open_library" as const,
+      providerIdentifier: "/works/OLGRUFFALO1W",
+      title: "The Gruffalo",
+      isbn13: "9780333710937",
+    };
+    const reconciliation = reconcileIdentity(coverEvidence, [providerCandidate]);
+    expect(reconciliation.outcome).toBe("high_confidence");
+
+    const acceptance = resolveCandidateAcceptance(coverEvidence, reconciliation);
+    expect(acceptance.accepted).toBe(true);
+    expect(acceptance.proposedBookValues?.isbn13).toBe("9780333710937");
+
+    const result = await findDuplicateCandidates(db, {
+      title: acceptance.proposedBookValues!.title,
+      isbn13: acceptance.proposedBookValues!.isbn13 ?? undefined,
+    });
     expect(result.outcome).toBe("exact_copy_same_edition");
     expect(result.candidates[0].detectedBy).toBe("isbn_match");
     expect(result.candidates[0].book.title).toBe("The Gruffalo");

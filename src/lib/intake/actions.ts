@@ -12,7 +12,8 @@ import { getConfiguredMetadataProviders } from "@/lib/metadataProviders";
 import { getConfiguredEmbeddingProvider } from "@/lib/embeddings";
 import { generateEmbeddingForBook } from "@/lib/embeddings/generation";
 import { prepareAnalysisImage } from "./imagePrep";
-import { reconcileIdentity, resolveProviderLanguage } from "./reconciliation";
+import { reconcileIdentity } from "./reconciliation";
+import { resolveCandidateAcceptance, wasSelected as candidateWasSelected } from "./candidateAcceptance";
 import { lookupMetadataCandidates } from "./metadataLookup";
 import { findDuplicateCandidates, type DuplicateCandidate } from "./duplicateMatcher";
 import { validateCategorySuggestion } from "./categorySuggestion";
@@ -175,43 +176,47 @@ export async function lookupMetadataAction(ingestionItemId: string): Promise<Loo
     return { ...c, matchScore: scored?.score ?? 0, matchedSignals: scored?.matchedSignals ?? [] };
   });
   draft.reconciliationOutcome = reconciliation.outcome;
-  draft.selectedCandidateProviderIdentifier = reconciliation.best?.candidate.providerIdentifier ?? null;
+
+  // Identity-safety fix (Phase 7 final closure pass §1) — the actual gating logic
+  // lives in `candidateAcceptance.ts`'s pure `resolveCandidateAcceptance()`,
+  // specifically so it's unit-testable without a database connection or staff
+  // session. An "accepted" provider candidate — one whose fields are trusted enough
+  // to silently become canonical bibliographic data — requires `high_confidence`,
+  // never merely "the best-scoring candidate we saw." An `ambiguous`/`unresolved`
+  // best candidate is still ranked and still recorded for audit (both
+  // `draft.metadataCandidates` above and `book_identity_candidates` below), but is
+  // never adopted: adopting an uncertain candidate's ISBN, in particular, could let
+  // duplicate detection mistake it for proof of `exact_copy_same_edition` (see
+  // duplicateMatcher.ts's own conservative ISBN-only rule for that path — this is
+  // the upstream half of the same guarantee).
+  const acceptance = resolveCandidateAcceptance(coverEvidence, reconciliation);
+  draft.selectedCandidateProviderIdentifier = acceptance.selectedCandidateProviderIdentifier;
+  draft.proposedBookValues = acceptance.proposedBookValues;
 
   // Durable audit trail of every candidate considered (§7 of the correction pass) —
   // independent of the resumable draft above. Never blocks the intake on failure;
   // this is an audit convenience, not load-bearing for the pipeline itself.
+  // `wasSelected` mirrors the same acceptance gate — an ambiguous/unresolved
+  // candidate is retained here for review but always `wasSelected: false`.
   await persistIdentityCandidates(
     db,
     ingestionItemId,
     lookupResult.candidates.map((c) => ({
       candidate: c,
       matchScore: reconciliation.ranked.find((r) => r.candidate.providerIdentifier === c.providerIdentifier)?.score ?? 0,
-      wasSelected: c.providerIdentifier === reconciliation.best?.candidate.providerIdentifier,
+      wasSelected: candidateWasSelected(c, acceptance),
     }))
   ).catch(() => {});
 
-  const chosen = reconciliation.best?.candidate;
-  const resolvedLanguage: LanguageCode | undefined =
-    resolveProviderLanguage(coverEvidence?.visibleLanguage ?? undefined) ?? resolveProviderLanguage(chosen?.language) ?? undefined;
-
-  const title = coverEvidence?.visibleTitle ?? chosen?.title ?? null;
-  draft.proposedBookValues = title
-    ? {
-        title,
-        subtitle: coverEvidence?.visibleSubtitle ?? chosen?.subtitle ?? null,
-        authors: coverEvidence?.visibleAuthors ?? chosen?.authors ?? [],
-        illustrators: coverEvidence?.visibleIllustrators ?? [],
-        publisher: coverEvidence?.visiblePublisherOrImprint ?? chosen?.publisher ?? null,
-        languageCode: resolvedLanguage ?? null,
-        additionalLanguageCodes: [],
-        isbn10: chosen?.isbn10 ?? null,
-        isbn13: chosen?.isbn13 ?? (coverEvidence?.visibleIsbn && coverEvidence.visibleIsbn.length >= 13 ? coverEvidence.visibleIsbn : null),
-      }
-    : null;
   draft.pipelineStage = "reconciled";
   await saveDraft(ingestionItemId, draft);
 
-  return { ok: true, reconciliationOutcome: reconciliation.outcome, title, languageCode: resolvedLanguage ?? null };
+  return {
+    ok: true,
+    reconciliationOutcome: reconciliation.outcome,
+    title: acceptance.proposedBookValues?.title ?? null,
+    languageCode: acceptance.proposedBookValues?.languageCode ?? null,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -398,6 +403,15 @@ export async function confirmSaveAction(input: ConfirmSaveInput): Promise<Confir
   if (!categorySlug) return failure("insufficient_data", "A shelving category is needed before this book can be added.");
 
   const enrichment = draft.enrichmentSuggestion;
+
+  // `draft.selectedCandidateProviderIdentifier` is only ever set for an accepted
+  // (high-confidence) candidate as of the identity-safety fix in lookupMetadataAction
+  // above — an ambiguous/unresolved best guess never reaches here. Resolved once,
+  // reused for both provenance and display-cover derivation below.
+  const selectedCandidate = draft.selectedCandidateProviderIdentifier
+    ? draft.metadataCandidates.find((c) => c.providerIdentifier === draft.selectedCandidateProviderIdentifier)
+    : undefined;
+
   const provenance: ProvenanceInput[] = [];
   // Mutually exclusive per field — `book_field_provenance` enforces at most one
   // *current* row per (book, field) (its own partial unique index), so a field a
@@ -410,7 +424,14 @@ export async function confirmSaveAction(input: ConfirmSaveInput): Promise<Confir
   } else if (draft.coverEvidence?.visibleTitle) {
     provenance.push({ fieldKey: "title", sourceType: "cover_visible", confidenceLevel: draft.coverEvidence.identityConfidenceLevel });
   }
-  if (draft.selectedCandidateProviderIdentifier) provenance.push({ fieldKey: "isbn", sourceType: "external_provider" });
+  // Truthful provenance (Phase 7 final closure pass §1): record "external_provider"
+  // for the ISBN field only when the accepted candidate actually supplied the ISBN
+  // value being saved — never merely because a candidate was accepted for other
+  // fields. (`proposed.isbn13` can independently come from cover-visible evidence;
+  // that case gets no provenance row here rather than a false "external_provider" one.)
+  const isbn10FromProvider = Boolean(selectedCandidate?.isbn10 && selectedCandidate.isbn10 === proposed?.isbn10);
+  const isbn13FromProvider = Boolean(selectedCandidate?.isbn13 && selectedCandidate.isbn13 === proposed?.isbn13);
+  if (isbn10FromProvider || isbn13FromProvider) provenance.push({ fieldKey: "isbn", sourceType: "external_provider" });
   if (input.edits?.physicalCategorySlug) provenance.push({ fieldKey: "physical_category", sourceType: "human_verified" });
   else if (draft.categorySuggestion) provenance.push({ fieldKey: "physical_category", sourceType: "ai_inferred", confidenceLevel: draft.categorySuggestion.confidence ?? undefined });
 
@@ -418,9 +439,6 @@ export async function confirmSaveAction(input: ConfirmSaveInput): Promise<Confir
   // actually selected/reconciled metadata candidate, never the raw Drive
   // source original. See displayCover.ts for the trust boundary (confirmed
   // identity only, known provider host, upgraded to https).
-  const selectedCandidate = draft.selectedCandidateProviderIdentifier
-    ? draft.metadataCandidates.find((c) => c.providerIdentifier === draft.selectedCandidateProviderIdentifier)
-    : undefined;
   const displayCoverUrl = selectTrustworthyDisplayCoverUrl({
     reconciliationOutcome: draft.reconciliationOutcome,
     thumbnailUrl: selectedCandidate?.thumbnailUrl,

@@ -1,18 +1,21 @@
 # Implementation Status
 
-Last updated: 2026-09-21 (Phase 7 implemented, correction pass applied — review pending). This
-document is continuity insurance — it should always let another coding agent open this
-repository cold and know exactly where things stand. Keep it current at the end of every phase.
+Last updated: 2026-09-21 (Phase 7 implemented, correction pass and final closure pass both
+applied — review pending). This document is continuity insurance — it should always let another
+coding agent open this repository cold and know exactly where things stand. Keep it current at
+the end of every phase.
 
 ## Current phase
 
-**PHASE 7 IMPLEMENTED — CORRECTION PASS / REVIEW PENDING.** Not yet marked approved by this
-document itself — that determination belongs to the reviewer, not to whichever agent last
-touched the code. See "Completed work (Phase 7, 2026-09-20/21)" and "Completed work (Phase 7
-correction pass, 2026-09-21)" below for exactly what shipped and what's still genuinely open
-(real Google Books validation — no key available; a fresh live Gemini call against real HEIC
-bytes and a third real-provider validation case — both blocked by real, reproducible Gemini
-rate limits despite substantial genuine retry effort, not by a code defect). Phase 6 (Google
+**PHASE 7 IMPLEMENTED — FINAL CLOSURE PASS APPLIED / REVIEW PENDING.** Not yet marked approved by
+this document itself — that determination belongs to the reviewer, not to whichever agent last
+touched the code. See "Completed work (Phase 7, 2026-09-20/21)," "Completed work (Phase 7
+correction pass, 2026-09-21)," and "Completed work (Phase 7 final closure pass, 2026-09-21)"
+below for exactly what shipped and what's still genuinely open (real Google Books validation —
+no key available; a fresh live Gemini call against real HEIC bytes and a third full
+real-provider validation case — both blocked by a real, now concretely-identified Gemini
+free-tier daily quota of 20 requests/day plus real capacity constraints, despite substantial
+genuine retry effort across three separate sessions, not by a code defect). Phase 6 (Google
 Drive connection, including its 2026-09-20 correction pass) and Phase 5 (real search
 architecture, including its real-provider validation pass) remain complete and approved,
 unaffected except where Phase 7 built directly on Phase 6's Drive infrastructure — approved as
@@ -134,7 +137,7 @@ repository — verified directly (see "Security review" in this pass's report).
 | 4 | Real database | Complete (approved) |
 | 5 | Real search architecture | Complete (approved), real-provider validation 2026-09-17 |
 | 6 | Google Drive connection | **Complete — real Google Drive validation passed 2026-09-20** |
-| 7 | Single Add-a-Book flow | Not started |
+| 7 | Single Add-a-Book flow | **Implemented — correction pass and final closure pass both applied, review pending (see "Current phase" above)** |
 | 8 | Admin review + taxonomy | Not started |
 | 9 | Google Sheets | Not started |
 | 10 | Bulk import engine | Not started |
@@ -711,28 +714,110 @@ area's own doc section (`docs/AI_PIPELINE.md`, `docs/DECISIONS.md`,
 8. **Real-provider validation, round 2** — the original round's rate limit
    was confirmed as a genuine daily quota (reset by this pass, verified with
    a real canary call). A fresh bounded sample of 3 real covers (2 JPEG, 1
-   HEIC) found 1 full success and 2 blocked by a further, real, reproducible
-   Gemini capacity constraint on the structured-output path despite
-   substantial genuine retry effort — reported honestly, not glossed over.
-   Full results: `docs/AI_PIPELINE.md` §10b.
+   HEIC) found: "The Cat Food Mystery" succeeded through identity/metadata/
+   reconciliation/duplicate-check/display-cover selection, but its
+   enrichment call specifically hit a real, transient rate limit on this
+   attempt (not a full end-to-end success); the HEIC case and "Megan
+   Rapinoe" both failed at identification, blocked by a further, real,
+   reproducible Gemini capacity constraint on the structured-output path
+   despite substantial genuine retry effort. Combined with round 1's one
+   genuinely complete case ("Kenny and the Little Kickers," including a
+   real save), **1 fully complete real end-to-end case exists across both
+   rounds**, reported honestly rather than rounded up — full results:
+   `docs/AI_PIPELINE.md` §10b.
 
-**Testing**: 462 unit tests (was 450), 92 integration tests (was 85), 117 E2E
-tests (was 101) — all passing, real Chromium + real WebKit.
+**Testing**: 452 unit tests, 92 integration tests, 117 E2E tests (real
+Chromium + real WebKit) at the end of this correction pass — all passing.
+(A later commit message in this pass's own history stated 462/450, which was
+simply wrong; the final closure pass re-ran the suite from a clean state and
+found 452, confirming the number in this document, not that commit message —
+see "Completed work (Phase 7 final closure pass...)" below for this pass's
+own final counts, which differ further because it added new regression
+tests of its own.)
+
+## Completed work (Phase 7 final closure pass, 2026-09-21)
+
+A further review against the pushed correction-pass commits
+(`2bd73e84ff50abde04dc11c74507fb7f4806f02a`) found one more real identity-
+safety gap plus reporting/documentation accuracy issues. All fixed:
+
+1. **Identity-safety fix — ambiguous/unresolved provider metadata no longer
+   silently accepted.** `lookupMetadataAction` previously adopted the
+   best-*scoring* provider candidate's fields (including ISBN) into
+   `proposedBookValues` regardless of reconciliation outcome — an
+   `ambiguous` or `unresolved` guess could supply an ISBN that duplicate
+   detection would then treat as proof of `exact_copy_same_edition`. The
+   acceptance gate is now extracted into a pure, independently unit-tested
+   function (`src/lib/intake/candidateAcceptance.ts`,
+   `resolveCandidateAcceptance()`): only a `high_confidence` outcome is
+   "accepted" and eligible to populate canonical proposed values or
+   `book_identity_candidates.was_selected`. Cover-visible evidence remains
+   independent of this gate (a teacher can still confirm from cover-visible
+   evidence + Quick Edit with no provider metadata at all). 5 new unit
+   tests (`candidateAcceptance.test.ts`, cases A/B/D + 1 more) plus 2 new
+   integration tests (`identityCandidates.test.ts`'s case C,
+   `duplicateMatcher.test.ts`'s case E, the latter proving the legitimate
+   high-confidence ISBN path still reaches `exact_copy_same_edition`
+   correctly end to end).
+2. **Review Later job lifecycle revised** — `saveForReview` now marks the
+   parent `ingestion_jobs` row `completed` (previously left `running`
+   forever, per the correction pass's own earlier, now-superseded
+   reasoning). The automated single-add processing run is what a job
+   tracks, and that run is genuinely done; the pending human review belongs
+   to the ITEM (`ingestion_items.status = needs_review` with the preserved
+   draft), not to the job. No new `ingestion_job_status` value, no workflow
+   engine — reuses the existing `completeParentJob()` helper. New/updated
+   integration coverage in `persistence.test.ts` proves: job completed with
+   coherent `processed_items`/`completed_at`, item `needs_review` with the
+   draft preserved, and the resulting `pending_review` book stays excluded
+   from normal Find.
+3. **Documentation corrected to match the actual final upload
+   architecture** — `docs/AI_PIPELINE.md`, `docs/GOOGLE_INTEGRATION.md`,
+   `docs/SECURITY.md`, `docs/ARCHITECTURE.md`, and `docs/TESTING.md` all
+   still described (or, for `SECURITY.md`, dated itself to) the original
+   single-request server-mediated upload or an earlier phase — all updated
+   to describe the real chunked `/api/intake/cover/init` +
+   `/api/intake/cover/chunk` architecture, the encrypted opaque
+   upload-session token, and the real Content-Range/308 resume behavior.
+4. **Report/test-count inconsistency fixed** — a prior report said 452 unit
+   tests; commit `420980e`'s own message said 462. Re-ran the suite from a
+   clean state rather than guessing: 452 was correct at that commit. Also
+   corrected imprecise validation wording that called "The Cat Food
+   Mystery" a full success when its enrichment call was actually
+   rate-limited (a partial success, through duplicate-check only) — see
+   `docs/AI_PIPELINE.md` §10b, `docs/COSTS.md`.
+5. **One bounded additional real-provider attempt** — 3 real attempts with
+   real backoff (0s, 20s, 20s gaps), stopped per the brief's own "don't
+   burn quota indefinitely" instruction. No third full case reached, but a
+   genuinely new, concrete finding: Google's own error body named the exact
+   constraint, `GenerateRequestsPerDayPerProjectPerModel-FreeTier`,
+   `quotaValue: 20` — this project's Gemini free tier allows only 20 real
+   `gemini-3.8-flash` requests per day, total. Full record:
+   `docs/AI_PIPELINE.md` §10c, `docs/COSTS.md`.
+
+**Testing (this pass's own final counts, re-run from a clean state)**: 457
+unit tests (was 452), 94 integration tests (was 92), 117 E2E tests
+(unchanged) — all passing, real Chromium + real WebKit; `npm run
+evaluate:search` also re-run (1/1 passing, no relevance regression).
 
 ## In-progress / not yet done for Phase 7
 
 **Not real-tested**: Google Books (no `GOOGLE_BOOKS_API_KEY` was available —
 Open Library alone was validated live twice, across both validation rounds,
 and is sufficient for metadata lookup to function); a fresh live Gemini
-vision call against real HEIC bytes (blocked by a real, reproducible rate
-limit across two separate validation sessions, despite substantial genuine
-retry effort each time — the resize-skip/passthrough logic was confirmed
-correct with 4 real HEIC files total, and the HEIC input-support claim itself
-rests on Google's documentation from implementation-time re-confirmation, not
-a fresh live call); a third real-provider validation case beyond the 2 that
-did fully succeed (§8 of the correction pass asked for 3; 2 were achieved,
-the third blocked by the same real rate limit). All recorded honestly in
-`docs/AI_PIPELINE.md` §10/§10b and `docs/COSTS.md`, not glossed over.
+vision call against real HEIC bytes (blocked by a real Gemini free-tier daily
+quota — now concretely confirmed at 20 requests/day, see above — across three
+separate validation sessions, despite substantial genuine retry effort each
+time; the resize-skip/passthrough logic was confirmed correct with 4 real
+HEIC files total, and the HEIC input-support claim itself rests on Google's
+documentation from implementation-time re-confirmation, not a fresh live
+call); a third full real-provider validation case (§8 of the correction pass
+and §5 of the final closure pass both asked for 3 full cases; across every
+attempt made, only 1 fully complete real end-to-end case exists, plus 1
+partial success that reached duplicate-check but not enrichment — both
+blocked by the same real, now concretely-quantified rate limit, not by a
+code defect). All recorded honestly in `docs/AI_PIPELINE.md` §10/§10b/§10c
+and `docs/COSTS.md`, not glossed over.
 
 **Not built, by explicit design** (per the phase brief's own exclusions): no
 processing of the existing ~1,500-photo collection, no Phase 8 Admin Review

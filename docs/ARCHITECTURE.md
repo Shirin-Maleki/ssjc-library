@@ -220,18 +220,23 @@ docs (Open Library's `/search.json`, not the legacy `/api/books`): `docs/AI_PIPE
 
 Same shape as originally planned (capture → upload → identify → metadata lookup →
 reconciliation → duplicate check → enrichment → category suggestion → teacher
-confirmation), with one architecturally significant correction: the upload step
-is **server-mediated**, not a direct browser-to-Drive PUT as originally approved
-in Phase 6 — real Chromium testing proved that specific mechanic is blocked by
-Drive's CORS behavior (full evidence in `docs/DECISIONS.md`). The browser now
-POSTs to this app's own `src/app/api/intake/cover/route.ts` (a Route Handler —
-the first one in this codebase; every other mutation is a Server Action, but
-Server Actions expose no upload-progress events), which relays bytes to Drive
-server-side. Everything downstream of a confirmed upload is Server Actions
-(`src/lib/intake/actions.ts`), matching every other authenticated mutation in
-this codebase. A confident "same edition" outcome produces a `book_copies` row
-(never a second `books` row); see `docs/DATA_MODEL.md` §7 for the exact
-duplicate-resolution mapping and `docs/AI_PIPELINE.md` for the full pipeline.
+confirmation), with two architecturally significant corrections to the upload
+step. First: it is **server-mediated**, not a direct browser-to-Drive PUT as
+originally approved in Phase 6 — real Chromium testing proved that specific
+mechanic is blocked by Drive's CORS behavior (full evidence in
+`docs/DECISIONS.md`). Second (Phase 7 correction pass §1): a naive server-mediated
+upload sending the whole file in one request would itself exceed Vercel's real
+4.5 MB serverless request-body limit, so the relay is chunked. The browser POSTs
+to two Route Handlers — `src/app/api/intake/cover/init/route.ts` (creates the
+Drive resumable session, returns an encrypted opaque token) and
+`src/app/api/intake/cover/chunk/route.ts` (relays each <=4 MiB chunk, one request
+per chunk) — the first Route Handlers in this codebase; every other mutation is a
+Server Action, but Server Actions expose no upload-progress events. Everything
+downstream of a confirmed upload is Server Actions (`src/lib/intake/actions.ts`),
+matching every other authenticated mutation in this codebase. A confident "same
+edition" outcome produces a `book_copies` row (never a second `books` row); see
+`docs/DATA_MODEL.md` §7 for the exact duplicate-resolution mapping and
+`docs/AI_PIPELINE.md` for the full pipeline.
 
 ## 12. Search architecture: layered retrieval with graceful degradation
 
@@ -668,6 +673,14 @@ Not created in Phase 0 — this is the target structure Phase 1 will actually cr
 Unchanged — see [`docs/IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md).
 
 ## 28. Changelog
+
+**2026-09-21 — Phase 7 final closure pass:**
+- §11's single-request upload Route Handler (`src/app/api/intake/cover/route.ts`,
+  introduced in the entry below) was replaced during the correction pass with a
+  chunked pair, `src/app/api/intake/cover/init/route.ts` +
+  `src/app/api/intake/cover/chunk/route.ts` — the original single-request design
+  would have exceeded Vercel's real 4.5 MB request-body limit for any cover over
+  that size. Full detail: `docs/AI_PIPELINE.md` §6, `docs/GOOGLE_INTEGRATION.md`.
 
 **2026-09-20/21 — Phase 7 implementation (Add a Book):**
 - §9/§10/§11 rewritten from planning-stage descriptions ("unchanged from the

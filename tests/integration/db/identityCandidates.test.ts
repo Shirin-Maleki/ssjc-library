@@ -2,6 +2,9 @@ import { describe, expect, it, afterEach, afterAll } from "vitest";
 import { eq } from "drizzle-orm";
 import { ingestionItems, ingestionJobs, bookIdentityCandidates } from "@/db/schema";
 import { persistIdentityCandidates } from "@/lib/intake/identityCandidates";
+import { reconcileIdentity } from "@/lib/intake/reconciliation";
+import { resolveCandidateAcceptance, wasSelected } from "@/lib/intake/candidateAcceptance";
+import type { CoverIdentification } from "@/lib/ai/schemas";
 import { requireTestDatabaseUrl, createTestDb } from "./testDb";
 
 const hasTestDb = (() => {
@@ -79,6 +82,50 @@ describe.skipIf(!hasTestDb)("intake/identityCandidates (against a real Postgres 
     const rows = await db.select().from(bookIdentityCandidates).where(eq(bookIdentityCandidates.ingestionItemId, ingestionItemId));
     expect(rows.length).toBe(1);
     expect(rows[0].providerIdentifier).toBe("ol-2");
+  });
+
+  it("C (Phase 7 final closure pass §1): an ambiguous candidate with an ISBN is retained for audit, but persisted with was_selected=false", async () => {
+    const ingestionItemId = await makeIngestionItem();
+    const coverEvidence: CoverIdentification = {
+      visibleTitle: "The Gruffalo",
+      visibleSubtitle: null,
+      visibleAuthors: null,
+      visibleIllustrators: null,
+      visiblePublisherOrImprint: null,
+      visibleLanguage: null,
+      visibleIsbn: null,
+      visibleSeries: null,
+      candidateSearchTerms: [],
+      identityConfidenceLevel: "low",
+      evidenceNotes: "",
+    };
+    // Title-only match (score 45) — real evidence, but ambiguous, not high_confidence.
+    const ambiguousCandidate = {
+      provider: "open_library" as const,
+      providerIdentifier: "/works/OLAMBIG1W",
+      title: "The Gruffalo",
+      isbn10: "0333710935",
+      isbn13: "9780333710937",
+    };
+    const reconciliation = reconcileIdentity(coverEvidence, [ambiguousCandidate]);
+    expect(reconciliation.outcome).toBe("ambiguous");
+    const acceptance = resolveCandidateAcceptance(coverEvidence, reconciliation);
+
+    await persistIdentityCandidates(db, ingestionItemId, [
+      {
+        candidate: ambiguousCandidate,
+        matchScore: reconciliation.ranked[0]?.score ?? 0,
+        wasSelected: wasSelected(ambiguousCandidate, acceptance),
+      },
+    ]);
+
+    const rows = await db.select().from(bookIdentityCandidates).where(eq(bookIdentityCandidates.ingestionItemId, ingestionItemId));
+    expect(rows.length).toBe(1);
+    expect(rows[0].providerIdentifier).toBe("/works/OLAMBIG1W");
+    expect((rows[0].rawResponse as { isbn13?: string }).isbn13).toBe("9780333710937");
+    expect(rows[0].wasSelected).toBe(false);
+    // And the ISBN never reached proposed values in the first place.
+    expect(acceptance.proposedBookValues?.isbn13).toBeNull();
   });
 
   it("an empty candidate list clears any previous rows without inserting new ones", async () => {

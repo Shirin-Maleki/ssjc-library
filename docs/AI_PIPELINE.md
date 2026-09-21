@@ -13,7 +13,7 @@ additional copy of an existing one) through a single server-orchestrated pipelin
 
 ```
 cover photo (browser)
-  → upload (src/app/api/intake/cover/route.ts, server-mediated — see §6)
+  → upload (server-mediated, chunked — /api/intake/cover/init + /chunk, see §6)
   → cover identification (Gemini vision, src/lib/ai/)
   → bibliographic metadata lookup (Google Books / Open Library, src/lib/metadataProviders/)
   → identity reconciliation (deterministic scoring, src/lib/intake/reconciliation.ts)
@@ -120,17 +120,52 @@ input, not a custom camera UI.
 
 ## 6. Google Drive integration (source storage)
 
-Full architecture in `docs/GOOGLE_INTEGRATION.md`; the one thing that changed in
-Phase 7 is documented in detail in `docs/DECISIONS.md`: **the originally-approved
+Full architecture in `docs/GOOGLE_INTEGRATION.md`; the two things that changed
+since the original Phase 7 design are documented in detail in `docs/DECISIONS.md`.
+
+**First** (original implementation): **the originally-approved
 direct-browser-to-Drive upload does not work** — real Chromium testing proved
 Google's resumable-upload CORS behavior is bound to the `Origin` header present at
 session-*creation* time, which is necessarily server-side here, so a browser can
-never successfully PUT to a server-created session. The corrected architecture is
-server-mediated: the browser POSTs raw bytes to this app's own
-`src/app/api/intake/cover/route.ts`, which relays them to Drive server-side
-(never subject to browser CORS). Drive OAuth tokens/client secret still never
-reach the browser — the only security property the original design cared about is
-unchanged.
+never successfully PUT to a server-created session. The corrected architecture
+became server-mediated instead.
+
+**Second** (Phase 7 correction pass §1): a naive server-mediated upload — the
+browser POSTing the entire source photo in one request — would itself exceed
+Vercel's real 4.5 MB serverless Function request-body limit for any cover over
+that size (this pipeline allows source covers up to 25 MiB). The final,
+deployment-safe architecture chunks the relay:
+
+```
+browser File
+  → POST /api/intake/cover/init (src/app/api/intake/cover/init/route.ts)
+      server creates a Drive resumable-upload session
+      browser receives an encrypted, opaque upload-session token — never a
+      usable Google URL/credential of any kind
+  → browser sends <=4 MiB chunks to PUT /api/intake/cover/chunk
+      (src/app/api/intake/cover/chunk/route.ts), one request per chunk
+  → server relays each chunk to the Drive resumable session using real
+      Content-Range semantics (src/lib/intake/uploadChunking.ts,
+      src/components/add/uploadToSession.ts)
+  → Drive's own authoritative received-offset (its 308 "Resume Incomplete"
+      response, or an explicit empty-body status-check request) drives
+      retry/resume of an interrupted chunk — never a blind resend
+  → once Drive confirms the file complete, the server independently confirms
+      the final Drive object and creates the ingestion record
+      (src/lib/intake/ingestionRecord.ts)
+```
+
+Real Drive OAuth tokens/client secret never reach the browser, exactly as
+before. The Drive resumable-session URI itself also never reaches the browser
+in any form — it lives only inside the encrypted token
+(`src/lib/intake/uploadSessionToken.ts`, a `jose` JWE, `A256GCM`, key derived
+from `SESSION_SECRET` via HKDF with a distinct context string — never a second
+secret to manage) that the browser holds opaquely and echoes back on each
+chunk request. Original bytes are preserved end to end — no destructive
+recompression — and no individual browser→server request exceeds the chosen
+4 MiB chunk bound, real-validated against live Drive with an 11.62 MB file
+(2.6x over Vercel's limit): 3 chunks, each confirmed <=4 MiB, local MD5
+matching Drive's own returned `md5Checksum` exactly.
 
 ## 7. Duplicate detection
 
@@ -241,18 +276,55 @@ were the actual subject of any photo in this bounded sample. Reported
 honestly per the correction brief's own instruction, rather than expanding
 into a broader/recursive search of the ~1,500-photo collection to find one.
 
-**Net result across both validation rounds**: 2 of the requested 3 fresh
-real-cover cases reached full success this round (only 1 fully completed,
-"The Cat Food Mystery" — the HEIC and third JPEG case were both blocked by a
-real, reproducible rate limit despite genuine retry effort spread over
-several minutes); combined with round 1's one full success ("Kenny and the
-Little Kickers," including a real save), **2 fully complete real end-to-end
-cases exist in total**, short of the requested 3. This reflects genuinely
-observed Gemini capacity constraints on the structured-output
-(`responseSchema`) code path under sustained real testing across two
-sessions, not unwillingness to retry — see `docs/COSTS.md` for the
-consolidated rate-limit finding. Real HEIC-with-Gemini remains unconfirmed by
-a fresh live call as of this pass, for the same reason.
+**Net result across both validation rounds, stated precisely (Phase 7 final
+closure pass §4 corrected the wording here — the previous draft of this
+section overstated "The Cat Food Mystery" as a full success)**: round 1
+produced exactly **one** genuinely complete real end-to-end case ("Kenny and
+the Little Kickers" — identify through a real `saveNewBook`). Round 2's "The
+Cat Food Mystery" reached identity → metadata → reconciliation →
+duplicate-check → display-cover selection correctly, but its enrichment call
+specifically hit a real, transient rate limit on that attempt — a genuine
+partial success, not a full end-to-end one. The HEIC case and "Megan Rapinoe"
+both failed at identification. **Across both rounds: 1 fully complete
+real end-to-end case, 1 partial success (through duplicate-check, enrichment
+not reached), 2 failures at identification** — short of the requested 3 full
+successes. This reflects genuinely observed Gemini capacity constraints under
+sustained real testing across multiple sessions, not unwillingness to retry —
+see `docs/COSTS.md` for the consolidated rate-limit finding, including a
+concrete real quota number discovered in §10c below. Real HEIC-with-Gemini
+remains unconfirmed by a fresh live call as of this pass, for the same
+reason.
+
+## 10c. One bounded final real-provider attempt (2026-09-21, final closure pass §5)
+
+After the §1-§9 code fixes, one additional bounded attempt was made to reach a
+third full real-cover case, as the closure pass explicitly requested — a
+minimal real Gemini call (a text-only canary, not even a full vision call),
+retried a small, bounded number of times with real gaps, never a
+multi-minute campaign:
+
+1. Immediate attempt: real HTTP 503, `"This model is currently experiencing
+   high demand. Spikes in demand are usually temporary."`
+2. Retried after a real 20-second gap: real HTTP 429,
+   `RESOURCE_EXHAUSTED`, with Google's own error body naming the exact
+   constraint: **`GenerateRequestsPerDayPerProjectPerModel-FreeTier`,
+   quotaValue: 20** — i.e., this Google Cloud project's free tier allows
+   only **20 `gemini-3.8-flash` requests per day, total**, and this session's
+   cumulative real calls (this pass's own retries plus everything already
+   spent today) had exhausted it.
+3. Retried once more after another real 20-second gap: real HTTP 503 (high
+   demand) again.
+
+Stopped here — 3 real attempts with real backoff is a reasonable bounded
+effort for what the brief asked ("do not spend hours retrying... if still
+blocked after reasonable retries, report that honestly and STOP"). No third
+full real-cover case was reached this pass. **This is a genuinely valuable
+finding despite the non-result**: it's the first time this project has seen
+Google's own error body name the exact daily quota number (20 requests/day)
+rather than just observing "still rate-limited after N minutes" — this
+finally gives a concrete, documented explanation for the rate-limiting
+pattern observed across every validation session so far, recorded in
+`docs/COSTS.md`.
 
 ## 11. What's out of scope for Phase 7
 
