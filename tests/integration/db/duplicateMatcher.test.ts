@@ -37,10 +37,26 @@ describe.skipIf(!hasTestDb)("findDuplicateCandidates (against a real Postgres da
     expect(result.candidates[0].book.title).toBe("The Gruffalo");
   });
 
-  it("finds an exact title+author+language match as exact_copy_same_edition without an ISBN", async () => {
+  it("classifies a title+author+language match with no ISBN as same_title_different_edition, NEVER exact_copy_same_edition (Phase 7 correction pass §3)", async () => {
+    // Title/author/language agreement alone is not edition-level evidence — a real
+    // second printing, edition, or translation could share all three. Only a
+    // genuine ISBN match (the test above) may claim "exact same edition."
     const result = await findDuplicateCandidates(db, { title: "The Gruffalo", authors: ["Julia Donaldson"], languageCode: "en" });
-    expect(result.outcome).toBe("exact_copy_same_edition");
+    expect(result.outcome).toBe("same_title_different_edition");
     expect(result.candidates[0].detectedBy).toBe("title_author_match");
+  });
+
+  it("a non-matching ISBN alongside matching title+author+language still never claims exact_copy_same_edition", async () => {
+    // The caller genuinely supplied an ISBN, but it doesn't match any real book —
+    // Step 1 correctly finds nothing, and Step 2's title-similarity classification
+    // must not paper over that with a false "exact match."
+    const result = await findDuplicateCandidates(db, {
+      title: "The Gruffalo",
+      authors: ["Julia Donaldson"],
+      languageCode: "en",
+      isbn13: "9999999999999",
+    });
+    expect(result.outcome).toBe("same_title_different_edition");
   });
 
   it("classifies a same title+author but different language as same_work_different_language", async () => {

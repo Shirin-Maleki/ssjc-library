@@ -9,6 +9,7 @@ import {
   bookTags,
   contributors,
   ingestionItems,
+  ingestionJobs,
   physicalCategories,
   publishers,
   reviewFlags,
@@ -106,6 +107,20 @@ async function upsertTag(tx: Transaction, name: string): Promise<string> {
     .onConflictDoUpdate({ target: tags.normalizedName, set: { name } })
     .returning({ id: tags.id });
   return row.id;
+}
+
+/**
+ * Marks the parent `ingestion_jobs` row completed alongside its one `ingestion_items`
+ * row (Phase 7 correction pass §6) — the upload route creates the job with
+ * `status: "running"`/`total_items: 1`, but until now nothing ever advanced it past
+ * that, leaving every job permanently "running" regardless of real outcome. A
+ * single-add job has exactly one item, so "this item finished" and "this job
+ * finished" are the same real-world event — reads `jobId` back from the item update
+ * that already ran (`.returning()`), no separate lookup needed. Never a new workflow
+ * engine — just the two rows a single-item job always had, finally kept coherent.
+ */
+async function completeParentJob(tx: Transaction, jobId: string): Promise<void> {
+  await tx.update(ingestionJobs).set({ status: "completed", processedItems: 1, completedAt: new Date() }).where(eq(ingestionJobs.id, jobId));
 }
 
 /**
@@ -224,10 +239,12 @@ export async function saveNewBook(db: Database, input: NewBookInput): Promise<Ne
       .values({ bookId, sourceIngestionItemId: input.ingestionItemId })
       .returning({ id: bookCopies.id });
 
-    await tx
+    const [completedItem] = await tx
       .update(ingestionItems)
       .set({ status: "completed", resultingCopyId: copyRow.id, completedAt: new Date() })
-      .where(eq(ingestionItems.id, input.ingestionItemId));
+      .where(eq(ingestionItems.id, input.ingestionItemId))
+      .returning({ jobId: ingestionItems.jobId });
+    await completeParentJob(tx, completedItem.jobId);
 
     await tx.insert(auditLog).values({
       actorLabel: input.actorLabel,
@@ -267,10 +284,12 @@ export async function addAnotherCopy(db: Database, input: AnotherCopyInput): Pro
       .values({ bookId: input.bookId, sourceIngestionItemId: input.ingestionItemId })
       .returning({ id: bookCopies.id });
 
-    await tx
+    const [completedItem] = await tx
       .update(ingestionItems)
       .set({ status: "completed", resultingCopyId: copyRow.id, completedAt: new Date() })
-      .where(eq(ingestionItems.id, input.ingestionItemId));
+      .where(eq(ingestionItems.id, input.ingestionItemId))
+      .returning({ jobId: ingestionItems.jobId });
+    await completeParentJob(tx, completedItem.jobId);
 
     await tx.insert(auditLog).values({
       actorLabel: input.actorLabel,
@@ -315,6 +334,15 @@ export interface SaveForReviewResult {
  * `pending_review` book (kept out of normal Find by the existing, unchanged
  * `review_status` visibility rule) plus a `review_flags` row, only when real
  * minimum bibliographic data was actually established.
+ *
+ * **Deliberately leaves the parent `ingestion_jobs` row at `"running"`** (Phase 7
+ * correction pass §6) rather than marking it completed — the outcome genuinely
+ * isn't settled yet (that's the whole point of Review Later), and the existing
+ * `ingestion_job_status` enum has no distinct "awaiting human review" value of its
+ * own (only `ingestion_item_status` does, via `needs_review`) — adding one would be
+ * exactly the "new workflow engine" this correction pass was told not to build.
+ * `processed_items` is correspondingly left unincremented. A future review action
+ * (Phase 8) is what should eventually move this job to a real terminal state.
  */
 export async function saveForReview(db: Database, input: SaveForReviewInput): Promise<SaveForReviewResult> {
   return db.transaction(async (tx) => {

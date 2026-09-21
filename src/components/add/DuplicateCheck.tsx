@@ -9,6 +9,11 @@ export interface DuplicateCandidateViewData {
   authors: string[];
   languageCode: string;
   publisher: string | null;
+  /** A real, previously-verified display cover for the existing catalog book
+   * (Phase 7 correction pass §2) — absent for most real books today (nothing
+   * populates it yet outside Add-a-Book's own confirmed-identity saves), in
+   * which case the typographic placeholder box below is shown instead. */
+  displayCoverUrl: string | null;
 }
 
 interface DuplicateCheckProps {
@@ -53,9 +58,13 @@ export function DuplicateCheck({
           <p className="text-xs text-text-muted">Just photographed</p>
         </div>
         <div className="flex flex-col items-center gap-1">
-          <div className="flex h-32 w-24 items-center justify-center rounded-md border border-border bg-surface-subtle p-2 text-center text-[10px] leading-tight text-text-muted">
-            {candidate.title}
-          </div>
+          {candidate.displayCoverUrl ? (
+            <img src={candidate.displayCoverUrl} alt="" className="h-32 w-24 rounded-md border border-border object-cover" />
+          ) : (
+            <div className="flex h-32 w-24 items-center justify-center rounded-md border border-border bg-surface-subtle p-2 text-center text-[10px] leading-tight text-text-muted">
+              {candidate.title}
+            </div>
+          )}
           <p className="text-xs text-text-muted">In the library</p>
         </div>
       </div>

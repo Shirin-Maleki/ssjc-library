@@ -40,15 +40,30 @@ export function BookCover({ book, size = "md", className }: BookCoverProps) {
   const composition = COMPOSITIONS[book.cover.variant % COMPOSITIONS.length];
   const author = book.authors[0];
   const isLeftRule = composition.rulePosition === "left";
+  const sizeClass = size === "sm" ? "w-16" : "w-24 sm:w-28";
+
+  // A real, previously-verified display URL (Phase 7 — see BookCoverSpec's own
+  // doc comment) renders directly; every fixture book and any real book without
+  // one falls back to the typographic placeholder below, unchanged from Phase 2.
+  if (book.cover.displayUrl) {
+    // A real external provider URL (Google Books/Open Library) — plain <img>,
+    // matching the same accepted pattern (and lint warning) already used
+    // throughout src/components/add/ for dynamic/external image sources; not
+    // worth configuring next/image's static remote-pattern allowlist for one
+    // small, already-bounded set of covers.
+    return (
+      <img
+        src={book.cover.displayUrl}
+        alt={`Cover of ${book.title}`}
+        className={cn("aspect-[2/3] shrink-0 rounded-md border border-border object-cover", sizeClass, className)}
+        loading="lazy"
+      />
+    );
+  }
 
   return (
     <div
-      className={cn(
-        "relative flex aspect-[2/3] shrink-0 flex-col overflow-hidden rounded-md border border-border",
-        composition.fieldBg,
-        size === "sm" ? "w-16" : "w-24 sm:w-28",
-        className
-      )}
+      className={cn("relative flex aspect-[2/3] shrink-0 flex-col overflow-hidden rounded-md border border-border", composition.fieldBg, sizeClass, className)}
       role="img"
       aria-label={`Cover of ${book.title}`}
     >

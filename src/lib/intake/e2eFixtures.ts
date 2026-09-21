@@ -1,4 +1,5 @@
 import type { CoverIdentification } from "@/lib/ai/schemas";
+import type { NormalizedMetadataCandidate } from "@/lib/metadataProviders/provider";
 import { isE2EFakeProvidersEnabled } from "@/lib/e2eTestFlags";
 
 export { isE2EFakeProvidersEnabled };
@@ -67,6 +68,18 @@ export function buildFakeCoverEvidence(filename: string): CoverIdentification {
       visibleIsbn: "9780333710937",
     };
   }
+  if (filename.toLowerCase().includes("similartitle")) {
+    // Same real seeded title, deliberately no ISBN and a different author — lands
+    // in same_title_different_edition (Phase 7 correction pass §3: title alone is
+    // never enough for an exact-edition claim), the AMBIGUOUS duplicate UI path,
+    // for E2E coverage of the "Different book" flow (§4).
+    return {
+      ...BASE_EVIDENCE,
+      visibleTitle: "The Gruffalo",
+      visibleAuthors: ["A Totally Different Author"],
+      visibleLanguage: "English",
+    };
+  }
   const words = filename
     .replace(/\.[a-z0-9]+$/i, "")
     .split(/[-_]+/)
@@ -78,4 +91,29 @@ export function buildFakeCoverEvidence(filename: string): CoverIdentification {
     visibleAuthors: ["E2E Fixture Author"],
     visibleLanguage: "English",
   };
+}
+
+/**
+ * Fake metadata-lookup candidates (`lookupMetadataAction`'s fake-mode branch)
+ * — separate from vision evidence because real metadata lookup is a genuinely
+ * distinct pipeline step. Only a filename containing "displaycover" gets a
+ * candidate at all (with a real-shaped, trusted `thumbnailUrl`), so the E2E
+ * suite can exercise the actual display-cover save-and-render path
+ * end-to-end (Phase 7 correction pass §2) without every other fixture
+ * scenario's `high_confidence`/ISBN-match behavior changing. The identifier
+ * embeds the same evidence title so reconciliation's own real title-matching
+ * logic — not a shortcut — is what produces `high_confidence` here.
+ */
+export function buildFakeMetadataCandidates(filename: string, evidenceTitle: string | null): NormalizedMetadataCandidate[] {
+  if (!filename.toLowerCase().includes("displaycover") || !evidenceTitle) return [];
+  return [
+    {
+      provider: "open_library",
+      providerIdentifier: `e2e-fixture-${crypto.randomUUID()}`,
+      title: evidenceTitle,
+      authors: ["E2E Fixture Author"],
+      language: "eng",
+      thumbnailUrl: "https://covers.openlibrary.org/b/id/8225631-M.jpg",
+    },
+  ];
 }

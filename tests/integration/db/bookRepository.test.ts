@@ -107,4 +107,27 @@ describe.skipIf(!hasTestDb)("DrizzleBookRepository (against a real, seeded Postg
     expect(projected?.ageMaxMonths).toBeUndefined();
     await db.delete(books).where(eq(books.id, row.id));
   });
+
+  it("projects a real display_cover_url when the row has one (Phase 7 correction pass §2)", async () => {
+    const [row] = await db
+      .insert(books)
+      .values({
+        title: "Book With A Real Display Cover",
+        normalizedTitle: "book with a real display cover",
+        sortTitle: "Book With A Real Display Cover",
+        languageCode: "en",
+        displayCoverUrl: "https://covers.openlibrary.org/b/id/999-M.jpg",
+        displayCoverSource: "external_provider_thumbnail",
+      })
+      .returning();
+    const projected = await repository.getBookById(row.id);
+    expect(projected?.cover.displayUrl).toBe("https://covers.openlibrary.org/b/id/999-M.jpg");
+    await db.delete(books).where(eq(books.id, row.id));
+  });
+
+  it("leaves cover.displayUrl undefined (never a placeholder string) for a book with no display cover", async () => {
+    const all = await repository.listBooks();
+    const gruffalo = all.find((b) => b.title === "The Gruffalo");
+    expect(gruffalo!.cover.displayUrl).toBeUndefined();
+  });
 });

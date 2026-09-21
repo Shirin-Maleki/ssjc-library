@@ -64,6 +64,34 @@ test.describe("Add a Book", () => {
     await expect(page.getByText("Stories & Imagination")).toBeVisible();
   });
 
+  test("a confirmed identity with a trustworthy provider thumbnail saves and renders a real display cover in Find (Phase 7 correction pass §2)", async ({
+    page,
+  }) => {
+    await uploadCover(page, "new-book-displaycover-test.png");
+    const confirmHeading = page.getByRole("heading", { name: /New Book Displaycover Test/ });
+    await expect(confirmHeading).toBeVisible({ timeout: 15000 });
+    // The fixture title embeds a fresh randomUUID() (e2eFixtures.ts) — captured here
+    // so the later Find search matches only THIS run's book, never another
+    // desktop/mobile project's run of the same test sharing the one E2E database.
+    const fullTitle = (await confirmHeading.textContent())!.trim();
+
+    await page.getByRole("button", { name: "Quick edit" }).click();
+    await page.getByLabel("Physical category").selectOption({ label: "Stories & Imagination" });
+    await page.getByRole("button", { name: "Confirm / Add book" }).click();
+    await expect(page.getByText("Added to SSJC Library")).toBeVisible({ timeout: 15000 });
+
+    await page.goto("/find");
+    await page.getByRole("combobox").fill(fullTitle);
+    await page.keyboard.press("Enter");
+    const resultHeading = page.getByRole("heading", { level: 3, name: fullTitle, exact: true });
+    await expect(resultHeading).toBeVisible();
+
+    const resultCard = resultHeading.locator("xpath=ancestor::*[self::li or self::article][1]");
+    const coverImg = resultCard.locator("img");
+    await expect(coverImg).toBeVisible();
+    await expect(coverImg).toHaveAttribute("src", "https://covers.openlibrary.org/b/id/8225631-M.jpg");
+  });
+
   test("saving without a category shows a real, visible error rather than doing nothing", async ({ page }) => {
     await uploadCover(page, "new-book-no-category-test.png");
     await expect(page.getByRole("heading", { name: /New Book No Category Test/ })).toBeVisible({ timeout: 15000 });
@@ -73,6 +101,10 @@ test.describe("Add a Book", () => {
   });
 
   test("exact duplicate: a cover matching a real seeded book offers Add another copy, not a second catalog entry", async ({ page }) => {
+    // The "gruffalo" fixture evidence (e2eFixtures.ts) includes the real seeded
+    // book's actual ISBN (9780333710937) — this deliberately exercises the ONLY
+    // path that may classify as exact_copy_same_edition (Phase 7 correction pass
+    // §3: title+author+language alone is never sufficient for that claim).
     await uploadCover(page, "gruffalo-cover-photo.png");
 
     await expect(page.getByText("This book is already in the library.")).toBeVisible({ timeout: 15000 });
@@ -83,6 +115,29 @@ test.describe("Add a Book", () => {
 
     await expect(page.getByText("Another copy was added.")).toBeVisible({ timeout: 15000 });
     await expect(page.getByText("The Gruffalo")).toBeVisible();
+  });
+
+  test("ambiguous duplicate: Different book shows the real captured title (never a filename) and proceeds without re-identifying (Phase 7 correction pass §3/§4)", async ({
+    page,
+  }) => {
+    await uploadCover(page, "similartitle-test.png");
+
+    await expect(page.getByText("Is this the same book?")).toBeVisible({ timeout: 15000 });
+    // The comparison must show the real identified title, never the raw uploaded
+    // filename (e.g. "similartitle-test.png") — §4 of the correction pass.
+    await expect(page.getByText(/You photographed: .*The Gruffalo/)).toBeVisible();
+    await expect(page.getByText(/similartitle-test\.png/)).toHaveCount(0);
+
+    await page.getByRole("button", { name: "Different book" }).click();
+
+    // Proceeds straight to confirmation with the same evidence already gathered —
+    // never a repeated "Identifying book…"/"Finding book details…" round trip.
+    await expect(page.getByRole("heading", { name: "The Gruffalo" })).toBeVisible({ timeout: 15000 });
+
+    await page.getByRole("button", { name: "Quick edit" }).click();
+    await page.getByLabel("Physical category").selectOption({ label: "Stories & Imagination" });
+    await page.getByRole("button", { name: "Confirm / Add book" }).click();
+    await expect(page.getByText("Added to SSJC Library")).toBeVisible({ timeout: 15000 });
   });
 
   test("Review later: preserves the intake instead of forcing an incomplete save", async ({ page }) => {

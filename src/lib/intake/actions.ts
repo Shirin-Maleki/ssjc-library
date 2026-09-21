@@ -2,9 +2,9 @@
 
 import { eq } from "drizzle-orm";
 import { db } from "@/db/client";
-import { ingestionItems } from "@/db/schema";
+import { ingestionItems, ingestionJobs, auditLog } from "@/db/schema";
 import { bookRepository, categoryRepository } from "@/db/repositories";
-import { requireStaffSession } from "@/lib/auth/guards";
+import { requireStaffSession, getSession } from "@/lib/auth/guards";
 import { isUuid } from "@/lib/utils/uuid";
 import { getConfiguredCoverStorageProvider, DriveProviderError } from "@/lib/googleDrive";
 import { getConfiguredBookIntelligenceProvider } from "@/lib/ai";
@@ -16,8 +16,10 @@ import { reconcileIdentity, resolveProviderLanguage } from "./reconciliation";
 import { lookupMetadataCandidates } from "./metadataLookup";
 import { findDuplicateCandidates, type DuplicateCandidate } from "./duplicateMatcher";
 import { validateCategorySuggestion } from "./categorySuggestion";
+import { selectTrustworthyDisplayCoverUrl } from "./displayCover";
+import { persistIdentityCandidates } from "./identityCandidates";
 import { readIntakeDraft, parseIntakeDraft, type IntakeDraft, type TeacherEdits } from "./draft";
-import { isE2EFakeProvidersEnabled, buildFakeCoverEvidence } from "./e2eFixtures";
+import { isE2EFakeProvidersEnabled, buildFakeCoverEvidence, buildFakeMetadataCandidates } from "./e2eFixtures";
 import { saveNewBook, addAnotherCopy, saveForReview, type ProvenanceInput } from "./persistence";
 import { isLanguageCode } from "@/lib/catalog/languages";
 import type { LanguageCode } from "@/lib/catalog/types";
@@ -140,19 +142,30 @@ export async function lookupMetadataAction(ingestionItemId: string): Promise<Loo
   const { draft } = await loadDraft(ingestionItemId);
   const coverEvidence = draft.coverEvidence;
 
-  const providers = getConfiguredMetadataProviders();
-  const query = {
-    isbn: coverEvidence?.visibleIsbn ?? undefined,
-    title: coverEvidence?.visibleTitle ?? undefined,
-    authors: coverEvidence?.visibleAuthors ?? undefined,
-    language: coverEvidence?.visibleLanguage ?? undefined,
-  };
-
   let lookupResult;
-  try {
-    lookupResult = query.isbn || query.title ? await lookupMetadataCandidates(db, providers, query) : { candidates: [], providersQueried: [], providerErrors: [] };
-  } catch {
-    lookupResult = { candidates: [], providersQueried: [], providerErrors: [{ provider: "unknown", category: "unexpected_provider_failure" }] };
+  if (isE2EFakeProvidersEnabled()) {
+    // E2E fixture path — see e2eFixtures.ts's own doc comment. Skips the real
+    // metadata providers entirely (already inert via getConfiguredMetadataProviders()
+    // returning none in E2E, but this also lets one specific fixture scenario
+    // produce a real-shaped candidate to exercise the display-cover path).
+    lookupResult = {
+      candidates: buildFakeMetadataCandidates(draft.driveSource.filename, coverEvidence?.visibleTitle ?? null),
+      providersQueried: [],
+      providerErrors: [],
+    };
+  } else {
+    const providers = getConfiguredMetadataProviders();
+    const query = {
+      isbn: coverEvidence?.visibleIsbn ?? undefined,
+      title: coverEvidence?.visibleTitle ?? undefined,
+      authors: coverEvidence?.visibleAuthors ?? undefined,
+      language: coverEvidence?.visibleLanguage ?? undefined,
+    };
+    try {
+      lookupResult = query.isbn || query.title ? await lookupMetadataCandidates(db, providers, query) : { candidates: [], providersQueried: [], providerErrors: [] };
+    } catch {
+      lookupResult = { candidates: [], providersQueried: [], providerErrors: [{ provider: "unknown", category: "unexpected_provider_failure" }] };
+    }
   }
 
   const reconciliation = coverEvidence ? reconcileIdentity(coverEvidence, lookupResult.candidates) : { outcome: "unresolved" as const, ranked: [] };
@@ -163,6 +176,19 @@ export async function lookupMetadataAction(ingestionItemId: string): Promise<Loo
   });
   draft.reconciliationOutcome = reconciliation.outcome;
   draft.selectedCandidateProviderIdentifier = reconciliation.best?.candidate.providerIdentifier ?? null;
+
+  // Durable audit trail of every candidate considered (§7 of the correction pass) —
+  // independent of the resumable draft above. Never blocks the intake on failure;
+  // this is an audit convenience, not load-bearing for the pipeline itself.
+  await persistIdentityCandidates(
+    db,
+    ingestionItemId,
+    lookupResult.candidates.map((c) => ({
+      candidate: c,
+      matchScore: reconciliation.ranked.find((r) => r.candidate.providerIdentifier === c.providerIdentifier)?.score ?? 0,
+      wasSelected: c.providerIdentifier === reconciliation.best?.candidate.providerIdentifier,
+    }))
+  ).catch(() => {});
 
   const chosen = reconciliation.best?.candidate;
   const resolvedLanguage: LanguageCode | undefined =
@@ -202,7 +228,13 @@ export interface DuplicateCandidateSummary {
   outcome: string;
 }
 
-export type CheckDuplicatesResult = ActionFailure | { ok: true; outcome: string; candidates: DuplicateCandidateSummary[] };
+export type CheckDuplicatesResult =
+  | ActionFailure
+  /** `capturedTitle` is the real identified/reconciled title (Phase 7 correction
+   * pass §4) — the UI's "You photographed: …" comparison text must show this,
+   * never the raw uploaded filename (e.g. "IMG_1234.HEIC"), which is meaningless
+   * to a teacher. */
+  | { ok: true; outcome: string; candidates: DuplicateCandidateSummary[]; capturedTitle: string | null };
 
 export async function checkDuplicatesAction(ingestionItemId: string): Promise<CheckDuplicatesResult> {
   await requireStaffSession();
@@ -214,7 +246,7 @@ export async function checkDuplicatesAction(ingestionItemId: string): Promise<Ch
     draft.duplicateOutcome = "no_match";
     draft.pipelineStage = "duplicate_checked";
     await saveDraft(ingestionItemId, draft);
-    return { ok: true, outcome: "no_match", candidates: [] };
+    return { ok: true, outcome: "no_match", candidates: [], capturedTitle: null };
   }
 
   let result;
@@ -238,13 +270,14 @@ export async function checkDuplicatesAction(ingestionItemId: string): Promise<Ch
   return {
     ok: true,
     outcome: result.outcome,
+    capturedTitle: proposed.title,
     candidates: result.candidates.map((c: DuplicateCandidate) => ({
       bookId: c.book.id,
       title: c.book.title,
       authors: c.book.authors,
       languageCode: c.book.languageCode,
       publisher: c.book.publisher || null,
-      displayCoverUrl: null,
+      displayCoverUrl: c.book.cover.displayUrl ?? null,
       outcome: c.outcome,
     })),
   };
@@ -255,6 +288,14 @@ export async function checkDuplicatesAction(ingestionItemId: string): Promise<Ch
 // ---------------------------------------------------------------------------
 
 export interface EnrichmentSummary {
+  /** The already-reconciled title/authors/language from `draft.proposedBookValues`
+   * (Phase 7 correction pass §4) — returned here so a caller resuming straight to
+   * enrichment (e.g. after "Different book") can build the full confirm view from
+   * this one action's result, without needing to remember a separately-cached
+   * identify/lookup result from an earlier, non-repeated call. */
+  title: string | null;
+  authors: string[];
+  languageCode: string | null;
   description: string | null;
   tags: string[];
   categorySlug: string | null;
@@ -269,7 +310,18 @@ export async function enrichAndSuggestCategoryAction(ingestionItemId: string): P
 
   const { draft } = await loadDraft(ingestionItemId);
   if (!draft.coverEvidence || !draft.proposedBookValues?.title) {
-    return { ok: true, summary: { description: null, tags: [], categorySlug: null, categoryLabel: null } };
+    return {
+      ok: true,
+      summary: {
+        title: draft.proposedBookValues?.title ?? null,
+        authors: draft.proposedBookValues?.authors ?? [],
+        languageCode: draft.proposedBookValues?.languageCode ?? null,
+        description: null,
+        tags: [],
+        categorySlug: null,
+        categoryLabel: null,
+      },
+    };
   }
 
   const activeCategories = await categoryRepository.listActiveCategories();
@@ -305,6 +357,9 @@ export async function enrichAndSuggestCategoryAction(ingestionItemId: string): P
   return {
     ok: true,
     summary: {
+      title: draft.proposedBookValues.title,
+      authors: draft.proposedBookValues.authors,
+      languageCode: draft.proposedBookValues.languageCode,
       description: enrichment?.description ?? null,
       tags: enrichment?.tags ?? [],
       categorySlug: categorySuggestion?.slug ?? null,
@@ -359,6 +414,18 @@ export async function confirmSaveAction(input: ConfirmSaveInput): Promise<Confir
   if (input.edits?.physicalCategorySlug) provenance.push({ fieldKey: "physical_category", sourceType: "human_verified" });
   else if (draft.categorySuggestion) provenance.push({ fieldKey: "physical_category", sourceType: "ai_inferred", confidenceLevel: draft.categorySuggestion.confidence ?? undefined });
 
+  // Display cover (Phase 7 correction pass §2) — derived ONLY from the
+  // actually selected/reconciled metadata candidate, never the raw Drive
+  // source original. See displayCover.ts for the trust boundary (confirmed
+  // identity only, known provider host, upgraded to https).
+  const selectedCandidate = draft.selectedCandidateProviderIdentifier
+    ? draft.metadataCandidates.find((c) => c.providerIdentifier === draft.selectedCandidateProviderIdentifier)
+    : undefined;
+  const displayCoverUrl = selectTrustworthyDisplayCoverUrl({
+    reconciliationOutcome: draft.reconciliationOutcome,
+    thumbnailUrl: selectedCandidate?.thumbnailUrl,
+  });
+
   let result;
   try {
     result = await saveNewBook(db, {
@@ -380,6 +447,7 @@ export async function confirmSaveAction(input: ConfirmSaveInput): Promise<Confir
       visualMediaTypes: enrichment?.visualMediaTypes,
       visualRealism: enrichment?.visualRealism ?? undefined,
       tags: enrichment?.tags,
+      displayCoverUrl,
       coverDriveFileId: draft.driveSource.fileId,
       coverDriveFolderId: process.env.GOOGLE_DRIVE_ROOT_FOLDER_ID ?? "",
       coverFilename: draft.driveSource.filename,
@@ -460,6 +528,70 @@ export async function reviewLaterAction(input: ReviewLaterInput): Promise<Action
   }
 
   return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// Step 7b — human "different book" decision, and Start Over abandonment
+// (Phase 7 correction pass §4 / §6)
+// ---------------------------------------------------------------------------
+
+/**
+ * Records that a teacher reviewed an ambiguous duplicate comparison and
+ * explicitly decided this is a different book — a real human decision worth
+ * an audit trail, distinct from the system's own `no_match` (which means
+ * nothing similar was even found). Deliberately does not re-run vision or
+ * metadata lookup and does not block the flow on failure (called
+ * fire-and-forget by the client) — this is an audit convenience, never a
+ * gate on proceeding to enrichment.
+ */
+export async function markDifferentBookAction(ingestionItemId: string): Promise<ActionFailure | { ok: true }> {
+  await requireStaffSession();
+  assertValidId(ingestionItemId);
+
+  const { draft } = await loadDraft(ingestionItemId);
+  draft.duplicateOutcome = "no_match";
+  await saveDraft(ingestionItemId, draft);
+
+  await db.insert(auditLog).values({
+    actorLabel: "teacher",
+    action: "duplicate_marked_different_book",
+    entityType: "ingestion_item",
+    entityId: ingestionItemId,
+    detail: { previousDuplicateCandidateBookIds: draft.duplicateCandidateBookIds },
+  });
+
+  return { ok: true };
+}
+
+/**
+ * Best-effort abandonment for "Start Over" after a real upload/ingestion item
+ * already exists (§6) — without this, a teacher photographing a cover, then
+ * changing their mind before confirming, left a real `ingestion_jobs`/
+ * `ingestion_items` pair permanently stuck at `"running"`/`"processing"`,
+ * indistinguishable from a genuinely stuck job. Marks both `"failed"` (the
+ * closest honest existing status — nothing errored, but the run will never
+ * complete or be resumed either) with a clear, non-alarming reason, rather
+ * than inventing a new "abandoned" status. Never awaited by the caller and
+ * never blocks the UI from resetting — this is real, but genuinely optional,
+ * housekeeping.
+ */
+export async function abandonIntakeAction(ingestionItemId: string): Promise<void> {
+  const session = await getSession();
+  if (!session) return;
+  if (!isUuid(ingestionItemId)) return;
+
+  try {
+    const [item] = await db
+      .update(ingestionItems)
+      .set({ status: "failed", errorMessage: "Abandoned by staff before completing (Start Over).", completedAt: new Date() })
+      .where(eq(ingestionItems.id, ingestionItemId))
+      .returning({ jobId: ingestionItems.jobId });
+    if (item) {
+      await db.update(ingestionJobs).set({ status: "failed", completedAt: new Date() }).where(eq(ingestionJobs.id, item.jobId));
+    }
+  } catch {
+    // Best-effort — Start Over always succeeds client-side regardless.
+  }
 }
 
 // ---------------------------------------------------------------------------

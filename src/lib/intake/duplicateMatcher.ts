@@ -20,6 +20,15 @@ import type { Book } from "@/lib/catalog/types";
  * comment, reused here rather than reinvented), then projected into full `Book`
  * objects via the existing `DrizzleBookRepository` — never a hand-written duplicate
  * JOIN query.
+ *
+ * `exact_copy_same_edition` requires a genuine ISBN match — title+author+language
+ * agreement alone is never sufficient (Phase 7 correction pass §3): different
+ * editions, printings, or translations of the same real book routinely share all
+ * three, so treating that combination as "exact" risked silently adding a copy to
+ * the wrong edition's record. Without a matching ISBN, the strongest classification
+ * available is `same_title_different_edition` (or `same_work_different_language`
+ * when the language itself differs) — still a real candidate a teacher reviews,
+ * just not an automatic "this is the same edition" claim.
  */
 
 export type DuplicateDetectionOutcome =
@@ -61,12 +70,22 @@ export interface DuplicateMatchResult {
   candidates: DuplicateCandidate[];
 }
 
+/**
+ * Reached only from Step 2 (title-similarity), i.e. only when Step 1 found no
+ * real ISBN match — or no ISBN was ever given at all. **Never classifies as
+ * `exact_copy_same_edition`** (Phase 7 correction pass §3) — title, author,
+ * and language matching, however strong, is not edition-level evidence:
+ * different printings/editions/translations of the same real book routinely
+ * share all three. `exact_copy_same_edition` is reserved exclusively for a
+ * genuine ISBN match (`findDuplicateCandidates`'s own Step 1) — conservative
+ * by design, since a false "exact match" here would silently treat two
+ * genuinely different editions as one and add a copy to the wrong record.
+ */
 function classify(input: DuplicateIdentityInput, candidateBook: Book, titleSimilarity: number): Exclude<DuplicateDetectionOutcome, "no_match"> {
   const sameTitle = titleSimilarity >= SAME_TITLE_SIMILARITY_THRESHOLD || normalizeTitle(candidateBook.title) === normalizeTitle(input.title);
   const authorOverlap = hasAuthorOverlap(input.authors, candidateBook.authors);
   const sameLanguage = !input.languageCode || candidateBook.languageCode === input.languageCode;
 
-  if (sameTitle && authorOverlap && sameLanguage) return "exact_copy_same_edition";
   if (sameTitle && authorOverlap && !sameLanguage) return "same_work_different_language";
   if (sameTitle) return "same_title_different_edition";
   return "ambiguous_similar_title";

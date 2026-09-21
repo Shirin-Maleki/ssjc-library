@@ -53,6 +53,14 @@ export interface BookCoverSpec {
    * see BookCover.tsx. Not derived from a hash, so variety across the catalog is
    * intentional rather than accidental. */
   variant: number;
+  /** A real, previously-verified display image URL (Phase 7) — present only when
+   * `books.display_cover_url` is set (e.g. a trustworthy external provider
+   * thumbnail chosen during Add-a-Book enrichment). `undefined` for every fixture
+   * book and any real book without one; `BookCover.tsx` falls back to the
+   * typographic placeholder whenever this is absent, exactly as before. Never the
+   * raw Drive source original — see docs/GOOGLE_INTEGRATION.md, "Original source
+   * cover vs. display cover." */
+  displayUrl?: string;
 }
 
 export interface Book {

@@ -147,6 +147,50 @@ describe.skipIf(!hasTestDb)("intake/persistence (against a real Postgres databas
     expect(itemRow.intakeDraft).toMatchObject({ reviewReason: "Ambiguous identification." });
   });
 
+  it("saveNewBook marks the parent ingestion_jobs row completed, with coherent processed_items/completed_at (Phase 7 correction pass §6)", async () => {
+    const ingestionItemId = await makeIngestionItem();
+    const [beforeItem] = await db.select({ jobId: ingestionItems.jobId }).from(ingestionItems).where(eq(ingestionItems.id, ingestionItemId)).limit(1);
+    const [beforeJob] = await db.select().from(ingestionJobs).where(eq(ingestionJobs.id, beforeItem.jobId)).limit(1);
+    expect(beforeJob.status).toBe("running");
+    expect(beforeJob.processedItems).toBe(0);
+
+    const result = await saveNewBook(db, baseInput({}, ingestionItemId));
+    createdBookIds.push(result.bookId);
+
+    const [afterJob] = await db.select().from(ingestionJobs).where(eq(ingestionJobs.id, beforeItem.jobId)).limit(1);
+    expect(afterJob.status).toBe("completed");
+    expect(afterJob.processedItems).toBe(1);
+    expect(afterJob.completedAt).not.toBeNull();
+  });
+
+  it("addAnotherCopy also marks its own parent job completed", async () => {
+    const firstIngestionItemId = await makeIngestionItem();
+    const created = await saveNewBook(db, baseInput({}, firstIngestionItemId));
+    createdBookIds.push(created.bookId);
+
+    const secondIngestionItemId = await makeIngestionItem();
+    const [item] = await db.select({ jobId: ingestionItems.jobId }).from(ingestionItems).where(eq(ingestionItems.id, secondIngestionItemId)).limit(1);
+    await addAnotherCopy(db, { bookId: created.bookId, ingestionItemId: secondIngestionItemId, actorLabel: "staff" });
+
+    const [job] = await db.select().from(ingestionJobs).where(eq(ingestionJobs.id, item.jobId)).limit(1);
+    expect(job.status).toBe("completed");
+    expect(job.processedItems).toBe(1);
+    expect(job.completedAt).not.toBeNull();
+  });
+
+  it("saveForReview leaves the parent job running, never falsely 'completed' (§6 — no ingestion_job_status value exists for 'awaiting review')", async () => {
+    const ingestionItemId = await makeIngestionItem();
+    const [item] = await db.select({ jobId: ingestionItems.jobId }).from(ingestionItems).where(eq(ingestionItems.id, ingestionItemId)).limit(1);
+    const draft = createInitialDraft({ fileId: "drive-3", filename: "cover.jpg", mimeType: "image/jpeg", sizeBytes: 100, checksum: null });
+
+    await saveForReview(db, { ingestionItemId, draft, reviewReason: "Needs a human look.", actorLabel: "staff" });
+
+    const [job] = await db.select().from(ingestionJobs).where(eq(ingestionJobs.id, item.jobId)).limit(1);
+    expect(job.status).toBe("running");
+    expect(job.processedItems).toBe(0);
+    expect(job.completedAt).toBeNull();
+  });
+
   it("saveForReview creates a real pending_review book + review_flags row when real minimum data was established", async () => {
     const ingestionItemId = await makeIngestionItem();
     const draft = createInitialDraft({ fileId: "drive-2", filename: "cover.jpg", mimeType: "image/jpeg", sizeBytes: 100, checksum: null });

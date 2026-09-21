@@ -15,6 +15,8 @@ import {
   confirmSaveAction,
   addAnotherCopyAction,
   reviewLaterAction,
+  markDifferentBookAction,
+  abandonIntakeAction,
 } from "@/lib/intake/actions";
 import type { TeacherEdits } from "@/lib/intake/draft";
 
@@ -25,7 +27,7 @@ interface AddBookFlowProps {
 type Stage =
   | { name: "capture" }
   | { name: "processing"; processingStage: ProcessingStage; uploadProgressPercent?: number }
-  | { name: "duplicate"; isExactMatch: boolean; candidate: DuplicateCandidateViewData }
+  | { name: "duplicate"; isExactMatch: boolean; candidate: DuplicateCandidateViewData; capturedTitle: string }
   | { name: "confirm"; data: ConfirmBookViewData }
   | { name: "success"; title: string; categoryLabel: string; isAnotherCopy: boolean }
   | { name: "saved_for_review" }
@@ -38,12 +40,31 @@ export function AddBookFlow({ activeCategories }: AddBookFlowProps) {
   const [cover, setCover] = useState<SelectedCover | null>(null);
   const [ingestionItemId, setIngestionItemId] = useState<string | null>(null);
   const [categorySlug, setCategorySlug] = useState<string | null>(null);
+  // One shared in-flight guard (§5C of the correction pass) — Confirm/Add book,
+  // Review Later, and Add another copy are never simultaneously actionable (only
+  // one is ever rendered at a time, on the confirm or duplicate stage), so a single
+  // flag correctly prevents a double submission of whichever is currently shown.
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  // A save-time failure shows INLINE on the same confirm/duplicate screen (§5B) —
+  // never a separate terminal stage — so the already-uploaded source photo, the
+  // resumable draft, and any in-progress Quick Edit corrections are never lost or
+  // re-required for a retry.
+  const [actionError, setActionError] = useState<string | null>(null);
 
   function reset() {
+    // Best-effort housekeeping (§6) — if a real ingestion item already exists (the
+    // upload succeeded but the teacher is abandoning before it completed or was
+    // deferred to review), mark it so it doesn't sit "running"/"processing" forever
+    // looking like a stuck job. Never awaited — Start Over always resets instantly.
+    if (ingestionItemId && stage.name !== "success" && stage.name !== "saved_for_review") {
+      void abandonIntakeAction(ingestionItemId);
+    }
     setStage({ name: "capture" });
     setCover(null);
     setIngestionItemId(null);
     setCategorySlug(null);
+    setIsSubmitting(false);
+    setActionError(null);
   }
 
   async function handleCoverConfirmed(selected: SelectedCover) {
@@ -68,58 +89,78 @@ export function AddBookFlow({ activeCategories }: AddBookFlowProps) {
     }
 
     setIngestionItemId(newIngestionItemId);
-    await runIdentifyThroughEnrich(newIngestionItemId, selected.previewUrl);
+    await runIdentify(newIngestionItemId, selected.previewUrl);
   }
 
-  async function runIdentifyThroughEnrich(itemId: string, previewUrl: string, treatAsDifferentBook = false) {
+  // Each stage below is independently retryable and resumes AT that stage — a
+  // later step's failure never re-runs an earlier, already-completed (and
+  // possibly real-API-costing) one (§5D of the correction pass).
+  async function runIdentify(itemId: string, previewUrl: string) {
     setStage({ name: "processing", processingStage: "identifying" });
-    const identifyResult = await identifyCoverAction(itemId);
-    // A vision failure still allows a partial/manual path — proceed with whatever
-    // evidence exists (possibly none) rather than blocking the whole intake.
+    await identifyCoverAction(itemId);
+    // A vision failure still allows a partial/manual path — the action itself
+    // never throws for this case (evidence is simply absent), so there is nothing
+    // to retry at this specific step.
+    await runLookup(itemId, previewUrl);
+  }
 
+  async function runLookup(itemId: string, previewUrl: string) {
     setStage({ name: "processing", processingStage: "looking_up" });
     const lookupResult = await lookupMetadataAction(itemId);
     if (!lookupResult.ok) {
-      setStage({ name: "error", message: lookupResult.message, retry: () => runIdentifyThroughEnrich(itemId, previewUrl, treatAsDifferentBook) });
+      setStage({ name: "error", message: lookupResult.message, retry: () => runLookup(itemId, previewUrl) });
       return;
     }
+    await runDuplicateCheck(itemId, previewUrl);
+  }
 
-    if (!treatAsDifferentBook) {
-      setStage({ name: "processing", processingStage: "checking_duplicates" });
-      const duplicateResult = await checkDuplicatesAction(itemId);
-      if (!duplicateResult.ok) {
-        setStage({ name: "error", message: duplicateResult.message, retry: () => runIdentifyThroughEnrich(itemId, previewUrl) });
-        return;
-      }
-      if (duplicateResult.candidates.length > 0 && duplicateResult.outcome !== "no_match") {
-        const candidate = duplicateResult.candidates[0];
-        setStage({
-          name: "duplicate",
-          isExactMatch: duplicateResult.outcome === "exact_copy_same_edition",
-          candidate: {
-            bookId: candidate.bookId,
-            title: candidate.title,
-            authors: candidate.authors,
-            languageCode: candidate.languageCode,
-            publisher: candidate.publisher,
-          },
-        });
-        return;
-      }
+  async function runDuplicateCheck(itemId: string, previewUrl: string) {
+    setStage({ name: "processing", processingStage: "checking_duplicates" });
+    const duplicateResult = await checkDuplicatesAction(itemId);
+    if (!duplicateResult.ok) {
+      setStage({ name: "error", message: duplicateResult.message, retry: () => runDuplicateCheck(itemId, previewUrl) });
+      return;
     }
+    if (duplicateResult.candidates.length > 0 && duplicateResult.outcome !== "no_match") {
+      const candidate = duplicateResult.candidates[0];
+      setActionError(null);
+      setStage({
+        name: "duplicate",
+        isExactMatch: duplicateResult.outcome === "exact_copy_same_edition",
+        candidate: {
+          bookId: candidate.bookId,
+          title: candidate.title,
+          authors: candidate.authors,
+          languageCode: candidate.languageCode,
+          publisher: candidate.publisher,
+          displayCoverUrl: candidate.displayCoverUrl,
+        },
+        // The real identified/reconciled title (§4) — never the raw uploaded
+        // filename, which is meaningless to a teacher (e.g. "IMG_1234.HEIC").
+        capturedTitle: duplicateResult.capturedTitle ?? "this book",
+      });
+      return;
+    }
+    await runEnrichAndConfirm(itemId, previewUrl);
+  }
 
+  async function runEnrichAndConfirm(itemId: string, previewUrl: string) {
     setStage({ name: "processing", processingStage: "enriching" });
     const enrichResult = await enrichAndSuggestCategoryAction(itemId);
-    const summary = enrichResult.ok ? enrichResult.summary : { description: null, tags: [], categorySlug: null, categoryLabel: null };
-
+    if (!enrichResult.ok) {
+      setStage({ name: "error", message: enrichResult.message, retry: () => runEnrichAndConfirm(itemId, previewUrl) });
+      return;
+    }
+    const summary = enrichResult.summary;
     setCategorySlug(summary.categorySlug);
+    setActionError(null);
     setStage({
       name: "confirm",
       data: {
         coverPreviewUrl: previewUrl,
-        title: (identifyResult.ok && identifyResult.visibleTitle) || "Untitled",
-        authors: (identifyResult.ok && identifyResult.visibleAuthors) || [],
-        languageCode: lookupResult.languageCode,
+        title: summary.title || "Untitled",
+        authors: summary.authors,
+        languageCode: summary.languageCode,
         description: summary.description,
         categorySlug: summary.categorySlug,
         categoryLabel: summary.categoryLabel,
@@ -128,40 +169,66 @@ export function AddBookFlow({ activeCategories }: AddBookFlowProps) {
   }
 
   async function handleSameBook(bookId: string) {
-    if (!ingestionItemId) return;
-    setStage({ name: "processing", processingStage: "saving" });
+    if (!ingestionItemId || isSubmitting) return;
+    setIsSubmitting(true);
+    setActionError(null);
     const result = await addAnotherCopyAction({ ingestionItemId, bookId });
+    setIsSubmitting(false);
     if (!result.ok) {
-      setStage({ name: "error", message: result.message, retry: () => handleSameBook(bookId) });
+      setActionError(result.message);
       return;
     }
     setStage({ name: "success", title: result.title, categoryLabel: result.categoryLabel, isAnotherCopy: true });
   }
 
   async function handleDifferentBook() {
-    if (!ingestionItemId || !cover) return;
-    await runIdentifyThroughEnrich(ingestionItemId, cover.previewUrl, true);
+    if (!ingestionItemId || !cover || isSubmitting) return;
+    setIsSubmitting(true);
+    setActionError(null);
+    // The teacher already reviewed the duplicate comparison and explicitly said
+    // this is a different book — preserve all existing identification/
+    // reconciliation work. Never re-call Gemini vision or metadata lookup, which
+    // already ran once and whose evidence hasn't changed (§4 of the correction
+    // pass). Recording the decision is a real audit convenience but never a gate
+    // on proceeding — failure here is swallowed.
+    await markDifferentBookAction(ingestionItemId).catch(() => {});
+    setIsSubmitting(false);
+    await runEnrichAndConfirm(ingestionItemId, cover.previewUrl);
   }
 
   async function handleConfirmSave(edits: TeacherEdits) {
-    if (!ingestionItemId) return;
-    setStage((current) => (current.name === "confirm" ? { ...current } : current));
+    if (!ingestionItemId || isSubmitting) return;
+    setIsSubmitting(true);
+    setActionError(null);
     // categorySlug may still be null here (no category was AI-suggested, e.g. when
     // no vision/enrichment provider is configured) — passed through as-is rather
     // than silently no-op'ing, so the server's own minimum-data check
     // (assertMinimumData, §32) can return a real, visible error unless the
     // teacher's Quick Edit selection (edits.physicalCategorySlug) supplies one.
     const result = await confirmSaveAction({ ingestionItemId, categorySlug: categorySlug ?? "", edits });
+    setIsSubmitting(false);
     if (!result.ok) {
-      setStage({ name: "error", message: result.message });
+      // Stay on the confirm screen — the source photo and draft are untouched
+      // server-side, so a retry needs neither a re-upload nor re-entering Quick
+      // Edit corrections (§5B of the correction pass).
+      setActionError(result.message);
       return;
     }
     setStage({ name: "success", title: result.title, categoryLabel: result.categoryLabel, isAnotherCopy: false });
   }
 
   async function handleReviewLater(reason: string) {
-    if (!ingestionItemId) return;
-    await reviewLaterAction({ ingestionItemId, reason });
+    if (!ingestionItemId || isSubmitting) return;
+    setIsSubmitting(true);
+    setActionError(null);
+    const result = await reviewLaterAction({ ingestionItemId, reason });
+    setIsSubmitting(false);
+    if (!result.ok) {
+      // Never claim success on a failed save (§5A) — the intake/draft/source photo
+      // are all preserved either way, so the teacher can just try again.
+      setActionError(result.message);
+      return;
+    }
     setStage({ name: "saved_for_review" });
   }
 
@@ -174,27 +241,41 @@ export function AddBookFlow({ activeCategories }: AddBookFlowProps) {
 
     case "duplicate":
       return (
-        <DuplicateCheck
-          isExactMatch={stage.isExactMatch}
-          coverPreviewUrl={cover?.previewUrl ?? ""}
-          capturedTitle={cover?.file.name ?? ""}
-          candidate={stage.candidate}
-          onSameBook={() => handleSameBook(stage.candidate.bookId)}
-          onDifferentBook={handleDifferentBook}
-          onReviewLater={() => handleReviewLater("Teacher indicated a possible catalog match needing review.")}
-          submitting={false}
-        />
+        <div className="flex flex-col gap-4">
+          {actionError && (
+            <p role="alert" className="text-sm text-danger">
+              {actionError}
+            </p>
+          )}
+          <DuplicateCheck
+            isExactMatch={stage.isExactMatch}
+            coverPreviewUrl={cover?.previewUrl ?? ""}
+            capturedTitle={stage.capturedTitle}
+            candidate={stage.candidate}
+            onSameBook={() => handleSameBook(stage.candidate.bookId)}
+            onDifferentBook={handleDifferentBook}
+            onReviewLater={() => handleReviewLater("Teacher indicated a possible catalog match needing review.")}
+            submitting={isSubmitting}
+          />
+        </div>
       );
 
     case "confirm":
       return (
-        <ConfirmBook
-          data={stage.data}
-          activeCategories={activeCategories}
-          onConfirm={handleConfirmSave}
-          onReviewLater={() => handleReviewLater("Teacher chose to review this book later.")}
-          submitting={false}
-        />
+        <div className="flex flex-col gap-4">
+          {actionError && (
+            <p role="alert" className="text-sm text-danger">
+              {actionError}
+            </p>
+          )}
+          <ConfirmBook
+            data={stage.data}
+            activeCategories={activeCategories}
+            onConfirm={handleConfirmSave}
+            onReviewLater={() => handleReviewLater("Teacher chose to review this book later.")}
+            submitting={isSubmitting}
+          />
+        </div>
       );
 
     case "success":

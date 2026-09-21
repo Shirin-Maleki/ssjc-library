@@ -237,7 +237,7 @@ export class DrizzleBookRepository implements BookRepository {
       illustrationStyles: safeIllustrationStyles(row.visualMediaType),
       visualRealism: safeVisualRealism(row.visualRealism),
       readAloudMinutes: row.readAloudMinutesEstimate != null ? Number(row.readAloudMinutesEstimate) : undefined,
-      cover: { variant: coverVariantFromId(row.id) },
+      cover: { variant: coverVariantFromId(row.id), displayUrl: row.displayCoverUrl ?? undefined },
       publicationYear: row.publicationYear ?? undefined,
       copyCount: related.copyCount,
     };
