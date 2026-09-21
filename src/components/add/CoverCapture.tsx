@@ -8,8 +8,8 @@ import { cn } from "@/lib/utils/cn";
  * as plain string/number constants (not imported) because that module lives under
  * `src/lib/googleDrive/`, a server-oriented package, and this is deliberately
  * client-side, pre-upload validation for immediate teacher feedback; the server
- * still independently re-validates every one of these before ever initiating a
- * Drive upload (`initiateUploadAction`), so this is a UX convenience, never the
+ * still independently re-validates every one of these before ever accepting a
+ * Drive upload (`/api/intake/cover`), so this is a UX convenience, never the
  * actual security boundary. */
 const ALLOWED_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"]);
 const MAX_SIZE_BYTES = 25 * 1024 * 1024;

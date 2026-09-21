@@ -6,10 +6,8 @@ import { ProcessingStatus, type ProcessingStage } from "./ProcessingStatus";
 import { ConfirmBook, type ConfirmBookViewData } from "./ConfirmBook";
 import { DuplicateCheck, type DuplicateCandidateViewData } from "./DuplicateCheck";
 import { AddedSuccess } from "./AddedSuccess";
-import { uploadToSession, UploadToSessionError } from "./uploadToSession";
+import { uploadCover, UploadToSessionError } from "./uploadToSession";
 import {
-  initiateUploadAction,
-  confirmUploadAction,
   identifyCoverAction,
   lookupMetadataAction,
   checkDuplicatesAction,
@@ -56,42 +54,21 @@ export function AddBookFlow({ activeCategories }: AddBookFlowProps) {
   async function runUpload(selected: SelectedCover) {
     setStage({ name: "processing", processingStage: "uploading" });
 
-    const sessionResult = await initiateUploadAction({
-      filename: selected.file.name,
-      mimeType: selected.file.type,
-      sizeBytes: selected.file.size,
-    });
-    if (!sessionResult.ok) {
-      setStage({ name: "error", message: sessionResult.message, retry: () => runUpload(selected) });
-      return;
-    }
-
-    let driveFileId: string;
+    let newIngestionItemId: string;
     try {
-      const uploaded = await uploadToSession(sessionResult.sessionUri, selected.file, (event) => {
+      const uploaded = await uploadCover(selected.file, (event) => {
         const percent = Math.round((event.loadedBytes / event.totalBytes) * 100);
         setStage({ name: "processing", processingStage: "uploading", uploadProgressPercent: percent });
       });
-      driveFileId = uploaded.driveFileId;
+      newIngestionItemId = uploaded.ingestionItemId;
     } catch (error) {
-      const message = error instanceof UploadToSessionError ? "The upload didn't complete. Please try again." : GENERIC_ERROR_MESSAGE;
+      const message = error instanceof UploadToSessionError ? error.message : GENERIC_ERROR_MESSAGE;
       setStage({ name: "error", message, retry: () => runUpload(selected) });
       return;
     }
 
-    const confirmResult = await confirmUploadAction({
-      driveFileId,
-      expectedFilename: selected.file.name,
-      expectedMimeType: selected.file.type,
-      expectedSizeBytes: selected.file.size,
-    });
-    if (!confirmResult.ok) {
-      setStage({ name: "error", message: confirmResult.message, retry: () => runUpload(selected) });
-      return;
-    }
-
-    setIngestionItemId(confirmResult.ingestionItemId);
-    await runIdentifyThroughEnrich(confirmResult.ingestionItemId, selected.previewUrl);
+    setIngestionItemId(newIngestionItemId);
+    await runIdentifyThroughEnrich(newIngestionItemId, selected.previewUrl);
   }
 
   async function runIdentifyThroughEnrich(itemId: string, previewUrl: string, treatAsDifferentBook = false) {

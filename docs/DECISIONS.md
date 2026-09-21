@@ -1894,3 +1894,76 @@ it.
 `scripts/google/smokeOrchestration.ts` (new);
 `tests/unit/googleDrive/googleDriveProvider.test.ts`;
 `tests/unit/googleDrive/smokeOrchestration.test.ts` (new); `docs/GOOGLE_INTEGRATION.md`.
+
+## Phase 7: the Phase 6-approved direct-browser-to-Drive upload does not survive a real browser — corrected to a server-mediated upload
+
+**What was approved, and what changed.** Phase 6's own architecture note, carried into
+the Phase 7 brief (§11), specified: server initiates a Drive resumable upload session,
+the browser receives *only* the ephemeral session URI, the browser PUTs the file's bytes
+directly to Google, and the server independently confirms the result. This was reviewed
+and approved before implementation on the reasoning that it never lets a Drive OAuth
+token, client secret, or the app's own server touch the raw bytes twice — the browser
+just needs the one ephemeral URI.
+
+**What real testing found.** Phase 6's own real-provider validation (`scripts/google/smoke.ts`)
+proved Drive resumable uploads work — but only ever via a plain server-side `fetch()`
+PUT, which is not subject to CORS at all and therefore could never have caught this.
+During Phase 7 implementation, a real Chromium browser (Playwright, not a mock) was
+driven through the actual `/add` UI against a live dev server holding the real Phase 6
+Drive credentials. Selecting a small synthetic (non-copyrighted, people-free) test image
+and clicking "Use this cover" produced a real, reproducible failure:
+
+```
+Access to XMLHttpRequest at 'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable...'
+from origin 'http://localhost:3211' has been blocked by CORS policy:
+No 'Access-Control-Allow-Origin' header is present on the requested resource.
+```
+
+**Why, confirmed against Google's own documentation, not assumed.** Google's resumable-upload
+CORS behavior (documented for Cloud Storage's equivalent resumable-upload protocol; Google
+Drive's own upload docs at `developers.google.com/drive/api/guides/manage-uploads` don't
+document any CORS configuration surface at all) binds the eventual
+`Access-Control-Allow-Origin` response header to the `Origin` request header present on
+the *session-creation* request — "the Origin from the first (start upload) request is
+always used to decide the Access-Control-Allow-Origin header in the response, even if you
+use a different Origin for subsequent requests." In this architecture the session-creation
+request is made server-side (a plain Node `fetch`, matching `scripts/google/smoke.ts`'s own
+call) with no real browser `Origin` at all — so no browser origin is ever authorized, and
+every later browser PUT to that session is unconditionally blocked, regardless of
+implementation care. This is structural, not a bug in this codebase's Drive client.
+
+**The fix — server-mediated upload.** The browser now POSTs the raw file bytes to this
+app's own same-origin Route Handler, `src/app/api/intake/cover/route.ts` (the first Route
+Handler in this codebase; every other authenticated mutation is a Server Action, but
+Server Actions expose no upload-progress events, which real byte-level progress — an
+existing, already-approved requirement — depends on). That handler performs the exact
+same three real Drive calls — `initiateResumableUpload`, a server-side PUT of the bytes,
+`confirmUploadedFile` — all server-to-server, which is never subject to browser CORS. The
+browser never sees a Drive URL, a session URI, or a token at any point; the specific
+security property the original design cared about (OAuth credentials/client secret never
+reach the browser) is fully preserved. The only thing that changed is that bytes now
+make one extra same-origin hop before reaching Drive, instead of a hop that could never
+have succeeded. Real upload progress (`xhr.upload.onprogress`) still applies, now
+measuring the browser→server leg — the one leg the teacher's own network connection
+actually gates — rather than a server→Drive leg the teacher never waited on anyway.
+
+**Re-validated live after the fix**, same method: real Chromium, real staff login, real
+file selection, real click-through, against the real Drive folder. The flow reached the
+"Identifying book…" stage (proving the full upload→Drive-confirm→ingestion-row-creation
+round trip succeeded for real) with zero browser console errors and zero failed requests.
+The disposable synthetic test file was trashed from the real Drive folder immediately
+after, and its `ingestion_items`/`ingestion_jobs` rows were deleted — no residue of this
+validation pass remains in Drive or the database.
+
+**Consequences.** `initiateUploadAction` and `confirmUploadAction` (Server Actions) were
+removed from `src/lib/intake/actions.ts` — their logic now lives entirely in the new
+Route Handler. `src/components/add/uploadToSession.ts` was rewritten: `uploadToSession()`
+(PUT to an externally-supplied Drive session URI) became `uploadCover()` (POST to
+`/api/intake/cover`, same-origin, no session URI ever reaches this file at all).
+`AddBookFlow.tsx`'s `runUpload()` collapsed from a three-step (initiate → browser PUT →
+confirm) dance into one call. No database schema changed. No environment variable
+changed.
+
+**Relevant files:** `src/app/api/intake/cover/route.ts` (new);
+`src/components/add/uploadToSession.ts`; `src/components/add/AddBookFlow.tsx`;
+`src/lib/intake/actions.ts`.

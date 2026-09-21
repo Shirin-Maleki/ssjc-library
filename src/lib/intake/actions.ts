@@ -2,17 +2,11 @@
 
 import { eq } from "drizzle-orm";
 import { db } from "@/db/client";
-import { ingestionItems, ingestionJobs } from "@/db/schema";
+import { ingestionItems } from "@/db/schema";
 import { bookRepository, categoryRepository } from "@/db/repositories";
 import { requireStaffSession } from "@/lib/auth/guards";
 import { isUuid } from "@/lib/utils/uuid";
-import {
-  getConfiguredCoverStorageProvider,
-  DriveProviderError,
-  isAllowedSourceCoverMimeType,
-  isValidSourceCoverSize,
-  MAX_SOURCE_COVER_SIZE_BYTES,
-} from "@/lib/googleDrive";
+import { getConfiguredCoverStorageProvider, DriveProviderError } from "@/lib/googleDrive";
 import { getConfiguredBookIntelligenceProvider } from "@/lib/ai";
 import { getConfiguredMetadataProviders } from "@/lib/metadataProviders";
 import { getConfiguredEmbeddingProvider } from "@/lib/embeddings";
@@ -22,7 +16,7 @@ import { reconcileIdentity, resolveProviderLanguage } from "./reconciliation";
 import { lookupMetadataCandidates } from "./metadataLookup";
 import { findDuplicateCandidates, type DuplicateCandidate } from "./duplicateMatcher";
 import { validateCategorySuggestion } from "./categorySuggestion";
-import { createInitialDraft, readIntakeDraft, parseIntakeDraft, type IntakeDraft, type TeacherEdits } from "./draft";
+import { readIntakeDraft, parseIntakeDraft, type IntakeDraft, type TeacherEdits } from "./draft";
 import { saveNewBook, addAnotherCopy, saveForReview, type ProvenanceInput } from "./persistence";
 import { isLanguageCode } from "@/lib/catalog/languages";
 import type { LanguageCode } from "@/lib/catalog/types";
@@ -69,95 +63,15 @@ function failure(category: string, message: string): ActionFailure {
 }
 
 // ---------------------------------------------------------------------------
-// Step 1 — resumable upload session
+// Step 1 — cover upload: handled by the `/api/intake/cover` Route Handler, not a
+// Server Action here (see that file and `docs/DECISIONS.md` for why: real browser
+// testing proved the originally-specified direct-browser-to-Drive PUT is blocked
+// by CORS, and Server Actions have no upload-progress events for the corrected,
+// server-mediated replacement).
 // ---------------------------------------------------------------------------
 
-export interface InitiateUploadInput {
-  filename: string;
-  mimeType: string;
-  sizeBytes: number;
-}
-
-export type InitiateUploadResult = ActionFailure | { ok: true; sessionUri: string; parentFolderId: string };
-
-export async function initiateUploadAction(input: InitiateUploadInput): Promise<InitiateUploadResult> {
-  await requireStaffSession();
-
-  if (!isAllowedSourceCoverMimeType(input.mimeType)) {
-    return failure("invalid_file", "That file type isn't supported. Please choose a JPEG, PNG, WebP, HEIC, or HEIF photo.");
-  }
-  if (!isValidSourceCoverSize(input.sizeBytes)) {
-    return failure("invalid_file", `That photo is too large (max ${Math.floor(MAX_SOURCE_COVER_SIZE_BYTES / (1024 * 1024))} MB).`);
-  }
-
-  const provider = getConfiguredCoverStorageProvider();
-  if (!provider) return failure("configuration_missing", "Photo storage isn't configured yet. Please contact your administrator.");
-
-  const rootFolderId = process.env.GOOGLE_DRIVE_ROOT_FOLDER_ID!;
-  try {
-    const session = await provider.initiateResumableUpload({
-      parentFolderId: rootFolderId,
-      filename: input.filename,
-      mimeType: input.mimeType,
-      sizeBytes: input.sizeBytes,
-    });
-    return { ok: true, sessionUri: session.sessionUri, parentFolderId: session.parentFolderId };
-  } catch (error) {
-    return failure(categoryOf(error), "Couldn't start the upload. Please try again.");
-  }
-}
-
 // ---------------------------------------------------------------------------
-// Step 2 — server-side confirmation, ingestion job/item creation
-// ---------------------------------------------------------------------------
-
-export interface ConfirmUploadInput {
-  driveFileId: string;
-  expectedFilename: string;
-  expectedMimeType: string;
-  expectedSizeBytes: number;
-}
-
-export type ConfirmUploadResult = ActionFailure | { ok: true; ingestionItemId: string };
-
-export async function confirmUploadAction(input: ConfirmUploadInput): Promise<ConfirmUploadResult> {
-  await requireStaffSession();
-
-  const provider = getConfiguredCoverStorageProvider();
-  if (!provider) return failure("configuration_missing", "Photo storage isn't configured yet. Please contact your administrator.");
-  const rootFolderId = process.env.GOOGLE_DRIVE_ROOT_FOLDER_ID!;
-
-  let metadata;
-  try {
-    metadata = await provider.confirmUploadedFile({
-      fileId: input.driveFileId,
-      expectedParentFolderId: rootFolderId,
-      expectedFilename: input.expectedFilename,
-      expectedMimeType: input.expectedMimeType,
-      expectedSizeBytes: input.expectedSizeBytes,
-    });
-  } catch (error) {
-    return failure(categoryOf(error), "The upload couldn't be confirmed. Please try again.");
-  }
-
-  const [job] = await db.insert(ingestionJobs).values({ jobType: "single_add", source: "teacher_capture", status: "running", totalItems: 1 }).returning({ id: ingestionJobs.id });
-  const draft = createInitialDraft({
-    fileId: metadata.id,
-    filename: metadata.name,
-    mimeType: metadata.mimeType,
-    sizeBytes: metadata.size ?? input.expectedSizeBytes,
-    checksum: metadata.md5Checksum ?? null,
-  });
-  const [item] = await db
-    .insert(ingestionItems)
-    .values({ jobId: job.id, driveFileId: metadata.id, contentHash: metadata.md5Checksum, status: "processing", intakeDraft: draft })
-    .returning({ id: ingestionItems.id });
-
-  return { ok: true, ingestionItemId: item.id };
-}
-
-// ---------------------------------------------------------------------------
-// Step 3 — cover identification (vision)
+// Step 2 — cover identification (vision)
 // ---------------------------------------------------------------------------
 
 export type IdentifyCoverResult =
