@@ -119,7 +119,7 @@ export function AddBookFlow({ activeCategories }: AddBookFlowProps) {
         coverPreviewUrl: previewUrl,
         title: (identifyResult.ok && identifyResult.visibleTitle) || "Untitled",
         authors: (identifyResult.ok && identifyResult.visibleAuthors) || [],
-        languageCode: null,
+        languageCode: lookupResult.languageCode,
         description: summary.description,
         categorySlug: summary.categorySlug,
         categoryLabel: summary.categoryLabel,

@@ -131,7 +131,7 @@ export async function identifyCoverAction(ingestionItemId: string): Promise<Iden
 
 export type LookupMetadataResult =
   | ActionFailure
-  | { ok: true; reconciliationOutcome: "high_confidence" | "ambiguous" | "unresolved"; title: string | null };
+  | { ok: true; reconciliationOutcome: "high_confidence" | "ambiguous" | "unresolved"; title: string | null; languageCode: string | null };
 
 export async function lookupMetadataAction(ingestionItemId: string): Promise<LookupMetadataResult> {
   await requireStaffSession();
@@ -185,7 +185,7 @@ export async function lookupMetadataAction(ingestionItemId: string): Promise<Loo
   draft.pipelineStage = "reconciled";
   await saveDraft(ingestionItemId, draft);
 
-  return { ok: true, reconciliationOutcome: reconciliation.outcome, title };
+  return { ok: true, reconciliationOutcome: reconciliation.outcome, title, languageCode: resolvedLanguage ?? null };
 }
 
 // ---------------------------------------------------------------------------
