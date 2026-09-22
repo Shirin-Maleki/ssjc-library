@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import type { Database } from "@/db/client";
 import {
   auditLog,
@@ -11,11 +11,15 @@ import {
   ingestionJobs,
   physicalCategories,
   reviewFlags,
+  reviewFlagTypeEnum,
   taxonomySuggestions,
 } from "@/db/schema";
+
+type ReviewFlagType = (typeof reviewFlagTypeEnum.enumValues)[number];
 import { resolveConfirmFields } from "@/lib/intake/confirmFieldResolution";
 import { readIntakeDraft, type TeacherEdits } from "@/lib/intake/draft";
 import { saveNewBook, upsertContributor, upsertPublisher, upsertTag, type ProvenanceInput, type Transaction } from "@/lib/intake/persistence";
+import { selectTrustworthyDisplayCoverUrl } from "@/lib/intake/displayCover";
 import { isLanguageCode } from "@/lib/catalog/languages";
 import type { Format, IllustrationStyle, LanguageCode, VisualRealism } from "@/lib/catalog/types";
 import { buildSearchIndexText } from "@/lib/embeddings/document";
@@ -25,11 +29,15 @@ import type { EmbeddingProvider } from "@/lib/embeddings/provider";
 import { rebuildSearchTextForBooks } from "@/lib/search/searchTextMaintenance";
 import { normalizeTitle } from "@/lib/search/normalize";
 import { computeSortTitle } from "@/lib/catalog/sortTitle";
+import { isUuid } from "@/lib/utils/uuid";
 import { writeCurrentProvenance } from "./provenanceWrite";
+import { invalidateEmbedding, invalidateEmbeddings } from "./embeddingInvalidation";
 import { resolveProvenanceForPatch, type AdminMetadataPatch } from "./adminPatch";
+import { validateAdminMetadataPatch, validateApprovalEdits, validateCategoryInput, validateTaxonomyLabel } from "./validation";
 import type { MetadataFieldKey } from "@/lib/metadata/fieldRegistry";
 import { planDuplicateResolution, type DuplicateResolutionAction } from "./duplicateResolution";
 import { generateUniqueCategorySlug } from "./categorySlug";
+import { FLAG_TYPES_RESOLVED_BY_REVIEW_LATER_APPROVAL, FLAG_TYPES_RESOLVED_BY_SAME_EDITION_DUPLICATE } from "./reviewFlagResolution";
 
 const ADMIN_ACTOR = "admin";
 
@@ -95,7 +103,7 @@ export interface ApproveReviewLaterInput {
 
 export type ApproveReviewLaterResult =
   | { ok: true; bookId: string }
-  | { ok: false; error: "not_found" | "already_resolved" | "invalid_draft" | "insufficient_data" | "duplicate_unresolved" | "save_failed"; message: string };
+  | { ok: false; error: "not_found" | "already_resolved" | "invalid_draft" | "insufficient_data" | "duplicate_unresolved" | "invalid_input" | "save_failed"; message: string };
 
 const UNRESOLVED_DUPLICATE_OUTCOMES = new Set(["exact_copy_same_edition", "same_title_different_edition", "same_work_different_language", "ambiguous_similar_title"]);
 
@@ -127,6 +135,9 @@ export async function approveReviewLater(db: Database, input: ApproveReviewLater
     return { ok: false, error: "duplicate_unresolved", message: "Resolve the possible duplicate before approving this item." };
   }
 
+  const validationFailure = validateApprovalEdits(input.edits);
+  if (validationFailure) return { ok: false, error: "invalid_input", message: validationFailure.message };
+
   const resolved = resolveConfirmFields({
     edits: input.edits,
     proposedTitle: draft.proposedBookValues?.title,
@@ -153,13 +164,33 @@ export async function approveReviewLater(db: Database, input: ApproveReviewLater
   }
   if (enrichment?.visualRealism) provenance.push({ fieldKey: "visual_realism", sourceType: "ai_inferred" });
 
-  try {
-    if (item.pendingBookId) {
+  // Metadata-parity correction: both branches below must derive the display
+  // cover through the exact same Phase 7 trust boundary `confirmSaveAction`
+  // uses — only a high-confidence reconciled candidate's thumbnail, from a
+  // known trusted host, ever becomes the catalog display cover. Previously
+  // NEITHER branch set this at all, and only `saveNewBook`'s call included
+  // subtitle/illustrators/publisher/ISBN — `finalizePendingBook` silently
+  // dropped them.
+  const selectedCandidate = draft.selectedCandidateProviderIdentifier
+    ? draft.metadataCandidates.find((c) => c.providerIdentifier === draft.selectedCandidateProviderIdentifier)
+    : undefined;
+  const displayCoverUrl = selectTrustworthyDisplayCoverUrl({
+    reconciliationOutcome: draft.reconciliationOutcome,
+    thumbnailUrl: selectedCandidate?.thumbnailUrl,
+  });
+
+  if (item.pendingBookId) {
+    try {
       const bookId = await finalizePendingBook(db, {
         bookId: item.pendingBookId,
         ingestionItemId: input.ingestionItemId,
         title: resolved.title,
+        subtitle: draft.proposedBookValues?.subtitle ?? undefined,
         authors: resolved.authors,
+        illustrators: draft.proposedBookValues?.illustrators,
+        publisherName: draft.proposedBookValues?.publisher ?? undefined,
+        isbn10: draft.proposedBookValues?.isbn10 ?? undefined,
+        isbn13: draft.proposedBookValues?.isbn13 ?? undefined,
         languageCode,
         description: resolved.description,
         physicalCategorySlug: categorySlug,
@@ -171,13 +202,35 @@ export async function approveReviewLater(db: Database, input: ApproveReviewLater
         visualMediaTypes: enrichment?.visualMediaTypes,
         visualRealism: enrichment?.visualRealism ?? undefined,
         tags: enrichment?.tags,
+        displayCoverUrl,
         provenance,
       });
       if (!bookId) return { ok: false, error: "already_resolved", message: "This item was already updated. Refresh to see the latest version." };
       attemptTargetedEmbedding(db, bookId);
       return { ok: true, bookId };
+    } catch (error) {
+      return { ok: false, error: "save_failed", message: error instanceof Error ? error.message : "Couldn't approve this book. Please try again." };
     }
+  }
 
+  // Ingestion-only path: `saveNewBook()` itself has no status-conditional
+  // guard on the ingestion item (it unconditionally marks it completed) — two
+  // near-simultaneous approval submissions for the same item would otherwise
+  // both proceed and create two books. Claiming the item here first (an
+  // atomic conditional UPDATE, the same pattern `finalizePendingBook` and
+  // `resolveDuplicate`'s same-edition branch use internally) means only one
+  // caller ever reaches `saveNewBook` at all. A failed save reverts the claim
+  // rather than stranding the item outside the queue forever.
+  const claimed = await db
+    .update(ingestionItems)
+    .set({ status: "processing" })
+    .where(and(eq(ingestionItems.id, input.ingestionItemId), eq(ingestionItems.status, "needs_review")))
+    .returning({ id: ingestionItems.id });
+  if (claimed.length === 0) {
+    return { ok: false, error: "already_resolved", message: "This item was already updated. Refresh to see the latest version." };
+  }
+
+  try {
     const result = await saveNewBook(db, {
       title: resolved.title,
       subtitle: draft.proposedBookValues?.subtitle ?? undefined,
@@ -197,6 +250,7 @@ export async function approveReviewLater(db: Database, input: ApproveReviewLater
       visualMediaTypes: enrichment?.visualMediaTypes,
       visualRealism: enrichment?.visualRealism ?? undefined,
       tags: enrichment?.tags,
+      displayCoverUrl,
       coverDriveFileId: draft.driveSource.fileId,
       coverDriveFolderId: process.env.GOOGLE_DRIVE_ROOT_FOLDER_ID ?? "",
       coverFilename: draft.driveSource.filename,
@@ -208,6 +262,7 @@ export async function approveReviewLater(db: Database, input: ApproveReviewLater
     attemptTargetedEmbedding(db, result.bookId);
     return { ok: true, bookId: result.bookId };
   } catch (error) {
+    await db.update(ingestionItems).set({ status: "needs_review" }).where(eq(ingestionItems.id, input.ingestionItemId));
     return { ok: false, error: "save_failed", message: error instanceof Error ? error.message : "Couldn't approve this book. Please try again." };
   }
 }
@@ -216,7 +271,12 @@ interface FinalizePendingBookInput {
   bookId: string;
   ingestionItemId: string;
   title: string;
+  subtitle?: string;
   authors: string[];
+  illustrators?: string[];
+  publisherName?: string;
+  isbn10?: string;
+  isbn13?: string;
   languageCode: LanguageCode;
   description?: string;
   physicalCategorySlug: string;
@@ -228,6 +288,9 @@ interface FinalizePendingBookInput {
   visualMediaTypes?: IllustrationStyle[];
   visualRealism?: VisualRealism;
   tags?: string[];
+  /** Phase 7's trust-boundary-checked cover, if any — see `displayCover.ts`.
+   * Never the Drive original; never an ambiguous-candidate thumbnail. */
+  displayCoverUrl?: string;
   provenance: ProvenanceInput[];
 }
 
@@ -240,9 +303,34 @@ interface FinalizePendingBookInput {
  * book is no longer `pending_review` by the time this runs — a concurrent
  * resolution — so the caller can show the calm "already updated" message rather
  * than silently overwriting it.
+ *
+ * Correction pass fixes, both inside this one transaction:
+ * 1. **Metadata parity** — now persists the exact same trusted-data set the
+ *    ingestion-only `saveNewBook()` path does (subtitle, illustrators,
+ *    publisher, ISBN-10/13, display cover), not a narrower subset.
+ * 2. **Exactly-once concurrency** — the ingestion item is claimed (an atomic
+ *    conditional UPDATE, `needs_review` -> `completed`) BEFORE any catalog
+ *    mutation happens, not after. A concurrent resolution attempt gets zero
+ *    claimed rows and returns immediately, having created nothing — the old
+ *    order (copy insert, then a conditional ingestion-item update whose
+ *    zero-row result was merely reported as an error) let a losing caller's
+ *    copy insert survive even though it was told the item was already resolved.
+ * 3. **Targeted review-flag resolution** — resolves only the flags a Review
+ *    Later approval genuinely addresses (`FLAG_TYPES_RESOLVED_BY_REVIEW_LATER_APPROVAL`),
+ *    never `missing_metadata`/`metadata_conflict`/other unrelated concerns.
+ * 4. **Embedding invalidation** — clears any (here, always already-null)
+ *    embedding state so a stale vector can never survive a searchable-content
+ *    change, consistent with every other Phase 8 mutation.
  */
 async function finalizePendingBook(db: Database, input: FinalizePendingBookInput): Promise<string | undefined> {
   return db.transaction(async (tx) => {
+    const claimed = await tx
+      .update(ingestionItems)
+      .set({ status: "completed", completedAt: new Date() })
+      .where(and(eq(ingestionItems.id, input.ingestionItemId), eq(ingestionItems.status, "needs_review")))
+      .returning({ jobId: ingestionItems.jobId });
+    if (claimed.length === 0) return undefined;
+
     const [category] = await tx
       .select({ id: physicalCategories.id, label: physicalCategories.label })
       .from(physicalCategories)
@@ -250,10 +338,15 @@ async function finalizePendingBook(db: Database, input: FinalizePendingBookInput
       .limit(1);
     if (!category) throw new Error(`Unknown physical category slug: ${input.physicalCategorySlug}`);
 
+    const publisherId = input.publisherName ? await upsertPublisher(tx, input.publisherName) : null;
+
     const searchText = buildSearchIndexText({
       title: input.title,
+      subtitle: input.subtitle,
       description: input.description,
       authors: input.authors,
+      illustrators: input.illustrators,
+      publisher: input.publisherName,
       categoryLabel: category.label,
       tags: input.tags ?? [],
       languageCode: input.languageCode,
@@ -272,6 +365,7 @@ async function finalizePendingBook(db: Database, input: FinalizePendingBookInput
         title: input.title,
         normalizedTitle: normalizeTitle(input.title),
         sortTitle: computeSortTitle(input.title),
+        subtitle: input.subtitle,
         shortDescription: input.description,
         languageCode: input.languageCode,
         fictionStatus: input.fictionType ?? "unknown_mixed",
@@ -281,7 +375,12 @@ async function finalizePendingBook(db: Database, input: FinalizePendingBookInput
         format: input.format,
         visualMediaType: input.visualMediaTypes,
         visualRealism: input.visualRealism,
+        publisherId,
+        isbn10: input.isbn10,
+        isbn13: input.isbn13,
         physicalCategoryId: category.id,
+        displayCoverUrl: input.displayCoverUrl,
+        displayCoverSource: input.displayCoverUrl ? "external_provider_thumbnail" : undefined,
         reviewStatus: "active",
         verifiedAt: new Date(),
         searchText,
@@ -290,13 +389,28 @@ async function finalizePendingBook(db: Database, input: FinalizePendingBookInput
       .where(and(eq(books.id, input.bookId), eq(books.reviewStatus, "pending_review")))
       .returning({ id: books.id });
 
-    if (updated.length === 0) return undefined;
+    if (updated.length === 0) {
+      // The ingestion item was already successfully claimed above — a book
+      // that vanished out from under it (archived by an unrelated action) is
+      // a genuine anomaly, not a normal "already resolved" race. Throwing
+      // rolls back the claim too, so the ingestion item stays `needs_review`
+      // rather than being marked completed with nothing actually finalized.
+      throw new Error("This book could not be finalized — it may have been changed by another action.");
+    }
     const bookId = updated[0].id;
 
-    await tx.delete(bookContributors).where(eq(bookContributors.bookId, bookId));
+    await invalidateEmbedding(tx, bookId);
+
+    await tx.delete(bookContributors).where(and(eq(bookContributors.bookId, bookId), eq(bookContributors.role, "author")));
     for (const [index, author] of input.authors.entries()) {
       const contributorId = await upsertContributor(tx, author);
       await tx.insert(bookContributors).values({ bookId, contributorId, role: "author", sortOrder: index });
+    }
+
+    await tx.delete(bookContributors).where(and(eq(bookContributors.bookId, bookId), eq(bookContributors.role, "illustrator")));
+    for (const [index, illustrator] of (input.illustrators ?? []).entries()) {
+      const contributorId = await upsertContributor(tx, illustrator);
+      await tx.insert(bookContributors).values({ bookId, contributorId, role: "illustrator", sortOrder: index });
     }
 
     await tx.delete(bookTags).where(eq(bookTags.bookId, bookId));
@@ -307,15 +421,15 @@ async function finalizePendingBook(db: Database, input: FinalizePendingBookInput
 
     await writeCurrentProvenance(tx, bookId, input.provenance);
 
+    await tx
+      .update(reviewFlags)
+      .set({ status: "resolved", resolvedAt: new Date(), resolvedBy: ADMIN_ACTOR, resolutionNote: "Resolved by Review Later approval." })
+      .where(and(eq(reviewFlags.bookId, bookId), eq(reviewFlags.status, "open"), inArray(reviewFlags.flagType, FLAG_TYPES_RESOLVED_BY_REVIEW_LATER_APPROVAL)));
+
     const [copyRow] = await tx.insert(bookCopies).values({ bookId, sourceIngestionItemId: input.ingestionItemId }).returning({ id: bookCopies.id });
 
-    const [completedItem] = await tx
-      .update(ingestionItems)
-      .set({ status: "completed", resultingCopyId: copyRow.id, completedAt: new Date() })
-      .where(and(eq(ingestionItems.id, input.ingestionItemId), eq(ingestionItems.status, "needs_review")))
-      .returning({ jobId: ingestionItems.jobId });
-    if (!completedItem) return undefined;
-    await completeParentJob(tx, completedItem.jobId);
+    await tx.update(ingestionItems).set({ resultingCopyId: copyRow.id }).where(eq(ingestionItems.id, input.ingestionItemId));
+    await completeParentJob(tx, claimed[0].jobId);
 
     await tx.insert(auditLog).values({
       actorLabel: ADMIN_ACTOR,
@@ -346,7 +460,7 @@ export interface ResolveDuplicateInput {
   note?: string;
 }
 
-export type ResolveDuplicateResult = { ok: true } | { ok: false; error: "not_found" | "already_resolved" | "insufficient_data"; message: string };
+export type ResolveDuplicateResult = { ok: true } | { ok: false; error: "not_found" | "already_resolved" | "insufficient_data" | "invalid_target"; message: string };
 
 /**
  * Resolves a possible-duplicate decision for a Review Later item (§12). Never a
@@ -360,6 +474,16 @@ export type ResolveDuplicateResult = { ok: true } | { ok: false; error: "not_fou
  * outcomes still need the admin's identity/category corrections. This function
  * only records the DUPLICATE DECISION itself and, for `same_edition`, performs
  * the copy-creation/placeholder-archival that decision implies.
+ *
+ * Correction pass: `existingBookId` is now validated BEFORE anything is
+ * written (§8) — it must be one of the duplicate candidates this ingestion
+ * item's own persisted draft actually recorded (`duplicateCandidateBookIds`),
+ * a real non-archived book, and never the placeholder itself. Previously this
+ * value was trusted as-is; the admin UI happens to only ever send a real
+ * candidate id, but the Server Action is independently invokable with
+ * anything. SAME EDITION additionally claims the ingestion item (an atomic
+ * conditional UPDATE) BEFORE creating the physical copy, not after, so two
+ * near-simultaneous resolutions of the same item can never both succeed (§7).
  */
 export async function resolveDuplicate(db: Database, input: ResolveDuplicateInput): Promise<ResolveDuplicateResult> {
   const [item] = await db.select().from(ingestionItems).where(eq(ingestionItems.id, input.ingestionItemId)).limit(1);
@@ -368,39 +492,73 @@ export async function resolveDuplicate(db: Database, input: ResolveDuplicateInpu
     return { ok: false, error: "already_resolved", message: "This item was already resolved. Refresh to see the latest version." };
   }
 
+  if (input.existingBookId) {
+    if (!isUuid(input.existingBookId)) return { ok: false, error: "invalid_target", message: "That book selection isn't valid." };
+    if (input.existingBookId === item.pendingBookId) {
+      return { ok: false, error: "invalid_target", message: "A record can't be marked as a duplicate of itself." };
+    }
+    const draftForValidation = readIntakeDraft(item.intakeDraft);
+    if (!draftForValidation || !draftForValidation.duplicateCandidateBookIds.includes(input.existingBookId)) {
+      return { ok: false, error: "invalid_target", message: "That book isn't one of the possible matches recorded for this item." };
+    }
+    const [targetBook] = await db.select({ id: books.id, reviewStatus: books.reviewStatus }).from(books).where(eq(books.id, input.existingBookId)).limit(1);
+    if (!targetBook || targetBook.reviewStatus === "archived") {
+      return { ok: false, error: "invalid_target", message: "That book is no longer available to compare against." };
+    }
+  }
+
   const plan = planDuplicateResolution(input.action, item.pendingBookId != null);
 
   if (input.action === "same_edition") {
     if (!input.existingBookId) return { ok: false, error: "insufficient_data", message: "Choose which existing book this is a copy of." };
-    return db.transaction(async (tx) => {
-      const [existingBook] = await tx.select({ id: books.id }).from(books).where(eq(books.id, input.existingBookId!)).limit(1);
-      if (!existingBook) return { ok: false, error: "not_found", message: "The existing book to attach a copy to could not be found." };
+    const existingBookId = input.existingBookId;
+    try {
+      return await db.transaction(async (tx) => {
+        // Claim the ingestion item FIRST, before any copy/book mutation — a
+        // concurrent resolution attempt then gets zero claimed rows and exits
+        // having created nothing at all (the previous order created the copy
+        // BEFORE this check, so a losing concurrent caller's copy insert
+        // survived even though it was told the item was already resolved).
+        const claimed = await tx
+          .update(ingestionItems)
+          .set({ status: "completed", completedAt: new Date() })
+          .where(and(eq(ingestionItems.id, input.ingestionItemId), eq(ingestionItems.status, "needs_review")))
+          .returning({ jobId: ingestionItems.jobId });
+        if (claimed.length === 0) {
+          return { ok: false, error: "already_resolved", message: "This item was already updated. Refresh to see the latest version." };
+        }
 
-      const [copyRow] = await tx.insert(bookCopies).values({ bookId: existingBook.id, sourceIngestionItemId: input.ingestionItemId }).returning({ id: bookCopies.id });
+        const [existingBook] = await tx.select({ id: books.id, reviewStatus: books.reviewStatus }).from(books).where(eq(books.id, existingBookId)).limit(1);
+        if (!existingBook || existingBook.reviewStatus === "archived") {
+          throw new Error("The existing book to attach a copy to could not be found.");
+        }
 
-      if (plan.archivePendingPlaceholder && item.pendingBookId) {
-        await tx.update(books).set({ reviewStatus: "archived", updatedAt: new Date() }).where(eq(books.id, item.pendingBookId));
-        await tx.update(reviewFlags).set({ status: "resolved", resolvedAt: new Date(), resolvedBy: ADMIN_ACTOR, resolutionNote: "Resolved as a duplicate — same edition." }).where(and(eq(reviewFlags.bookId, item.pendingBookId), eq(reviewFlags.status, "open")));
-      }
+        const [copyRow] = await tx.insert(bookCopies).values({ bookId: existingBook.id, sourceIngestionItemId: input.ingestionItemId }).returning({ id: bookCopies.id });
 
-      const [completedItem] = await tx
-        .update(ingestionItems)
-        .set({ status: "completed", resultingCopyId: copyRow.id, completedAt: new Date() })
-        .where(and(eq(ingestionItems.id, input.ingestionItemId), eq(ingestionItems.status, "needs_review")))
-        .returning({ jobId: ingestionItems.jobId });
-      if (!completedItem) return { ok: false, error: "already_resolved", message: "This item was already updated. Refresh to see the latest version." };
-      await completeParentJob(tx, completedItem.jobId);
+        if (plan.archivePendingPlaceholder && item.pendingBookId) {
+          await tx.update(books).set({ reviewStatus: "archived", updatedAt: new Date() }).where(eq(books.id, item.pendingBookId));
+          await tx
+            .update(reviewFlags)
+            .set({ status: "resolved", resolvedAt: new Date(), resolvedBy: ADMIN_ACTOR, resolutionNote: "Resolved as a duplicate — same edition." })
+            .where(and(eq(reviewFlags.bookId, item.pendingBookId), eq(reviewFlags.status, "open"), inArray(reviewFlags.flagType, FLAG_TYPES_RESOLVED_BY_SAME_EDITION_DUPLICATE)));
+        }
 
-      await tx.insert(auditLog).values({
-        actorLabel: ADMIN_ACTOR,
-        action: "duplicate_resolved_same_edition",
-        entityType: "book",
-        entityId: existingBook.id,
-        detail: { ingestionItemId: input.ingestionItemId, archivedPlaceholderBookId: plan.archivePendingPlaceholder ? item.pendingBookId : null, note: input.note ?? null },
+        await tx.update(ingestionItems).set({ resultingCopyId: copyRow.id }).where(eq(ingestionItems.id, input.ingestionItemId));
+        await completeParentJob(tx, claimed[0].jobId);
+
+        await tx.insert(auditLog).values({
+          actorLabel: ADMIN_ACTOR,
+          action: "duplicate_resolved_same_edition",
+          entityType: "book",
+          entityId: existingBook.id,
+          detail: { ingestionItemId: input.ingestionItemId, archivedPlaceholderBookId: plan.archivePendingPlaceholder ? item.pendingBookId : null, note: input.note ?? null },
+        });
+
+        return { ok: true };
       });
-
-      return { ok: true };
-    });
+    } catch (error) {
+      return { ok: false, error: "not_found", message: error instanceof Error ? error.message : "Couldn't resolve this duplicate. Please try again." };
+    }
   }
 
   if (input.action === "unresolved") {
@@ -414,7 +572,7 @@ export async function resolveDuplicate(db: Database, input: ResolveDuplicateInpu
   // also reach this outcome with no specific comparison target — e.g. dismissing
   // a same-title match as coincidental — in which case there is nothing to relate
   // two ids together, so no row is created, matching §14's "no nonsensical
-  // self-relations").
+  // self-relations"). `existingBookId` was already validated above.
   if (plan.createDuplicateRelationshipRow && input.existingBookId && item.pendingBookId) {
     await db.insert(bookDuplicates).values({
       bookIdA: item.pendingBookId,
@@ -469,7 +627,27 @@ export interface UpdateBookMetadataInput {
   expectedUpdatedAt?: Date;
 }
 
-export type UpdateBookMetadataResult = { ok: true } | { ok: false; error: "not_found" | "stale" | "invalid_category"; message: string };
+export type UpdateBookMetadataResult = { ok: true } | { ok: false; error: "not_found" | "stale" | "invalid_category" | "invalid_input"; message: string };
+
+/** Fields whose presence in a patch never changes the composed embedding
+ * document (`lib/embeddings/document.ts`'s `EmbeddingDocumentInput`) — every
+ * other field does, so any patch touching a field outside this set makes the
+ * book's stored embedding stale and must invalidate it (§4). */
+const EMBEDDING_IRRELEVANT_PATCH_FIELDS = new Set<keyof AdminMetadataPatch>(["isbn10", "isbn13"]);
+
+function patchAffectsEmbeddingDocument(patch: AdminMetadataPatch): boolean {
+  return (Object.keys(patch) as (keyof AdminMetadataPatch)[]).some((key) => !EMBEDDING_IRRELEVANT_PATCH_FIELDS.has(key));
+}
+
+/** Which open review flag a field being explicitly VERIFIED (kept unchanged)
+ * genuinely resolves — only the two fields with an obvious, unambiguous
+ * corresponding flag type. Verifying description/title/etc. has no
+ * corresponding "uncertain" flag today and resolves nothing extra. */
+const VERIFIED_FIELD_RESOLVES_FLAG_TYPE: Partial<Record<MetadataFieldKey, ReviewFlagType>> = {
+  physical_category: "category_uncertain",
+  visual_media_type: "visual_style_uncertain",
+  visual_realism: "visual_style_uncertain",
+};
 
 /**
  * The one place an admin metadata correction becomes a real, coherent database
@@ -491,6 +669,9 @@ export async function updateBookMetadata(db: Database, input: UpdateBookMetadata
     if (input.expectedUpdatedAt && existing.updatedAt.getTime() !== input.expectedUpdatedAt.getTime()) {
       return { ok: false as const, error: "stale" as const, message: "This record was changed since you loaded it. Refresh to see the latest version." };
     }
+
+    const validationFailure = validateAdminMetadataPatch(patch, { ageMinMonths: existing.ageMinMonths, ageMaxMonths: existing.ageMaxMonths });
+    if (validationFailure) return { ok: false as const, error: "invalid_input" as const, message: validationFailure.message };
 
     let categoryId = existing.physicalCategoryId;
     if (patch.physicalCategorySlug !== undefined) {
@@ -558,6 +739,28 @@ export async function updateBookMetadata(db: Database, input: UpdateBookMetadata
       input.bookId,
       provenanceDecisions.map((d) => ({ fieldKey: d.fieldKey, sourceType: d.sourceType }))
     );
+
+    // A field explicitly VERIFIED (kept unchanged) resolves the one review
+    // flag type that concern unambiguously corresponds to — e.g. "Keep
+    // current category" resolves `category_uncertain`. Never resolves a
+    // flag for a field that was merely CORRECTED (that's audited via
+    // `metadata_corrected` instead, not a flag-specific confirmation) and
+    // never touches an unrelated flag type.
+    const verifiedFlagTypes = [...new Set((input.explicitlyVerifiedFields ?? []).map((f) => VERIFIED_FIELD_RESOLVES_FLAG_TYPE[f]).filter((t): t is ReviewFlagType => t != null))];
+    if (verifiedFlagTypes.length > 0) {
+      await tx
+        .update(reviewFlags)
+        .set({ status: "resolved", resolvedAt: new Date(), resolvedBy: ADMIN_ACTOR, resolutionNote: "Confirmed unchanged by admin review." })
+        .where(and(eq(reviewFlags.bookId, input.bookId), eq(reviewFlags.status, "open"), inArray(reviewFlags.flagType, verifiedFlagTypes)));
+    }
+
+    // Invalidate any stale embedding in THIS SAME transaction as the
+    // searchable-content change (§4) — a book whose composed document just
+    // changed must never keep serving an old vector, even for the brief
+    // window before the fire-and-forget refresh (if any) completes.
+    if (patchAffectsEmbeddingDocument(patch)) {
+      await invalidateEmbedding(tx, input.bookId);
+    }
 
     await tx.insert(auditLog).values({
       actorLabel: ADMIN_ACTOR,
@@ -634,6 +837,8 @@ export interface CreateCategoryInput {
 export type CreateCategoryResult = { ok: true; id: string; slug: string } | { ok: false; error: "invalid_label"; message: string };
 
 export async function createCategory(db: Database, input: CreateCategoryInput): Promise<CreateCategoryResult> {
+  const inputValidation = validateCategoryInput(input);
+  if (inputValidation) return { ok: false, error: "invalid_label", message: inputValidation.message };
   const label = input.label.trim();
   if (!label) return { ok: false, error: "invalid_label", message: "A category name is required." };
 
@@ -661,20 +866,33 @@ export interface UpdateCategoryInput {
 
 export type UpdateCategoryResult = { ok: true } | { ok: false; error: "not_found" | "invalid_label"; message: string };
 
-/** Renaming NEVER touches `id` or `slug` (§19/§21) — only `label`/`description`/
+/**
+ * Renaming NEVER touches `id` or `slug` (§19/§21) — only `label`/`description`/
  * `displayOrder` are ever written here. A label change rebuilds deterministic
- * search text for every book currently in this category (§21), since the
- * category label is part of every affected book's composed search document. */
+ * search text (and invalidates any stale embedding, §4) for every book
+ * currently in this category, since the category label is part of every
+ * affected book's composed search/embedding document.
+ *
+ * Audit truthfulness correction (§10): this used to unconditionally log
+ * `category_renamed` even for a guidance-only or display-order-only edit,
+ * falsely claiming a rename that never happened. The audit action now
+ * truthfully distinguishes what actually changed: `category_renamed` (label
+ * only), `category_guidance_updated` (description only), or the bounded
+ * `category_updated` (anything else, or more than one field at once) whose
+ * detail lists exactly which fields changed — never a fabricated event.
+ */
 export async function updateCategory(db: Database, input: UpdateCategoryInput): Promise<UpdateCategoryResult> {
-  if (input.label !== undefined && !input.label.trim()) {
-    return { ok: false, error: "invalid_label", message: "A category name is required." };
-  }
+  const inputValidation = validateCategoryInput(input);
+  if (inputValidation) return { ok: false, error: "invalid_label", message: inputValidation.message };
 
   const outcome = await db.transaction(async (tx) => {
     const [existing] = await tx.select().from(physicalCategories).where(eq(physicalCategories.id, input.categoryId)).limit(1);
     if (!existing) return { ok: false as const, error: "not_found" as const, message: "This category could not be found." };
 
     const labelChanged = input.label !== undefined && input.label.trim() !== existing.label;
+    const descriptionChanged = input.description !== undefined && input.description !== existing.description;
+    const displayOrderChanged = input.displayOrder !== undefined && input.displayOrder !== existing.displayOrder;
+
     const update: Record<string, unknown> = { updatedAt: new Date() };
     if (input.label !== undefined) update.label = input.label.trim();
     if (input.description !== undefined) update.description = input.description;
@@ -686,14 +904,20 @@ export async function updateCategory(db: Database, input: UpdateCategoryInput): 
     if (labelChanged) {
       const affected = await tx.select({ id: books.id }).from(books).where(eq(books.physicalCategoryId, input.categoryId));
       affectedBookIds = affected.map((b) => b.id);
+      if (affectedBookIds.length > 0) await invalidateEmbeddings(tx, affectedBookIds);
     }
+
+    const changedFields = [labelChanged && "label", descriptionChanged && "description", displayOrderChanged && "displayOrder"].filter((f): f is string => Boolean(f));
+    let auditAction = "category_updated";
+    if (changedFields.length === 1 && labelChanged) auditAction = "category_renamed";
+    else if (changedFields.length === 1 && descriptionChanged) auditAction = "category_guidance_updated";
 
     await tx.insert(auditLog).values({
       actorLabel: ADMIN_ACTOR,
-      action: "category_renamed",
+      action: auditAction,
       entityType: "physical_category",
       entityId: input.categoryId,
-      detail: { previousLabel: existing.label, newLabel: input.label ?? existing.label, affectedBooks: affectedBookIds.length },
+      detail: { changedFields, previousLabel: labelChanged ? existing.label : undefined, newLabel: labelChanged ? input.label : undefined, affectedBooks: affectedBookIds.length },
     });
 
     return { ok: true as const, affectedBookIds };
@@ -764,8 +988,9 @@ export async function approveTaxonomySuggestion(
   confirmedLabel: string,
   description?: string
 ): Promise<TaxonomyDecisionResult> {
+  const labelValidation = validateTaxonomyLabel(confirmedLabel);
+  if (labelValidation) return { ok: false, error: "invalid_label", message: labelValidation.message };
   const label = confirmedLabel.trim();
-  if (!label) return { ok: false, error: "invalid_label", message: "A category name is required." };
 
   return db.transaction(async (tx) => {
     const [suggestion] = await tx.select().from(taxonomySuggestions).where(eq(taxonomySuggestions.id, suggestionId)).limit(1);
