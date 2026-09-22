@@ -1193,6 +1193,53 @@ pipeline validation — see `docs/AI_PIPELINE.md` §10 and `docs/GOOGLE_INTEGRAT
 supported but not connected in this environment (no `GOOGLE_BOOKS_API_KEY` available — see
 `docs/COSTS.md`). No Supabase or Sheets service is connected.
 
+## Completed work (Phase 8 correction pass — 2026-09-22)
+
+A bounded correction pass against the reviewed Phase 8 SHA (`4f6741829db50fd71dc94393859f15016de97219`),
+fixing ten concrete correctness/acceptance gaps found in review — never a redesign of Admin
+Review/taxonomy/search/database architecture. Full reasoning in `docs/DECISIONS.md`'s three new
+Phase 8 correction entries.
+
+1. **Review Later metadata parity** — `finalizePendingBook()` (the existing-pending-book
+   approval branch) now persists subtitle/illustrators/publisher/ISBN-10/13/display-cover, the
+   same trusted data set `saveNewBook()` (the ingestion-only branch) always did. Both branches
+   now derive the display cover through Phase 7's own `selectTrustworthyDisplayCoverUrl()` trust
+   boundary — neither did before.
+2. **Review-flag lifecycle truthfulness** — approval/same-edition-duplicate resolution now
+   resolve only the specific flag types they actually address
+   (`src/lib/admin/reviewFlagResolution.ts`), never every open flag on a book/placeholder.
+3. **Semantic embedding invalidation** — `src/lib/admin/embeddingInvalidation.ts`, called inside
+   the same transaction as any searchable-content change, so a stale vector can never survive
+   even briefly past the edit that invalidated it.
+4. **Expanded admin metadata editor** — the book-only editor now covers every provenance-tracked
+   field the review queue itself can surface (title, authors, language, publisher, ISBN,
+   description, category, age, fiction/nonfiction, format, visual media/style, visual realism),
+   organized as Identity/Classification/Discovery sections.
+5. **Real human-verify UX** — "Keep current category (mark verified)" is a real button wired to
+   `explicitlyVerifiedFields`, proven by an actual Playwright UI test, not only a persistence call.
+6. **Exactly-once concurrency** — a claim-before-mutate atomic conditional-update pattern for
+   every copy/book-creating path, proven with two genuinely independent Postgres connections in
+   `tests/integration/db/adminReview.test.ts`. One additive defense-in-depth partial unique index
+   on `book_copies.source_ingestion_item_id`.
+7. **Duplicate target validation** — `resolveDuplicate()` now validates `existingBookId` against
+   the item's own persisted `duplicateCandidateBookIds`, rejects an archived target, and rejects
+   self-targeting, before writing anything.
+8. **Runtime admin input validation** — `src/lib/admin/validation.ts`, a small, focused Zod-free
+   validation layer checked before any Phase 8 mutation write; closes a real bug where
+   `{ title: null }` silently kept the old title while still recording a false `human_corrected`
+   provenance row.
+9. **Audit truthfulness** — `updateCategory()` now logs `category_renamed`,
+   `category_guidance_updated`, or the bounded `category_updated` (with an accurate
+   `changedFields` list) depending on what actually changed, never a fabricated rename.
+
+**Tests:** 610 unit (+29), 145 integration (+24, including two tests that drive genuinely
+concurrent transactions over two independent database connections), 149 E2E (+4, including a
+real browser test proving the human-verify control produces `human_verified`). `npm run
+typecheck`/`npm run lint`/`npm run build` all clean.
+
+**Migration:** `drizzle/0005_phase8_correction_exactly_once_copy.sql` — one additive partial
+unique index, no new tables.
+
 ## Git status
 
 Repository is linked to `github.com/Shirin-Maleki/ssjc-library` (`origin`, `main`). Phase 7

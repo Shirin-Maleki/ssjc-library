@@ -48,6 +48,62 @@ any real collection-wide taxonomy analysis.
 Tests: 581 unit (+50), 121 integration (+25), 145 E2E (+6). `npm run typecheck` /
 `npm run lint` / `npm run build` all clean.
 
+## Phase 8 correction pass — 2026-09-22
+
+Ten concrete correctness/acceptance gaps fixed against reviewed Phase 8
+(`4f6741829db50fd71dc94393859f15016de97219`), never a redesign of Admin Review,
+taxonomy, search, or the database architecture. Full detail:
+`docs/IMPLEMENTATION_STATUS.md`, `docs/DECISIONS.md`.
+
+**Review Later metadata parity**: the existing-pending-book approval branch
+(`finalizePendingBook`) was silently dropping subtitle, illustrators, publisher,
+ISBN-10/13, and the trusted display cover — now persists the exact same data the
+ingestion-only branch always did, and both derive the display cover through
+Phase 7's own trust boundary.
+
+**Review-flag lifecycle**: approval and same-edition duplicate resolution now
+resolve only the flag types they genuinely address, never every open flag —
+previously a newly-approved book's unrelated `missing_metadata` flag (or an
+archived placeholder's unrelated `metadata_conflict` flag) could be marked
+resolved as a side effect of an unconnected decision.
+
+**Semantic embedding invalidation** (a real gap, not previously covered): Phase
+5's live Find query trusts any non-null `embedding` outright — it never
+compared the current document hash before this pass. An admin metadata/category
+edit now clears the stale vector in the SAME transaction as the content change,
+so a stale vector can never keep influencing semantic search, even briefly.
+
+**Admin editor coverage**: the book-only metadata editor previously exposed only
+description/category/age/format, while the review queue itself can surface
+missing title/authors/language/publisher/ISBN/fiction-type/visual-style —
+creating queue items with no way to actually resolve them. Now covers every
+provenance-tracked field, organized as Identity/Classification/Discovery.
+
+**A real human-verify control**: "Keep current category (mark verified)" — the
+backend's `explicitlyVerifiedFields` support existed but no UI ever used it.
+
+**Exactly-once concurrency**: a real transaction-ordering bug let a losing
+concurrent SAME EDITION resolution's copy insert survive its own "already
+resolved" error. Fixed with a claim-before-mutate atomic conditional update,
+applied to every copy/book-creating path and proven with two genuinely
+independent database connections racing each other in a real test.
+
+**Duplicate target validation**: `resolveDuplicate()` now validates
+`existingBookId` against the item's own persisted candidates before writing
+anything, rejecting an arbitrary book id, an archived target, or self-targeting.
+
+**Runtime input validation**: closes a real bug where `{ title: null }` (or an
+invalid language code) silently kept the old required value while still
+recording a false `human_corrected` provenance row, claiming a correction that
+never happened.
+
+**Audit truthfulness**: a category guidance-only edit is no longer logged as
+`category_renamed`.
+
+One additive migration (`drizzle/0005_...`, a defense-in-depth partial unique
+index on `book_copies.source_ingestion_item_id`). Tests: 610 unit (+29), 145
+integration (+24), 149 E2E (+4).
+
 ## Phase 7 complete — Add a Book, end to end — 2026-09-20/21
 
 A teacher can now photograph a book cover and, ~30-60 seconds later, have it shelved:

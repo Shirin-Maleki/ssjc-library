@@ -104,7 +104,7 @@ entirely (semantic search was out of scope that phase); Phase 5 added them, plus
 | `current_location` | text | nullable, e.g. "Blue Room" — independent of `home_location` so a copy can be temporarily elsewhere; future-ready, unused by any v1 screen |
 | `availability_status` | enum(`on_shelf`,`in_classroom`,`unknown`), not null default `on_shelf` | future-ready, unused by any v1 screen |
 | `acquired_at` | timestamptz | nullable |
-| `source_ingestion_item_id` | uuid, FK → `ingestion_items.id` | nullable — which ingestion event registered this specific copy |
+| `source_ingestion_item_id` | uuid, FK → `ingestion_items.id` | nullable — which ingestion event registered this specific copy. A partial unique index (Phase 8 correction pass, `where source_ingestion_item_id is not null`) enforces "one ingestion item produces at most one physical copy" as a database-level backstop — the real guarantee is the application-level atomic-claim pattern in `src/lib/admin/persistence.ts`; this index is defense-in-depth, never something a caller is expected to catch a raw unique-violation from. |
 | `created_at` | timestamptz | |
 
 **Why this split, concretely:** a teacher adding a second physical copy of a book already in
@@ -662,3 +662,10 @@ design:**
   nullable) added** — see §8 above.
 - **No new tables.** One migration (`drizzle/0004_phase8_admin_review_taxonomy.sql`,
   four `ALTER TABLE ADD COLUMN` + two `ADD CONSTRAINT` statements, all additive).
+
+**2026-09-22 — Phase 8 correction pass:**
+- **`book_copies` gains one partial unique index**, `book_copies_source_ingestion_item_unique`
+  (`source_ingestion_item_id`, `where source_ingestion_item_id is not null`) — a database-level
+  defense-in-depth backstop for "one ingestion item produces at most one physical copy," see
+  above. One migration (`drizzle/0005_phase8_correction_exactly_once_copy.sql`, one
+  `CREATE UNIQUE INDEX` statement). No new tables, no other schema changes.

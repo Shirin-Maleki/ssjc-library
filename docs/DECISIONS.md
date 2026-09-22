@@ -2387,3 +2387,77 @@ demonstrably safe" as the brief requires to justify doing it this phase.
 `src/lib/admin/reviewQueueSource.ts`; `src/lib/admin/categoryHealth.ts`;
 `src/lib/admin/provenanceWrite.ts`; `src/db/backfillPendingBookLinks.ts`;
 `src/lib/auth/guards.ts`; `src/app/api/admin/source-cover/[ingestionItemId]/route.ts`.
+
+## Phase 8 correction pass: claim-before-mutate is the exactly-once pattern, not a post-hoc check
+
+**Decision:** Every Phase 8 code path that can result in a physical copy or a new
+book (`finalizePendingBook`, `resolveDuplicate`'s SAME EDITION branch,
+`approveReviewLater`'s ingestion-only branch) now claims the `ingestion_items` row
+with an atomic conditional `UPDATE ... WHERE status = 'needs_review'` FIRST, before
+any copy/book mutation happens — never after. A concurrent caller's own claim
+attempt then gets zero affected rows and exits immediately, having created
+nothing at all.
+
+**Why:** The original order (create the copy, THEN conditionally update the
+ingestion item, then merely report an error if that update affected zero rows) let
+a losing concurrent caller's copy insert survive even though it was told the item
+was already resolved — the transaction's own return value doesn't roll back
+work the same transaction already committed to doing. Postgres's row-level
+locking on `UPDATE` is what makes claim-first correct: two concurrent
+transactions racing the same conditional `UPDATE` on the same row serialize
+against each other (the second blocks until the first commits, then re-evaluates
+its `WHERE` clause and finds zero matching rows) — proven directly with two
+genuinely independent Postgres connections in
+`tests/integration/db/adminReview.test.ts`, not merely asserted.
+
+`approveReviewLater`'s ingestion-only path claims via a small state transition
+(`needs_review` -> `processing`, reverted back to `needs_review` if the
+subsequent `saveNewBook()` call throws) since `saveNewBook()` itself — an
+approved, unmodified Phase 7 function — has no such conditional guard of its
+own and was never changed to add one.
+
+## Phase 8 correction pass: two intentionally different provenance rules for category, not a bug
+
+**Decision:** Review Later approval (`approveReviewLater`, reusing Phase 7's own
+`resolveConfirmFields()`) keeps category's original Phase 7 rule — untouched
+stays `ai_inferred`, touched (whether confirmed same or changed) becomes
+`human_verified`, NEVER `human_corrected`. The separate, general admin metadata
+editor (`updateBookMetadata`, via `resolveProvenanceForPatch()`) uses a
+different, general rule: any field the admin actually changes — including
+category — becomes `human_corrected`; `human_verified` is reserved for a field
+explicitly confirmed unchanged via a dedicated action ("Keep current category").
+
+**Why:** These are two different real interactions with two different real
+meanings. Approving a Review Later item is fundamentally the same kind of
+decision a teacher's Confirm screen already makes (a first-time bibliographic
+decision) — reusing that exact function keeps the two paths' provenance
+identical by construction rather than by careful parallel maintenance. The
+general editor's "Keep current category" is a distinct, deliberate,
+NON-changing confirmation — the human-verify UX §6 of the correction brief asks
+for — and only a field-specific verify action, never an ordinary Save, should
+ever produce `human_verified` there. Both rules are internally consistent; they
+simply answer different questions ("what happened during initial approval?" vs.
+"did the admin change this or explicitly confirm it later?").
+
+## Phase 8 correction pass: embedding invalidation lives in the same transaction as the content change
+
+**Decision:** `src/lib/admin/embeddingInvalidation.ts`'s `invalidateEmbedding()`/
+`invalidateEmbeddings()` are called INSIDE the same `db.transaction()` that
+changes a book's searchable content (`updateBookMetadata`, `updateCategory`'s
+rename branch, `finalizePendingBook`) — never as a separate follow-up step after
+commit.
+
+**Why:** Phase 5's live semantic-retrieval query trusts any non-null
+`books.embedding` outright; it does not compare the current document hash
+against `embedding_source_hash` before using the stored vector (that comparison
+only exists in the offline `embeddings:generate --mode=stale` batch script). If
+invalidation happened only after the transaction committed — or worse, only if
+the fire-and-forget refresh happened to succeed — there would be a real window
+(and, on refresh failure, an unbounded one) where a book's semantic vector no
+longer corresponds to its actual current content. Committing the null-out in the
+same transaction as the change means the moment the searchable content is
+different, the stale vector is already gone — no window at all.
+
+**Relevant files:** `src/lib/admin/persistence.ts`; `src/lib/admin/embeddingInvalidation.ts`;
+`src/lib/admin/validation.ts`; `src/lib/admin/reviewFlagResolution.ts`;
+`src/db/schema/ingestion.ts`; `tests/integration/db/adminReview.test.ts`.

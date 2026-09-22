@@ -239,6 +239,22 @@ mechanisms fix this:
    underlying fields, so `embeddings:generate --mode=stale` independently notices the mismatch
    on its own next run. The two commands compose; they are never conflated.
 
+   **Phase 8 correction pass — live Find never reads a stale vector in the meantime.** The
+   `--mode=stale` hash comparison above is an *offline batch-detection* convention (a script run
+   a human triggers later); it was never consulted by the live semantic-retrieval query itself,
+   which simply trusts any non-null `books.embedding`. That gap meant an admin metadata/category
+   edit could rebuild `search_text` immediately while the OLD embedding vector kept actively
+   influencing semantic Find results until someone happened to run a stale-mode backfill. Every
+   Phase 8 admin mutation that changes embedding-document content (`updateBookMetadata`, a
+   category label rename affecting its books, Review Later finalization) now clears
+   `embedding`/`embedding_model`/`embedding_dimension`/`embedding_composition_version`/
+   `embedding_source_hash`/`embedding_generated_at` to `null` — via the one shared
+   `src/lib/admin/embeddingInvalidation.ts` helper — in the SAME transaction as the content
+   change, before the fire-and-forget targeted refresh is even attempted. A book with a cleared
+   embedding simply has no semantic signal (conventional full-text/trigram search is completely
+   unaffected) until the next successful refresh or backfill — the same normal, honest state a
+   never-yet-embedded book is already in, never a fabricated or silently-stale one.
+
 **Why a script, not a third `.sql` migration file, for the backfill logic itself.** The
 composition (which relational data feeds `search_text`, in what order) already lives in one
 place, `buildSearchIndexText()` — reimplementing that same logic in raw SQL for a migration file
