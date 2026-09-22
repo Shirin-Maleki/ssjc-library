@@ -1,28 +1,32 @@
 # Implementation Status
 
-Last updated: 2026-09-21 (Phase 7 implemented; correction pass, final closure pass, a real
-teacher-reported cover-recognition correction, a HEIC rotation-hint/vision-failure-classification
-follow-up, and an AI-first catalog draft correction all applied — review pending). This document
-is continuity insurance — it should always let another coding agent open this repository cold and
-know exactly where things stand. Keep it current at the end of every phase.
+Last updated: 2026-09-22 (Phase 8 — Admin Review + Taxonomy — complete, including its correction
+pass and final closure pass, all reviewed and approved). This document is continuity insurance —
+it should always let another coding agent open this repository cold and know exactly where things
+stand. Keep it current at the end of every phase.
 
 ## Current phase
 
-**PHASE 7 IMPLEMENTED — AI-FIRST CATALOG DRAFT CORRECTION APPLIED / REVIEW PENDING.** Not yet
-marked approved by this document itself — that determination belongs to the reviewer, not to
-whichever agent last touched the code. See "Completed work (Phase 7, 2026-09-20/21)," "Completed
-work (Phase 7 correction pass, 2026-09-21)," "Completed work (Phase 7 final closure pass,
-2026-09-21)," "Completed work (Phase 7 real cover-recognition correction, 2026-09-21)," and
-"Completed work (Phase 7 AI-first catalog draft correction, 2026-09-21)" below for exactly what
-shipped and what's still genuinely open (real Google Books validation — no key available; a fresh
-live Gemini call against real HEIC bytes; a full real-provider acceptance test of the new combined
-one-call pipeline against the real teacher-tested book — all blocked by a real, concretely-
-identified Gemini free-tier daily quota of 20 requests/day, confirmed still exhausted during this
-pass's own bounded check, not by a code defect). Phase 6 (Google Drive connection, including its
-2026-09-20 correction pass) and Phase 5 (real search architecture, including its real-provider
-validation pass) remain complete and approved, unaffected except where Phase 7 built directly on
-Phase 6's Drive infrastructure — approved as
-of commit `88b02752363649c297b6e6f3e38202cee2e51a6a` (Phase 5) and
+**PHASES 0–8 COMPLETE AND APPROVED. PHASE 9 HAS NOT STARTED.** Phase 8 (Admin Review + Taxonomy,
+including its correction pass and final closure pass) is complete and approved as of closure-pass
+commit `c0c95b4700ac5114cdc71e16d918cefe09505028`. Phase 7 (Add a Book, including its correction
+pass, final closure pass, real cover-recognition correction, HEIC rotation-hint/vision-failure-
+classification follow-up, and AI-first catalog draft correction) is likewise complete and
+approved — it was the reviewed starting point for Phase 8 (commit
+`a75f5c9184f3ad3c1c16ef0950ea5c3398b8f654`). See "Completed work (Phase 7, 2026-09-20/21)" through
+"Completed work (Phase 7 AI-first catalog draft correction, 2026-09-21)," and "Completed work
+(Phase 8 — Admin Review + Taxonomy)" through "Completed work (Phase 8 final closure pass —
+2026-09-22)," below for exactly what shipped in each. Phase 7's real Google Books validation and a
+fresh live Gemini call against real HEIC bytes remain the only genuinely open, non-blocking items
+from that phase (blocked by a real, concretely-identified Gemini free-tier daily quota, not by a
+code defect — see that phase's own sections for detail); they did not block Phase 7's approval and
+do not block Phase 8's.
+
+**Phase 9 has not started, and must not begin until the driver thread explicitly decides to start
+it.** Phase 6 (Google Drive connection, including its 2026-09-20 correction pass) and Phase 5
+(real search architecture, including its real-provider validation pass) remain complete and
+approved, unaffected by later phases except where Phase 7 built directly on Phase 6's Drive
+infrastructure — approved as of commit `88b02752363649c297b6e6f3e38202cee2e51a6a` (Phase 5) and
 `3fc48d4c4961d71308f5de9b098c18413ad99db4` (Phase 6, the Phase 7 starting point).
 
 Phase 6 established the OAuth-authorized Google Drive infrastructure that later phases (7: Add
@@ -140,8 +144,8 @@ repository — verified directly (see "Security review" in this pass's report).
 | 4 | Real database | Complete (approved) |
 | 5 | Real search architecture | Complete (approved), real-provider validation 2026-09-17 |
 | 6 | Google Drive connection | **Complete — real Google Drive validation passed 2026-09-20** |
-| 7 | Single Add-a-Book flow | **Implemented — correction pass and final closure pass both applied, review pending (see "Current phase" above)** |
-| 8 | Admin review + taxonomy | Not started |
+| 7 | Single Add-a-Book flow | **Complete (approved)** — correction pass, final closure pass, cover-recognition correction, HEIC follow-up, and AI-first catalog draft correction all applied |
+| 8 | Admin review + taxonomy | **Complete (approved)** — correction pass and final closure pass both applied (see "Current phase" above) |
 | 9 | Google Sheets | Not started |
 | 10 | Bulk import engine | Not started |
 | 11 | Taxonomy research batch | Not started |
@@ -1395,6 +1399,8 @@ taxonomy clustering (Phase 11).
 
 ## Next recommended task
 
-Await explicit review/approval of Phase 8 as complete. **Phase 9 must not begin until that
-approval.** Whoever picks up Phase 9 should read this file's "Completed work (Phase 8...)"
-section, `docs/TAXONOMY.md`, and `docs/DECISIONS.md`'s Phase 8 entries before starting.
+Phase 8 is complete and approved. **Phase 9 has not started and may only begin once the driver
+thread explicitly decides to start it** — this document being current is not itself that
+decision. Whoever picks up Phase 9 should read this file's "Completed work (Phase 8...)" sections,
+`docs/TAXONOMY.md`, and `docs/DECISIONS.md`'s Phase 8 entries before starting, and must not
+redesign Phase 8's approved architecture in the process.

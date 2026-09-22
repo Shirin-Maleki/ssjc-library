@@ -103,9 +103,52 @@ third-party OAuth apps pending admin review) — real validation used a personal
 instead, with the real Drive folder shared to it, and the OAuth consent screen running as
 External + Testing rather than Internal. This is a genuine, working setup for continued
 development, proven by the real smoke-test pass above, but it is **not a finalized production
-credential strategy** — see `docs/GOOGLE_SETUP.md` and `docs/IMPLEMENTATION_STATUS.md` for the
-full reasoning before deploying this to production. **Phase 7 may now begin once explicitly
-approved** — this document does not itself grant that approval.
+credential strategy** — that decision is still intentionally unresolved; see `docs/GOOGLE_SETUP.md`
+and `docs/IMPLEMENTATION_STATUS.md` for the full reasoning before deploying this to production.
+
+**PHASE 7 (Add a Book, end to end) IS COMPLETE AND APPROVED** — a teacher photographs a cover and,
+through a server-mediated Drive upload plus AI identification/enrichment (Gemini) and metadata
+lookup (Open Library, Google Books optional), the book is confirmed and shelved, with a Quick Edit
+correction surface and a Review Later path for genuinely uncertain items. Includes its own
+correction pass, final closure pass, a real teacher-reported cover-recognition correction, a HEIC
+rotation-hint/vision-failure-classification follow-up, and an AI-first catalog draft correction —
+all applied and approved. Full detail: `docs/AI_PIPELINE.md`, `docs/IMPLEMENTATION_STATUS.md`.
+
+**PHASE 8 (Admin Review + Taxonomy) IS COMPLETE AND APPROVED**, including its correction pass and
+final closure pass, as of commit `c0c95b4700ac5114cdc71e16d918cefe09505028`. An admin can now open
+uncertain/incomplete/pending catalog records from a real, computed review queue and resolve them
+(Review Later approval, a focused five-outcome duplicate comparison, a full metadata editor with
+truthful correction/verification provenance) plus manage physical categories and taxonomy
+suggestions. **Read `docs/DECISIONS.md`'s Phase 8 entries and `docs/TAXONOMY.md` before changing
+any part of the category or review architecture** — the reasoning behind several
+non-obvious-looking choices lives there, not in the code comments alone. These Phase 8 invariants
+must hold regardless of what a later phase adds:
+
+- The review queue is **computed** from existing tables (`ingestion_items`, `review_flags`,
+  `book_duplicates`, `book_field_provenance`, active-book completeness) — there is no
+  `review_queue` table, and none should be added.
+- A Review Later item may have an associated `pending_review` book row, or none at all — both are
+  valid states a queue item can be in.
+- AI never automatically creates a physical category — every category is created or activated by
+  an explicit admin action.
+- Every book has **exactly one** physical category (the shelf location); tags remain a separate,
+  many-valued dimension — never conflate the two.
+- Duplicate handling is deliberately narrow (same edition / different edition / different language
+  / false match / unresolved) — there is no general book-merge engine, and none should be added
+  without a real design decision.
+- Human correction (`human_corrected`) and verification (`human_verified`) provenance/audit
+  semantics must remain truthful to what actually happened — an unchanged value that was merely
+  confirmed must never be logged as a correction, and vice versa.
+- A searchable-metadata change invalidates any stale embedding in the same transaction as the
+  content change, before a non-blocking regeneration is attempted — a stale vector must never
+  keep influencing semantic search, even briefly.
+- Physical category ids/slugs are stable and never regenerated on rename; a category still
+  referenced by a non-archived book cannot simply be deactivated, and (as of the final closure
+  pass) a deactivated category can no longer receive a brand-new assignment either.
+
+**PHASE 9 HAS NOT STARTED.** It may only begin once the driver thread explicitly decides to start
+it — this document being current is not itself that decision, and Phase 9 must not redesign
+Phase 8's approved architecture.
 
 See `docs/IMPLEMENTATION_STATUS.md` for the authoritative, continuously updated detail — this
 file only orients you to the process, not the current state, since state changes every phase and
