@@ -104,6 +104,74 @@ One additive migration (`drizzle/0005_...`, a defense-in-depth partial unique
 index on `book_copies.source_ingestion_item_id`). Tests: 610 unit (+29), 145
 integration (+24), 149 E2E (+4).
 
+## Phase 8 final closure pass — 2026-09-22
+
+Nine remaining review findings against reviewed Phase 8
+(`b29370e6e155d8a5fcd404cad27d646bbbb5e1af`), never a reopening of its
+architecture. Full detail: `docs/IMPLEMENTATION_STATUS.md`, `docs/DECISIONS.md`,
+`docs/SECURITY.md`.
+
+**Runtime ID/state validation, closed the rest of the way**: every remaining
+admin id argument (`ingestionItemId`, `bookId`, `categoryId`, `flagId`,
+`suggestionId`, `existingCategoryId`, a route-key-parsed id) is now checked with
+the project's existing `isUuid()` convention before reaching a Postgres `uuid`
+comparison, turning a malformed value into a calm not-found result instead of a
+raw `invalid input syntax for type uuid` failure. Duplicate-resolution `action`,
+review-flag `outcome`, and `explicitlyVerifiedFields` entries are validated
+against their real, small vocabularies — no generic validation framework added.
+
+**Effective Review Later age-range validation**: `approveReviewLater` now
+validates the actual RESOLVED age min/max pair — after merging the admin's
+edits with the draft's AI/proposed values — not just each individually-supplied
+bound's own range, closing the case where raising only the minimum past an
+untouched AI-suggested maximum previously reached the database constraint
+directly.
+
+**Inactive categories can no longer receive a new assignment**: both Review
+Later approval and the general metadata editor now require the selected
+category to exist and be active before accepting it as a new assignment — a
+previously-assigned inactive category stays visible on its existing book, but a
+fresh assignment must go through an active category, closing a bypass of the
+existing category-deactivation safety model via direct Server Action
+invocation.
+
+**Evidence/Provenance in Admin Review**: the active-book Review Detail now
+loads and displays current `book_field_provenance` as a restrained,
+progressive-disclosure panel (auto-expanded only when a field genuinely needs
+review), translated into calm English via a new pure `provenanceLabels.ts`
+module — never a raw enum, table name, UUID, or decimal.
+
+**Saved provider candidate evidence for Review Later**: the persisted Phase 7
+draft's `metadataCandidates`/`reconciliationOutcome` are now shown inside the
+existing evidence disclosure — provider, title, authors, publisher, language,
+ISBN, and whether a candidate was the accepted one — read entirely from
+already-persisted state, never a new Open Library/Gemini call.
+
+**Stronger duplicate comparison evidence**: the comparison now shows the
+existing book's display cover, ISBN-10/13, and edition alongside the prior
+title/author/publisher/language/copy-count line (the latter two fetched via one
+small supplementary query scoped to this admin-only view, since the shared
+`Book`/`bookRepository` projection never populates ISBN for a real catalog
+record). The two-column mobile action layout is unchanged.
+
+**Truthful human-verification audit**: a verify-only save (an empty patch plus
+`explicitlyVerifiedFields`) now audits as `metadata_verified`; a save mixing a
+real correction with a verification audits as the bounded `metadata_updated`
+with separate `correctedFields`/`verifiedFields`; a correction-only save stays
+`metadata_corrected` — closing the case where the real "Keep current category"
+control was being logged as a correction despite changing nothing.
+
+**Uncertainty flags resolved by the correction that addresses them**: changing
+`physicalCategorySlug`/visual media/visual realism now resolves the
+corresponding `category_uncertain`/`visual_style_uncertain` flag exactly the
+same way explicit verification already did — closing a redundant
+correct-then-separately-resolve two-step for the far more common real
+interaction.
+
+Tests: 633 unit (+23), 157 integration (+13), 149 E2E (unchanged — existing
+coverage re-verified against the new UI). `npm run typecheck` / `npm run lint`
+/ `npm run build` / `npm run evaluate:search` all clean.
+
 ## Phase 7 complete — Add a Book, end to end — 2026-09-20/21
 
 A teacher can now photograph a book cover and, ~30-60 seconds later, have it shelved:

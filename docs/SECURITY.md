@@ -321,6 +321,21 @@ Full architecture in `docs/AI_PIPELINE.md`; the upload-architecture correction
   literal string `"admin"`** — matching the existing "no individual accounts"
   decision (`docs/DECISIONS.md`); there is no more precise identity to record,
   and none was added.
+- **Every admin id/state/enum argument is runtime-checked before it reaches a
+  database comparison** (final closure pass) — a Server Action is directly
+  invokable with an arbitrary JSON body regardless of what the UI actually
+  sends, and TypeScript's compile-time types do not exist at runtime.
+  `src/lib/admin/validation.ts`'s `isValidId()` (the existing `isUuid()`
+  convention) guards every id argument across `persistence.ts`
+  (`ingestionItemId`, `bookId`, `categoryId`, `flagId`, `suggestionId`,
+  `existingCategoryId`, and a route-key-parsed id in `reviewDetail.ts`) before
+  any `eq(table.id, value)` comparison against a `uuid` column, turning a
+  malformed value into a calm not-found/invalid-input application result
+  rather than a raw Postgres `invalid input syntax for type uuid` failure.
+  `isValidDuplicateAction()`/`isValidReviewFlagOutcome()`/
+  `validateVerifiedFieldKeys()` apply the same principle to
+  `resolveDuplicate()`'s `action`, `resolveReviewFlag()`'s `outcome`, and
+  `explicitlyVerifiedFields` entries against their real, small vocabularies.
 
 ## What's explicitly out of scope through Phase 8
 

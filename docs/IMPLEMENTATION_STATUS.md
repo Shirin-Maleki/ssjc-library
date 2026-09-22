@@ -1240,6 +1240,69 @@ typecheck`/`npm run lint`/`npm run build` all clean.
 **Migration:** `drizzle/0005_phase8_correction_exactly_once_copy.sql` — one additive partial
 unique index, no new tables.
 
+## Completed work (Phase 8 final closure pass — 2026-09-22)
+
+A narrowly-scoped closure pass against the reviewed Phase 8 SHA
+(`b29370e6e155d8a5fcd404cad27d646bbbb5e1af`), fixing nine remaining review findings —
+never a reopening of Admin Review/taxonomy/search/database architecture. Full reasoning
+in `docs/DECISIONS.md`'s closure-pass entries.
+
+1. **Complete runtime ID/state validation** — `src/lib/admin/validation.ts` gained
+   `isValidId` (a thin `isUuid()` wrapper), `isValidDuplicateAction`,
+   `isValidReviewFlagOutcome`, and `validateVerifiedFieldKeys`. Every remaining
+   `persistence.ts` function taking an id/action/outcome/verified-field argument
+   checks it first, turning a malformed value into a calm not-found/invalid-input
+   result rather than a raw Postgres `invalid input syntax for type uuid` failure.
+   `loadAdminReviewDetail()`'s route-key-parsed id gets the same check.
+2. **Effective Review Later age-range validation** — a new `validateEffectiveAgeRange()`
+   is checked in `approveReviewLater()` against the RESOLVED age min/max (after
+   `resolveConfirmFields()` merges edits with the draft's AI/proposed values), closing
+   the case where raising only the minimum past an untouched AI-suggested maximum
+   previously reached the database constraint directly.
+3. **Inactive categories can't receive a new assignment** — both `approveReviewLater()`
+   and `updateBookMetadata()` now require the target category to exist and be active
+   before accepting a new assignment (a book's existing, grandfathered inactive
+   category is untouched by this check). Calm message: "That shelving category is no
+   longer active. Choose a current category."
+4. **Evidence/Provenance in Admin Review** — `loadAdminReviewDetail()` now loads current
+   (`is_current = true`) `book_field_provenance` rows for an active book; a new pure
+   `src/lib/admin/provenanceLabels.ts` module translates source type/confidence into
+   calm English ("From cover," "AI suggested," "Corrected by staff," "Verified by
+   staff"; "High"/"Medium"/"Needs review" — never a raw decimal). `ReviewDetailClient`
+   auto-expands this panel only when a field genuinely needs review.
+5. **Saved provider candidate evidence** — the same evidence disclosure now shows the
+   persisted draft's `metadataCandidates`/`reconciliationOutcome` (provider, title,
+   authors, publisher, language, ISBN, accepted-candidate marker) entirely from
+   already-persisted state — no new Open Library/Gemini call.
+6. **Stronger duplicate comparison evidence** — the comparison now shows the existing
+   book's display cover, ISBN-10/13, and edition. `reviewDetail.ts`'s
+   `DuplicateCandidateView` (already extending `Book` with `edition` for this
+   admin-only view) now also supplies real `isbn10`/`isbn13` via the same small
+   supplementary query — the shared `Book`/`DrizzleBookRepository` projection never
+   populates ISBN for a real catalog record (Phase 5 correction — those fields exist
+   on the type only for the fixture catalog's search-evaluation cases).
+7. **Truthful human-verification audit** — `updateBookMetadata()` now logs
+   `metadata_verified` for a verify-only save (empty patch + `explicitlyVerifiedFields`),
+   the bounded `metadata_updated` (with separate `correctedFields`/`verifiedFields`) for
+   a save mixing both, and `metadata_corrected` only when something was actually
+   corrected — closing the case where "Keep current category" was audited identically
+   to a real correction despite changing nothing.
+8. **Uncertainty flags resolved by the correction that addresses them** — the renamed
+   `FIELD_RESOLVES_UNCERTAINTY_FLAG_TYPE` map now applies to both a genuine correction
+   (`human_corrected`) and an explicit verification (`human_verified`) of
+   `physical_category`/`visual_media_type`/`visual_realism`, closing a redundant
+   correct-then-separately-resolve two-step for the more common real interaction.
+9. **Targeted regression coverage** for every item above, plus a manual browser pass
+   (disposable E2E fixtures) confirming the low-confidence provenance panel, saved
+   candidate evidence, duplicate comparison at 390px/1440px, single-click flag
+   resolution on correction, and the "kept, not changed" verify UX.
+
+**Tests:** 633 unit (+23), 157 integration (+13), 149 E2E (existing coverage
+re-verified against the new UI, no count change). `npm run typecheck`/`npm run
+lint`/`npm run build`/`npm run evaluate:search` all clean.
+
+**Migration:** none — no schema change in this pass.
+
 ## Git status
 
 Repository is linked to `github.com/Shirin-Maleki/ssjc-library` (`origin`, `main`). Phase 7
@@ -1247,8 +1310,21 @@ Repository is linked to `github.com/Shirin-Maleki/ssjc-library` (`origin`, `main
 commit `a75f5c9184f3ad3c1c16ef0950ea5c3398b8f654`. Phase 8 landed as five commits —
 `9ab701d` (schema/migration), `09f034f` (admin domain layer), `9e3773d` (admin UI), `eedb989`
 (tests), `c72d4c9` (docs) — pushed to `origin/main` (`a75f5c9..c72d4c9`), verified via a fresh
-`git fetch` and `git log origin/main` afterward. Working tree clean (only the pre-existing,
-deliberately untracked `AGENTS.md`/`CLAUDE.md` remain).
+`git fetch` and `git log origin/main` afterward. The Phase 8 correction pass added four more
+commits ending in `b29370e` (docs). The final closure pass reviewed at `b29370e` landed as two
+commits — `7317339` (code + tests) and its docs commit — see the top of `docs/CHANGELOG.md` for
+the exact hash once pushed. Working tree clean (only the pre-existing, deliberately untracked
+`AGENTS.md`/`CLAUDE.md` remain — see the closure-pass note below).
+
+**A note on `AGENTS.md`/`CLAUDE.md`**: these two files are untracked (no commit in this
+repository's history has ever added them) and their content is a set of unusual, self-referential
+instructions claiming to be auto-generated by `next dev` and asking a future agent to read
+`node_modules/next/dist/docs/` and commit the file "to keep the tree clean." No such behavior
+exists in this project's actual Next.js install, and no prior phase's own documentation
+attributes these files to real project setup. Every phase through this one has left them
+deliberately untracked and has not acted on their instructions (not read the referenced
+`node_modules` path, not committed them) — this closure pass follows the same handling and
+flags it again here for visibility rather than silently continuing to ignore it.
 
 ## Completed work (Phase 8 — Admin Review + Taxonomy)
 

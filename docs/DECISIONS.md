@@ -2461,3 +2461,63 @@ different, the stale vector is already gone — no window at all.
 **Relevant files:** `src/lib/admin/persistence.ts`; `src/lib/admin/embeddingInvalidation.ts`;
 `src/lib/admin/validation.ts`; `src/lib/admin/reviewFlagResolution.ts`;
 `src/db/schema/ingestion.ts`; `tests/integration/db/adminReview.test.ts`.
+
+## Phase 8 final closure pass: a narrow `DuplicateCandidateView` rather than widening `Book`
+
+**Decision:** The duplicate-comparison view's ISBN-10/13 and edition are supplied by a
+small supplementary query in `reviewDetail.ts` (`{id, edition, isbn10, isbn13}` merged
+onto the existing `Book[]` results into a `DuplicateCandidateView extends Book` type),
+never by widening the shared `Book` domain type or `DrizzleBookRepository`'s projection.
+
+**Why:** `Book.isbn10`/`isbn13` are already declared on the shared type but
+`DrizzleBookRepository` deliberately never populates them (a Phase 5 correction — they
+exist on the type only so the fixture catalog can carry a real ISBN for a handful of
+search-evaluation cases, never surfaced in Find or Book Detail). Populating them for
+every caller of `getBooksByIds`/`getBookById` would be a real, pervasively-consumed
+projection change reaching Find/Search/Book Detail/embeddings for a need that is, in
+fact, admin-only. `edition` has no column on `Book` at all for the same reason (no
+teacher-facing use exists). One small, scoped query — the same shape already used for
+`edition` before this pass — is lower blast radius than either alternative and keeps the
+admin-only need admin-only.
+
+## Phase 8 final closure pass: a correction resolves the same uncertainty flag a verification does
+
+**Decision:** `FIELD_RESOLVES_UNCERTAINTY_FLAG_TYPE` (`persistence.ts`, renamed from the
+correction pass's `VERIFIED_FIELD_RESOLVES_FLAG_TYPE`) is now consulted for BOTH
+`human_corrected` and `human_verified` provenance decisions on
+`physical_category`/`visual_media_type`/`visual_realism` — previously only an explicit
+verification resolved `category_uncertain`/`visual_style_uncertain`.
+
+**Why:** The correction pass's human-verify UX correctly modeled "the admin looked at
+this and confirmed it's right" as a distinct action from "the admin changed it," and
+that distinction is still real and still preserved (see the entry above on the two
+provenance rules). But the flag this resolves represents a concern — "this field's value
+is uncertain" — and BOTH actions address that concern equally: verifying confirms the
+existing value was actually correct, and correcting supplies a new, human-confirmed
+value. Requiring a second, separate manual Resolve click after an admin has just picked
+the right category from a dropdown and saved was pure redundant busywork with no
+corresponding safety benefit — unlike, say, resolving an unrelated flag type, which
+would be a real (and previously fixed, see the correction pass's review-flag-lifecycle
+entry) truthfulness bug.
+
+## Phase 8 final closure pass: provenance/candidate label translation lives in one pure module
+
+**Decision:** `src/lib/admin/provenanceLabels.ts` is a small, dependency-free module
+(no DB import, no `"use server"`, no session) that is the ONLY place raw
+`book_field_provenance`/metadata-candidate enum values are translated into the calm
+English shown in Admin Review — `describeProvenanceSource`, `describeConfidence`,
+`describeProvider`, `describeFieldKey`, `describeReconciliationOutcome`.
+
+**Why:** `ReviewDetailClient.tsx` is a client component; a server-facing module like
+`reviewQueueSource.ts` (which already has its own internal field-label map) cannot be
+imported into it without pulling Drizzle/DB code into the client bundle. Rather than
+duplicating an ad-hoc label switch inline in the component (which the correction pass's
+own `describeMissingMetadata` precedent in `reviewQueueSource.ts` shows is easy to get
+inconsistent across call sites), this pass factored the mapping into its own
+dependency-light module — directly unit-testable (`tests/unit/admin/provenanceLabels.test.ts`)
+without a DB or a rendered component, and importable from both a future server context and
+this client component alike.
+
+**Relevant files:** `src/lib/admin/reviewDetail.ts`; `src/lib/admin/provenanceLabels.ts`;
+`src/lib/admin/persistence.ts`; `src/components/admin/ReviewDetailClient.tsx`;
+`tests/integration/db/adminReview.test.ts`; `tests/unit/admin/provenanceLabels.test.ts`.
