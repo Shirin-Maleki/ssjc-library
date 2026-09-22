@@ -61,9 +61,19 @@ export type CoverIdentification = z.infer<typeof CoverIdentificationSchema>;
  * (`src/lib/intake/categorySuggestion.ts`) against the live active list, never
  * trust in the model alone.
  */
+/**
+ * The one canonical cap on `EnrichmentSuggestion.tags` — exported so
+ * `src/lib/intake/enrichmentMerge.ts`'s provider-subject merge can enforce the
+ * exact same limit instead of hard-coding a second number that can silently drift
+ * from this schema (a real Phase 7 bug: the merge once used its own `MAX_TAGS = 10`,
+ * so a subject-heavy accepted candidate could merge past this schema's max(8) and
+ * fail `parseIntakeDraft()`'s validation at save time).
+ */
+export const MAX_ENRICHMENT_TAGS = 8;
+
 export const EnrichmentSuggestionSchema = z.object({
   description: z.string().min(1).max(400).nullable(),
-  tags: z.array(z.string().min(1).max(40)).max(8),
+  tags: z.array(z.string().min(1).max(40)).max(MAX_ENRICHMENT_TAGS),
   fictionType: z.enum(["fiction", "nonfiction"]).nullable(),
   format: z
     .enum(["board_book", "picture_book", "early_reader", "chapter_book", "informational_reference", "activity_book", "other"])
