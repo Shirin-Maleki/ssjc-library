@@ -1195,11 +1195,13 @@ supported but not connected in this environment (no `GOOGLE_BOOKS_API_KEY` avail
 
 ## Git status
 
-Repository is linked to `github.com/Shirin-Maleki/ssjc-library` (`origin`, `main`). Phase 6
-(including its 2026-09-20 correction pass) is approved as the Phase 7 starting point, commit
-`3fc48d4c4961d71308f5de9b098c18413ad99db4`. Phase 7's commits are listed in the Phase 7 final
-report's own "Git Status" section — see that report for the exact SHAs, push confirmation, and
-final working-tree state; never inferred or assumed here.
+Repository is linked to `github.com/Shirin-Maleki/ssjc-library` (`origin`, `main`). Phase 7
+(including its final tag-merge schema-mismatch fix) is approved as the Phase 8 starting point,
+commit `a75f5c9184f3ad3c1c16ef0950ea5c3398b8f654`. Phase 8 landed as five commits —
+`9ab701d` (schema/migration), `09f034f` (admin domain layer), `9e3773d` (admin UI), `eedb989`
+(tests), `c72d4c9` (docs) — pushed to `origin/main` (`a75f5c9..c72d4c9`), verified via a fresh
+`git fetch` and `git log origin/main` afterward. Working tree clean (only the pre-existing,
+deliberately untracked `AGENTS.md`/`CLAUDE.md` remain).
 
 ## Completed work (Phase 8 — Admin Review + Taxonomy)
 
