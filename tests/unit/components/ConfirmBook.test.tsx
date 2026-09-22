@@ -111,4 +111,67 @@ describe("ConfirmBook — AI-first catalog draft correction (§7/§8)", () => {
     const img = document.querySelector("img") as HTMLImageElement;
     expect(img.style.transform).toBe("rotate(270deg)");
   });
+
+  describe("AI draft human-correction semantics (final round §1) — buildEdits sends ONLY changed fields", () => {
+    it("(A) changing only the description omits category/age/fiction/format from the edits sent to the server", () => {
+      const onConfirm = vi.fn();
+      render(<ConfirmBook data={aiSuggestedData()} activeCategories={ACTIVE_CATEGORIES} onConfirm={onConfirm} onReviewLater={vi.fn()} submitting={false} />);
+      fireEvent.click(screen.getByRole("button", { name: "Quick edit" }));
+      fireEvent.change(screen.getByLabelText("Short description"), { target: { value: "A teacher-edited description." } });
+      fireEvent.click(screen.getByRole("button", { name: "Confirm / Add book" }));
+
+      expect(onConfirm).toHaveBeenCalledWith({ description: "A teacher-edited description." });
+      const sentEdits = onConfirm.mock.calls[0][0];
+      expect(sentEdits).not.toHaveProperty("physicalCategorySlug");
+      expect(sentEdits).not.toHaveProperty("ageMinMonths");
+      expect(sentEdits).not.toHaveProperty("ageMaxMonths");
+      expect(sentEdits).not.toHaveProperty("fictionType");
+      expect(sentEdits).not.toHaveProperty("format");
+    });
+
+    it("(B) opening Quick Edit and changing nothing sends an empty edits object — no AI field is ever marked as touched", () => {
+      const onConfirm = vi.fn();
+      render(<ConfirmBook data={aiSuggestedData()} activeCategories={ACTIVE_CATEGORIES} onConfirm={onConfirm} onReviewLater={vi.fn()} submitting={false} />);
+      fireEvent.click(screen.getByRole("button", { name: "Quick edit" }));
+      fireEvent.click(screen.getByRole("button", { name: "Confirm / Add book" }));
+      expect(onConfirm).toHaveBeenCalledWith({});
+    });
+
+    it("(C) changing fiction type to Unknown sends an explicit null, not the AI's original 'fiction' value", () => {
+      const onConfirm = vi.fn();
+      render(<ConfirmBook data={aiSuggestedData()} activeCategories={ACTIVE_CATEGORIES} onConfirm={onConfirm} onReviewLater={vi.fn()} submitting={false} />);
+      fireEvent.click(screen.getByRole("button", { name: "Quick edit" }));
+      fireEvent.change(screen.getByLabelText("Fiction / nonfiction"), { target: { value: "" } }); // "Unknown" option
+      fireEvent.click(screen.getByRole("button", { name: "Confirm / Add book" }));
+      expect(onConfirm).toHaveBeenCalledWith({ fictionType: null });
+    });
+
+    it("(D) clearing both age fields sends explicit nulls, not the AI's original age range", () => {
+      const onConfirm = vi.fn();
+      render(<ConfirmBook data={aiSuggestedData()} activeCategories={ACTIVE_CATEGORIES} onConfirm={onConfirm} onReviewLater={vi.fn()} submitting={false} />);
+      fireEvent.click(screen.getByRole("button", { name: "Quick edit" }));
+      fireEvent.change(screen.getByLabelText("Age from (years)"), { target: { value: "" } });
+      fireEvent.change(screen.getByLabelText("Age to (years)"), { target: { value: "" } });
+      fireEvent.click(screen.getByRole("button", { name: "Confirm / Add book" }));
+      expect(onConfirm).toHaveBeenCalledWith({ ageMinMonths: null, ageMaxMonths: null });
+    });
+
+    it("(E) clearing the description sends an explicit null, not the AI's original description", () => {
+      const onConfirm = vi.fn();
+      render(<ConfirmBook data={aiSuggestedData()} activeCategories={ACTIVE_CATEGORIES} onConfirm={onConfirm} onReviewLater={vi.fn()} submitting={false} />);
+      fireEvent.click(screen.getByRole("button", { name: "Quick edit" }));
+      fireEvent.change(screen.getByLabelText("Short description"), { target: { value: "" } });
+      fireEvent.click(screen.getByRole("button", { name: "Confirm / Add book" }));
+      expect(onConfirm).toHaveBeenCalledWith({ description: null });
+    });
+
+    it("(F) clearing the physical category sends an explicit null — the server is what turns this into the required-category error, never silently restoring the AI category", () => {
+      const onConfirm = vi.fn();
+      render(<ConfirmBook data={aiSuggestedData()} activeCategories={ACTIVE_CATEGORIES} onConfirm={onConfirm} onReviewLater={vi.fn()} submitting={false} />);
+      fireEvent.click(screen.getByRole("button", { name: "Quick edit" }));
+      fireEvent.change(screen.getByLabelText("Physical category"), { target: { value: "" } });
+      fireEvent.click(screen.getByRole("button", { name: "Confirm / Add book" }));
+      expect(onConfirm).toHaveBeenCalledWith({ physicalCategorySlug: null });
+    });
+  });
 });

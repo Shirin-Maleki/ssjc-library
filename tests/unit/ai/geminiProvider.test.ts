@@ -91,6 +91,9 @@ describe("ai/geminiProvider — GeminiBookIntelligenceProvider.analyzeCover (AI-
     expect(result.aiSuggestions.physicalCategorySlug).toBe("picture-books");
     expect(result.aiSuggestions.ageMinMonths).toBe(24);
     expect(result.aiSuggestions.description).toContain("outwits");
+    // AI draft human-correction semantics (final round §4) — genuinely validated
+    // output is "valid", never confused with the schema-failure fallback.
+    expect(result.aiSuggestionsStatus).toBe("valid");
     // One call did the work of the old two.
     expect(generateContentMock).toHaveBeenCalledTimes(1);
   });
@@ -207,7 +210,7 @@ describe("ai/geminiProvider — GeminiBookIntelligenceProvider.analyzeCover (AI-
     ).rejects.toMatchObject({ category: "invalid_response" });
   });
 
-  it("a malformed aiSuggestions section does NOT discard an otherwise-valid coverEvidence — falls back to empty suggestions instead of failing the whole call (AI-first catalog draft correction §5/§13)", async () => {
+  it("a malformed aiSuggestions section does NOT discard an otherwise-valid coverEvidence — falls back to empty suggestions instead of failing the whole call, AND is reported as unavailable (AI-first catalog draft correction §5/§13; AI draft human-correction semantics §4)", async () => {
     generateContentMock.mockResolvedValue({
       text: combinedResponseJson({}, { fictionType: "biography" }), // not in the allowed enum
     });
@@ -217,14 +220,42 @@ describe("ai/geminiProvider — GeminiBookIntelligenceProvider.analyzeCover (AI-
     expect(result.aiSuggestions.fictionType).toBeNull(); // salvaged to the empty default
     expect(result.aiSuggestions.tags).toEqual([]);
     expect(result.aiSuggestions.physicalCategorySlug).toBeNull();
+    // Never confused with a genuinely valid (if sparse) suggestion — downstream
+    // code must know this was a recovery fallback, not real model output.
+    expect(result.aiSuggestionsStatus).toBe("unavailable");
   });
 
-  it("a completely missing aiSuggestions key also falls back to empty suggestions rather than failing", async () => {
+  it("a completely missing aiSuggestions key also falls back to empty suggestions rather than failing, and is reported as unavailable", async () => {
     generateContentMock.mockResolvedValue({ text: JSON.stringify({ coverEvidence: validCoverEvidence() }) });
     const provider = new GeminiBookIntelligenceProvider("fake-key");
     const result = await provider.analyzeCover({ imageBytes: Buffer.from("x"), mimeType: "image/jpeg", activeCategories: ACTIVE_CATEGORIES });
     expect(result.coverEvidence.visibleTitle).toBe("The Gruffalo");
     expect(result.aiSuggestions.description).toBeNull();
+    expect(result.aiSuggestionsStatus).toBe("unavailable");
+  });
+
+  it("a genuinely valid but legitimately sparse (all-null) aiSuggestions section is still reported as valid, never confused with the fallback (AI draft human-correction semantics §4)", async () => {
+    // Schema-valid, but every field happens to be null/empty — the model
+    // examined the cover and genuinely had nothing to suggest.
+    const sparseButValid = {
+      description: null,
+      tags: [],
+      fictionType: null,
+      format: null,
+      ageMinMonths: null,
+      ageMaxMonths: null,
+      readAloudMinutes: null,
+      visualMediaTypes: [],
+      visualRealism: null,
+      physicalCategorySlug: null,
+      categoryConfidence: null,
+      categoryReason: null,
+    };
+    generateContentMock.mockResolvedValue({ text: JSON.stringify({ coverEvidence: validCoverEvidence(), aiSuggestions: sparseButValid }) });
+    const provider = new GeminiBookIntelligenceProvider("fake-key");
+    const result = await provider.analyzeCover({ imageBytes: Buffer.from("x"), mimeType: "image/jpeg", activeCategories: ACTIVE_CATEGORIES });
+    expect(result.aiSuggestions.description).toBeNull();
+    expect(result.aiSuggestionsStatus).toBe("valid");
   });
 
   it("maps a thrown 429 status to rate_limited (after internal retries exhaust)", async () => {

@@ -2,7 +2,7 @@ import "server-only";
 import { GeminiBookIntelligenceProvider } from "./geminiProvider";
 import type { BookVisionProvider } from "./provider";
 
-export type { BookVisionProvider, CoverIdentificationInput, AIErrorCategory } from "./provider";
+export type { BookVisionProvider, CoverIdentificationInput, CoverAnalysisResult, AiSuggestionsStatus, AIErrorCategory } from "./provider";
 export { AIProviderError } from "./provider";
 export type { CoverIdentification, EnrichmentSuggestion, CombinedCoverAnalysis, AIConfidenceLevel } from "./schemas";
 

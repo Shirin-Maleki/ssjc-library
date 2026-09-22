@@ -19,6 +19,7 @@ import { lookupMetadataCandidates } from "./metadataLookup";
 import { findDuplicateCandidates, type DuplicateCandidate } from "./duplicateMatcher";
 import { validateCategorySuggestion } from "./categorySuggestion";
 import { mergeProviderSubjectsIntoTags } from "./enrichmentMerge";
+import { resolveConfirmFields } from "./confirmFieldResolution";
 import { selectTrustworthyDisplayCoverUrl } from "./displayCover";
 import { persistIdentityCandidates } from "./identityCandidates";
 import { readIntakeDraft, parseIntakeDraft, type IntakeDraft, type TeacherEdits, type AnalysisRotationDegrees } from "./draft";
@@ -130,6 +131,7 @@ export async function identifyCoverAction(ingestionItemId: string, manualRotatio
     if (fakeSuggestions) {
       const activeCategories = await categoryRepository.listActiveCategories();
       draft.enrichmentSuggestion = fakeSuggestions;
+      draft.aiSuggestionsStatus = "valid";
       draft.categorySuggestion = toCategorySuggestionRecord(validateCategorySuggestion(fakeSuggestions, activeCategories));
     }
     draft.pipelineStage = "identified";
@@ -181,6 +183,11 @@ export async function identifyCoverAction(ingestionItemId: string, manualRotatio
 
   draft.coverEvidence = analysis.coverEvidence;
   draft.enrichmentSuggestion = analysis.aiSuggestions;
+  // AI draft human-correction semantics (final round §4) — persisted so the
+  // later, separate enrichAndSuggestCategoryAction call can correctly tell a
+  // genuinely validated (if sparse) suggestion apart from the schema-failure
+  // recovery fallback, never inferring this from the suggestion's own content.
+  draft.aiSuggestionsStatus = analysis.aiSuggestionsStatus;
   draft.categorySuggestion = toCategorySuggestionRecord(validateCategorySuggestion(analysis.aiSuggestions, activeCategories));
   draft.pipelineStage = "identified";
   await saveDraft(ingestionItemId, draft);
@@ -464,7 +471,13 @@ export async function enrichAndSuggestCategoryAction(ingestionItemId: string): P
       readAloudMinutes: suggestion?.readAloudMinutes ?? null,
       visualMediaTypes: suggestion?.visualMediaTypes ?? [],
       visualRealism: suggestion?.visualRealism ?? null,
-      aiSuggestionsAvailable: Boolean(suggestion),
+      // AI draft human-correction semantics (final round §4) — gated on the
+      // persisted validation STATUS, never on whether `suggestion` merely exists
+      // or happens to be non-empty. The schema-failure recovery fallback
+      // (EMPTY_AI_SUGGESTIONS) is a real, non-null object but was never actually
+      // validated model output — it must not trigger the "AI prepared this book
+      // record for you" framing.
+      aiSuggestionsAvailable: draft.aiSuggestionsStatus === "valid" && suggestion != null,
     },
   };
 }
@@ -487,18 +500,41 @@ export async function confirmSaveAction(input: ConfirmSaveInput): Promise<Confir
 
   const { draft } = await loadDraft(input.ingestionItemId);
   const proposed = draft.proposedBookValues;
-  const title = input.edits?.title ?? proposed?.title;
+  const enrichment = draft.enrichmentSuggestion;
+
+  // AI draft human-correction semantics (final round §1/§2/§3) — resolves every
+  // teacher-correctable field using property-PRESENCE checks
+  // (`resolveConfirmFields`/`hasEditField`), never `??`, which cannot
+  // distinguish "the teacher never touched this field" (omitted from `edits`,
+  // keep the AI/proposed value, provenance stays ai_inferred/cover_visible)
+  // from "the teacher explicitly cleared this field" (present in `edits` with
+  // value `null`, save `null`, provenance becomes human_corrected/
+  // human_verified — never silently restore the AI value).
+  const resolved = resolveConfirmFields({
+    edits: input.edits,
+    proposedTitle: proposed?.title,
+    proposedLanguageCode: proposed?.languageCode,
+    proposedAuthors: proposed?.authors,
+    fallbackCategorySlug: input.categorySlug,
+    enrichment,
+    coverEvidence: draft.coverEvidence,
+    categorySuggestion: draft.categorySuggestion,
+  });
+
+  const title = resolved.title;
   if (!title) return failure("insufficient_data", "A title is needed before this book can be added.");
 
-  const languageCode = (input.edits?.languageCode ?? proposed?.languageCode) as LanguageCode | null;
+  const languageCode = resolved.languageCode as LanguageCode | null | undefined;
   if (!languageCode || !isLanguageCode(languageCode)) {
     return failure("insufficient_data", "A language is needed before this book can be added.");
   }
 
-  const categorySlug = input.edits?.physicalCategorySlug ?? input.categorySlug;
+  const categorySlug = resolved.categorySlug;
+  // An explicitly cleared category (edits.physicalCategorySlug === null) must
+  // show this same required-category error, never silently fall back to the AI
+  // suggestion — resolveConfirmFields already returns `null` in that case, so
+  // this check catches it exactly like any other missing category.
   if (!categorySlug) return failure("insufficient_data", "A shelving category is needed before this book can be added.");
-
-  const enrichment = draft.enrichmentSuggestion;
 
   // `draft.selectedCandidateProviderIdentifier` is only ever set for an accepted
   // (high-confidence) candidate as of the identity-safety fix in lookupMetadataAction
@@ -508,18 +544,13 @@ export async function confirmSaveAction(input: ConfirmSaveInput): Promise<Confir
     ? draft.metadataCandidates.find((c) => c.providerIdentifier === draft.selectedCandidateProviderIdentifier)
     : undefined;
 
-  const provenance: ProvenanceInput[] = [];
+  const provenance: ProvenanceInput[] = [...resolved.provenance];
   // Mutually exclusive per field — `book_field_provenance` enforces at most one
   // *current* row per (book, field) (its own partial unique index), so a field a
   // teacher touched in Quick Edit must replace its cover/provider-sourced
   // provenance entry, never add a second row alongside it (a real, reproducible
   // unique-constraint failure caught by this exact scenario during Phase 7 E2E
   // testing, not a hypothetical).
-  if (input.edits?.title) {
-    provenance.push({ fieldKey: "title", sourceType: "human_corrected" });
-  } else if (draft.coverEvidence?.visibleTitle) {
-    provenance.push({ fieldKey: "title", sourceType: "cover_visible", confidenceLevel: draft.coverEvidence.identityConfidenceLevel });
-  }
   // Truthful provenance (Phase 7 final closure pass §1): record "external_provider"
   // for the ISBN field only when the accepted candidate actually supplied the ISBN
   // value being saved — never merely because a candidate was accepted for other
@@ -528,34 +559,6 @@ export async function confirmSaveAction(input: ConfirmSaveInput): Promise<Confir
   const isbn10FromProvider = Boolean(selectedCandidate?.isbn10 && selectedCandidate.isbn10 === proposed?.isbn10);
   const isbn13FromProvider = Boolean(selectedCandidate?.isbn13 && selectedCandidate.isbn13 === proposed?.isbn13);
   if (isbn10FromProvider || isbn13FromProvider) provenance.push({ fieldKey: "isbn", sourceType: "external_provider" });
-  if (input.edits?.physicalCategorySlug) provenance.push({ fieldKey: "physical_category", sourceType: "human_verified" });
-  else if (draft.categorySuggestion) provenance.push({ fieldKey: "physical_category", sourceType: "ai_inferred", confidenceLevel: draft.categorySuggestion.confidence ?? undefined });
-
-  // AI-first catalog draft correction (§11) — the same accepted/human-corrected
-  // pattern extended to every AI-suggested discovery field a teacher can see on
-  // the confirmation screen. A field the teacher never touched, but that the
-  // single combined analysis call genuinely suggested, is still `ai_inferred`
-  // provenance — it must never mysteriously disappear on save just because no one
-  // explicitly re-confirmed it (§11's own explicit requirement).
-  const description = input.edits?.description ?? enrichment?.description ?? undefined;
-  if (input.edits?.description) provenance.push({ fieldKey: "description", sourceType: "human_corrected" });
-  else if (enrichment?.description) provenance.push({ fieldKey: "description", sourceType: "ai_inferred" });
-
-  const fictionType = input.edits?.fictionType ?? enrichment?.fictionType ?? undefined;
-  if (input.edits?.fictionType) provenance.push({ fieldKey: "fiction_status", sourceType: "human_corrected" });
-  else if (enrichment?.fictionType) provenance.push({ fieldKey: "fiction_status", sourceType: "ai_inferred" });
-
-  const format = input.edits?.format ?? enrichment?.format ?? undefined;
-  if (input.edits?.format) provenance.push({ fieldKey: "format", sourceType: "human_corrected" });
-  else if (enrichment?.format) provenance.push({ fieldKey: "format", sourceType: "ai_inferred" });
-
-  const ageMinMonths = input.edits?.ageMinMonths ?? enrichment?.ageMinMonths ?? undefined;
-  const ageMaxMonths = input.edits?.ageMaxMonths ?? enrichment?.ageMaxMonths ?? undefined;
-  if (input.edits?.ageMinMonths != null || input.edits?.ageMaxMonths != null) {
-    provenance.push({ fieldKey: "age_range", sourceType: "human_corrected" });
-  } else if (enrichment?.ageMinMonths != null || enrichment?.ageMaxMonths != null) {
-    provenance.push({ fieldKey: "age_range", sourceType: "ai_inferred" });
-  }
 
   // No Quick Edit surface for visual metadata (§8's explicit exclusion) — always
   // ai_inferred when the combined analysis call suggested it, never a teacher
@@ -579,18 +582,18 @@ export async function confirmSaveAction(input: ConfirmSaveInput): Promise<Confir
     result = await saveNewBook(db, {
       title,
       subtitle: proposed?.subtitle ?? undefined,
-      authors: input.edits?.authors ?? proposed?.authors ?? [],
+      authors: resolved.authors,
       illustrators: proposed?.illustrators,
       publisherName: proposed?.publisher ?? undefined,
       languageCode,
       isbn10: proposed?.isbn10 ?? undefined,
       isbn13: proposed?.isbn13 ?? undefined,
-      description,
+      description: resolved.description,
       physicalCategorySlug: categorySlug,
-      fictionType,
-      format,
-      ageMinMonths,
-      ageMaxMonths,
+      fictionType: resolved.fictionType,
+      format: resolved.format,
+      ageMinMonths: resolved.ageMinMonths,
+      ageMaxMonths: resolved.ageMaxMonths,
       readAloudMinutes: enrichment?.readAloudMinutes ?? undefined,
       visualMediaTypes: enrichment?.visualMediaTypes,
       visualRealism: enrichment?.visualRealism ?? undefined,

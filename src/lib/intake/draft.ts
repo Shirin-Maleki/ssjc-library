@@ -132,6 +132,16 @@ export const IntakeDraftSchema = z.object({
   duplicateOutcome: DuplicateOutcomeSchema.nullable(),
   duplicateCandidateBookIds: z.array(z.string()).default([]),
   enrichmentSuggestion: EnrichmentSuggestionSchema.nullable(),
+  /** Whether `enrichmentSuggestion` reflects genuinely validated model output
+   * ("valid") or the schema-failure recovery fallback ("unavailable") — AI draft
+   * human-correction semantics, final round §4. `null` when the combined analysis
+   * call never ran at all (e.g. AI unconfigured, or a hard provider failure before
+   * any response was parsed). Persisted because `enrichAndSuggestCategoryAction`
+   * runs as a separate, later action call and needs this to correctly decide
+   * whether to show the "AI prepared this book record for you" framing — never
+   * inferred from whether `enrichmentSuggestion`'s fields happen to be empty,
+   * since a genuinely valid but sparse suggestion is still `"valid"`. */
+  aiSuggestionsStatus: z.enum(["valid", "unavailable"]).nullable().default(null),
   categorySuggestion: CategorySuggestionRecordSchema.nullable(),
   teacherEdits: TeacherEditsSchema.nullable(),
   reviewReason: z.string().nullable(),
@@ -171,6 +181,7 @@ export function createInitialDraft(driveSource: z.infer<typeof DriveSourceSchema
     duplicateOutcome: null,
     duplicateCandidateBookIds: [],
     enrichmentSuggestion: null,
+    aiSuggestionsStatus: null,
     categorySuggestion: null,
     teacherEdits: null,
     reviewReason: null,

@@ -99,19 +99,52 @@ export function ConfirmBook({ data, activeCategories, onConfirm, onReviewLater, 
   const [ageMinYears, setAgeMinYears] = useState(data.ageMinMonths != null ? String(Math.floor(data.ageMinMonths / 12)) : "");
   const [ageMaxYears, setAgeMaxYears] = useState(data.ageMaxMonths != null ? String(Math.ceil(data.ageMaxMonths / 12)) : "");
 
+  /**
+   * AI draft human-correction semantics (final round §1) — sends ONLY fields
+   * whose value actually differs from what the confirm screen originally
+   * showed. A field the teacher never touched is OMITTED entirely (the server
+   * then keeps the AI/proposed value and its `ai_inferred`/`cover_visible`
+   * provenance untouched); a field the teacher genuinely changed — including
+   * changing it to "Unknown"/empty — is INCLUDED, explicitly as `null` when
+   * cleared, never silently dropped. Opening Quick Edit and closing it again
+   * without changing anything must produce `{}`, exactly like never opening it
+   * at all — the presence of the Quick Edit panel itself must never be mistaken
+   * for a correction.
+   */
   function buildEdits(): TeacherEdits {
     if (!editing) return {};
-    return {
-      title: title.trim() || null,
-      authors: authorsText.trim() ? authorsText.split(",").map((a) => a.trim()).filter(Boolean) : null,
-      languageCode: languageCode || null,
-      physicalCategorySlug: categorySlug || null,
-      description: description.trim() || null,
-      fictionType: fictionType ? (fictionType as "fiction" | "nonfiction") : null,
-      format: format ? (format as Format) : null,
-      ageMinMonths: ageMinYears ? Number(ageMinYears) * 12 : null,
-      ageMaxMonths: ageMaxYears ? Number(ageMaxYears) * 12 : null,
-    };
+    const edits: TeacherEdits = {};
+
+    const trimmedTitle = title.trim();
+    if (trimmedTitle !== data.title) edits.title = trimmedTitle || null;
+
+    const originalAuthorsText = data.authors.join(", ");
+    if (authorsText !== originalAuthorsText) {
+      edits.authors = authorsText.trim() ? authorsText.split(",").map((a) => a.trim()).filter(Boolean) : null;
+    }
+
+    if (languageCode !== (data.languageCode ?? "")) edits.languageCode = languageCode || null;
+
+    if (categorySlug !== (data.categorySlug ?? "")) edits.physicalCategorySlug = categorySlug || null;
+
+    const trimmedDescription = description.trim();
+    if (trimmedDescription !== (data.description ?? "")) edits.description = trimmedDescription || null;
+
+    if (fictionType !== (data.fictionType ?? "")) {
+      edits.fictionType = fictionType ? (fictionType as "fiction" | "nonfiction") : null;
+    }
+
+    if (format !== (data.format ?? "")) {
+      edits.format = format ? (format as Format) : null;
+    }
+
+    const originalAgeMinYears = data.ageMinMonths != null ? String(Math.floor(data.ageMinMonths / 12)) : "";
+    if (ageMinYears !== originalAgeMinYears) edits.ageMinMonths = ageMinYears ? Number(ageMinYears) * 12 : null;
+
+    const originalAgeMaxYears = data.ageMaxMonths != null ? String(Math.ceil(data.ageMaxMonths / 12)) : "";
+    if (ageMaxYears !== originalAgeMaxYears) edits.ageMaxMonths = ageMaxYears ? Number(ageMaxYears) * 12 : null;
+
+    return edits;
   }
 
   const readAloud = readAloudBand(data.readAloudMinutes);

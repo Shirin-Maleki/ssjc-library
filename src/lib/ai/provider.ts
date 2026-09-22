@@ -1,4 +1,4 @@
-import type { CombinedCoverAnalysis } from "./schemas";
+import type { CoverIdentification, EnrichmentSuggestion } from "./schemas";
 
 /**
  * The seam between the intake pipeline and Gemini generation/vision (Phase 7, §7 of
@@ -65,6 +65,23 @@ export interface CoverIdentificationInput {
   activeCategories: { slug: string; label: string }[];
 }
 
+/**
+ * AI draft human-correction semantics (final round, §4) — `aiSuggestions` alone
+ * can't distinguish "the model genuinely examined this cover and had nothing
+ * useful to suggest" (still a real, valid result) from "the model's suggestions
+ * section failed its own schema validation and was replaced by
+ * `EMPTY_AI_SUGGESTIONS` as a recovery fallback" (not a real result at all) —
+ * both can produce an all-null/empty object. `aiSuggestionsStatus` makes that
+ * distinction explicit and is never inferred from `aiSuggestions`' own content.
+ */
+export type AiSuggestionsStatus = "valid" | "unavailable";
+
+export interface CoverAnalysisResult {
+  coverEvidence: CoverIdentification;
+  aiSuggestions: EnrichmentSuggestion;
+  aiSuggestionsStatus: AiSuggestionsStatus;
+}
+
 /** The one Gemini vision task per book (AI-first catalog draft correction, §3) —
  * one multimodal request returns both strict visible-evidence extraction and
  * genuinely inferential catalog-assistance suggestions, replacing the original
@@ -73,5 +90,5 @@ export interface CoverIdentificationInput {
  * this halves the default per-book Gemini call count and for why the two sections
  * are validated independently. */
 export interface BookVisionProvider {
-  analyzeCover(input: CoverIdentificationInput): Promise<CombinedCoverAnalysis>;
+  analyzeCover(input: CoverIdentificationInput): Promise<CoverAnalysisResult>;
 }

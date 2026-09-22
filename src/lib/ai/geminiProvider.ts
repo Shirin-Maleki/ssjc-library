@@ -1,7 +1,7 @@
 import { GoogleGenAI } from "@google/genai";
 import { z } from "zod";
-import { AIProviderError, type AIErrorCategory, type BookVisionProvider, type CoverIdentificationInput } from "./provider";
-import { CoverIdentificationSchema, CombinedCoverAnalysisSchema, EnrichmentSuggestionSchema, EMPTY_AI_SUGGESTIONS, type CombinedCoverAnalysis } from "./schemas";
+import { AIProviderError, type AIErrorCategory, type BookVisionProvider, type CoverIdentificationInput, type CoverAnalysisResult } from "./provider";
+import { CoverIdentificationSchema, CombinedCoverAnalysisSchema, EnrichmentSuggestionSchema, EMPTY_AI_SUGGESTIONS } from "./schemas";
 import { withGeminiRetry } from "./retry";
 
 /**
@@ -145,7 +145,7 @@ export class GeminiBookIntelligenceProvider implements BookVisionProvider {
     this.client = new GoogleGenAI({ apiKey });
   }
 
-  async analyzeCover(input: CoverIdentificationInput): Promise<CombinedCoverAnalysis> {
+  async analyzeCover(input: CoverIdentificationInput): Promise<CoverAnalysisResult> {
     if (input.imageBytes.length === 0) {
       throw new AIProviderError("invalid_image", "The image has no bytes to analyze.");
     }
@@ -216,8 +216,14 @@ export class GeminiBookIntelligenceProvider implements BookVisionProvider {
    * "Preserve what it did provide" (the phase brief's own words) would be violated
    * by validating the whole object as one schema, since Zod fails an entire object
    * on any single nested field's schema violation.
+   *
+   * `aiSuggestionsStatus` (AI draft human-correction semantics, final round §4)
+   * records which of those two cases actually happened — never inferred from
+   * `aiSuggestions`' own content, since a genuinely valid but all-null/empty
+   * suggestion (the model examined the cover and had nothing to add) must still
+   * read as `"valid"`, not be confused with the schema-failure fallback.
    */
-  private parseCombinedAnalysis(text: string | undefined): CombinedCoverAnalysis {
+  private parseCombinedAnalysis(text: string | undefined): CoverAnalysisResult {
     if (!text) {
       throw new AIProviderError("invalid_response", "Gemini returned no text content (analyzeCover).");
     }
@@ -237,6 +243,10 @@ export class GeminiBookIntelligenceProvider implements BookVisionProvider {
     const aiSuggestionsResult = EnrichmentSuggestionSchema.safeParse(record.aiSuggestions);
     const aiSuggestions = aiSuggestionsResult.success ? aiSuggestionsResult.data : EMPTY_AI_SUGGESTIONS;
 
-    return { coverEvidence: coverEvidenceResult.data, aiSuggestions };
+    return {
+      coverEvidence: coverEvidenceResult.data,
+      aiSuggestions,
+      aiSuggestionsStatus: aiSuggestionsResult.success ? "valid" : "unavailable",
+    };
   }
 }
