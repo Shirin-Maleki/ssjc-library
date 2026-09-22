@@ -1,5 +1,8 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
+import postgres from "postgres";
+import { drizzle } from "drizzle-orm/postgres-js";
+import * as schema from "@/db/schema";
 import {
   auditLog,
   bookContributors,
@@ -8,6 +11,7 @@ import {
   bookFieldProvenance,
   books,
   contributors,
+  EMBEDDING_DIMENSIONS,
   ingestionItems,
   ingestionJobs,
   physicalCategories,
@@ -266,7 +270,7 @@ describe.skipIf(!hasTestDb)("Phase 8 admin review + taxonomy (against a real Pos
     createdBookIds.push(existingBook.id);
 
     const ingestionItemId = await makeIngestionItem();
-    await markNeedsReview(ingestionItemId, baseDraft({ duplicateOutcome: "exact_copy_same_edition" }));
+    await markNeedsReview(ingestionItemId, baseDraft({ duplicateOutcome: "exact_copy_same_edition", duplicateCandidateBookIds: [existingBook.id] }));
 
     const result = await resolveDuplicate(db, { ingestionItemId, action: "same_edition", existingBookId: existingBook.id });
     expect(result.ok).toBe(true);
@@ -294,7 +298,7 @@ describe.skipIf(!hasTestDb)("Phase 8 admin review + taxonomy (against a real Pos
     await db.insert(reviewFlags).values({ bookId: placeholder.id, flagType: "duplicate_uncertain" });
 
     const ingestionItemId = await makeIngestionItem();
-    await markNeedsReview(ingestionItemId, baseDraft({ duplicateOutcome: "exact_copy_same_edition" }), placeholder.id);
+    await markNeedsReview(ingestionItemId, baseDraft({ duplicateOutcome: "exact_copy_same_edition", duplicateCandidateBookIds: [existingBook.id] }), placeholder.id);
 
     const result = await resolveDuplicate(db, { ingestionItemId, action: "same_edition", existingBookId: existingBook.id });
     expect(result.ok).toBe(true);
@@ -324,6 +328,7 @@ describe.skipIf(!hasTestDb)("Phase 8 admin review + taxonomy (against a real Pos
     const ingestionItemId = await makeIngestionItem();
     const draft = baseDraft({
       duplicateOutcome: "same_title_different_edition",
+      duplicateCandidateBookIds: [existingBook.id],
       proposedBookValues: { title: "New Edition Of Existing Book", subtitle: null, authors: [], illustrators: [], publisher: null, languageCode: "en", additionalLanguageCodes: [], isbn10: null, isbn13: null },
     });
     await markNeedsReview(ingestionItemId, draft, pendingBook.id);
@@ -362,7 +367,7 @@ describe.skipIf(!hasTestDb)("Phase 8 admin review + taxonomy (against a real Pos
     createdBookIds.push(pendingBook.id);
 
     const ingestionItemId = await makeIngestionItem();
-    await markNeedsReview(ingestionItemId, baseDraft({ duplicateOutcome: "ambiguous_similar_title" }), pendingBook.id);
+    await markNeedsReview(ingestionItemId, baseDraft({ duplicateOutcome: "ambiguous_similar_title", duplicateCandidateBookIds: [existingBook.id] }), pendingBook.id);
 
     const result = await resolveDuplicate(db, { ingestionItemId, action: "false_match", existingBookId: existingBook.id });
     expect(result.ok).toBe(true);
@@ -612,5 +617,632 @@ describe.skipIf(!hasTestDb)("Phase 8 admin review + taxonomy (against a real Pos
     expect(archiveEntry).toBeDefined();
     expect(archiveEntry!.entityType).toBe("book");
     expect((archiveEntry!.detail as { note?: string })?.note).toContain("Duplicate");
+  });
+
+  // ---------------------------------------------------------------------
+  // Correction pass §2 — Review Later metadata parity + display cover
+  // ---------------------------------------------------------------------
+
+  function draftWithFullMetadata(overrides: Partial<IntakeDraft> = {}): IntakeDraft {
+    return baseDraft({
+      proposedBookValues: {
+        title: "Parity Test Book",
+        subtitle: "A Parity Subtitle",
+        authors: ["Parity Author"],
+        illustrators: ["Parity Illustrator"],
+        publisher: "Parity Publisher",
+        languageCode: "en",
+        additionalLanguageCodes: [],
+        // No ISBN here — `books.isbn13` has a real partial UNIQUE index, and
+        // this helper is shared by both approval branches in the same test;
+        // ISBN-10/13 parity is proven separately below with one book at a time.
+        isbn10: null,
+        isbn13: null,
+      },
+      enrichmentSuggestion: {
+        description: "A parity-test description.",
+        tags: ["parity-tag"],
+        fictionType: "fiction",
+        format: "picture_book",
+        ageMinMonths: 24,
+        ageMaxMonths: 60,
+        readAloudMinutes: 5,
+        visualMediaTypes: ["watercolor"],
+        visualRealism: "stylized_illustration",
+        physicalCategorySlug: "stories-imagination",
+        categoryConfidence: "high",
+        categoryReason: "test",
+      },
+      aiSuggestionsStatus: "valid",
+      categorySuggestion: { slug: "stories-imagination", label: "Stories & Imagination", confidence: "high", reason: "test" },
+      ...overrides,
+    });
+  }
+
+  it("ingestion-only and existing-pending-book approval preserve the SAME relevant metadata given equivalent drafts (subtitle, illustrators, publisher, ISBN)", async () => {
+    const [category] = await db.select().from(physicalCategories).where(eq(physicalCategories.slug, "stories-imagination")).limit(1);
+
+    // Ingestion-only branch.
+    const ingestionOnlyItemId = await makeIngestionItem();
+    await markNeedsReview(ingestionOnlyItemId, draftWithFullMetadata({ proposedBookValues: { ...draftWithFullMetadata().proposedBookValues!, title: "Parity Test Book A" } }));
+    const ingestionOnlyResult = await approveReviewLater(db, { ingestionItemId: ingestionOnlyItemId, edits: {}, categorySlug: category.slug });
+    expect(ingestionOnlyResult.ok).toBe(true);
+    if (!ingestionOnlyResult.ok) return;
+    createdBookIds.push(ingestionOnlyResult.bookId);
+
+    // Existing-pending-book branch, same input metadata.
+    const [pendingBook] = await db
+      .insert(books)
+      .values({ title: "Parity Test Book B", normalizedTitle: "parity test book b", sortTitle: "Parity Test Book B", languageCode: "en", reviewStatus: "pending_review" })
+      .returning({ id: books.id });
+    createdBookIds.push(pendingBook.id);
+    const pendingItemId = await makeIngestionItem();
+    await markNeedsReview(pendingItemId, draftWithFullMetadata({ proposedBookValues: { ...draftWithFullMetadata().proposedBookValues!, title: "Parity Test Book B" } }), pendingBook.id);
+    const pendingResult = await approveReviewLater(db, { ingestionItemId: pendingItemId, edits: {}, categorySlug: category.slug });
+    expect(pendingResult.ok).toBe(true);
+    if (!pendingResult.ok) return;
+
+    const [bookA] = await db.select().from(books).where(eq(books.id, ingestionOnlyResult.bookId)).limit(1);
+    const [bookB] = await db.select().from(books).where(eq(books.id, pendingResult.bookId)).limit(1);
+
+    for (const [field, a, b] of [
+      ["subtitle", bookA.subtitle, bookB.subtitle],
+      ["languageCode", bookA.languageCode, bookB.languageCode],
+      ["fictionStatus", bookA.fictionStatus, bookB.fictionStatus],
+      ["format", bookA.format, bookB.format],
+      ["ageMinMonths", bookA.ageMinMonths, bookB.ageMinMonths],
+      ["ageMaxMonths", bookA.ageMaxMonths, bookB.ageMaxMonths],
+      ["visualRealism", bookA.visualRealism, bookB.visualRealism],
+      ["physicalCategoryId", bookA.physicalCategoryId, bookB.physicalCategoryId],
+    ] as const) {
+      expect(a, `expected ${field} to match between the two approval branches`).toEqual(b);
+    }
+    expect(bookA.subtitle).toBe("A Parity Subtitle");
+    expect(bookB.subtitle).toBe("A Parity Subtitle"); // previously always null — finalizePendingBook dropped subtitle entirely
+    expect(bookA.publisherId).not.toBeNull();
+    expect(bookB.publisherId).not.toBeNull(); // previously always null — finalizePendingBook dropped publisher entirely
+
+    const contributorsA = await db.select({ role: bookContributors.role }).from(bookContributors).where(eq(bookContributors.bookId, ingestionOnlyResult.bookId));
+    const contributorsB = await db.select({ role: bookContributors.role }).from(bookContributors).where(eq(bookContributors.bookId, pendingResult.bookId));
+    expect(contributorsA.some((c) => c.role === "illustrator")).toBe(true);
+    expect(contributorsB.some((c) => c.role === "illustrator")).toBe(true); // previously always false — finalizePendingBook dropped illustrators entirely
+  });
+
+  it("the existing-pending-book approval branch also persists ISBN-10/13 (previously always dropped)", async () => {
+    const [category] = await db.select().from(physicalCategories).where(eq(physicalCategories.slug, "stories-imagination")).limit(1);
+    const [pendingBook] = await db
+      .insert(books)
+      .values({ title: "Isbn Parity Pending Book", normalizedTitle: "isbn parity pending book", sortTitle: "Isbn Parity Pending Book", languageCode: "en", reviewStatus: "pending_review" })
+      .returning({ id: books.id });
+    createdBookIds.push(pendingBook.id);
+
+    const itemId = await makeIngestionItem();
+    await markNeedsReview(
+      itemId,
+      draftWithFullMetadata({ proposedBookValues: { ...draftWithFullMetadata().proposedBookValues!, title: "Isbn Parity Pending Book", isbn10: "0000000099", isbn13: "0000000000099" } }),
+      pendingBook.id
+    );
+    const result = await approveReviewLater(db, { ingestionItemId: itemId, edits: {}, categorySlug: category.slug });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const [bookRow] = await db.select().from(books).where(eq(books.id, result.bookId)).limit(1);
+    expect(bookRow.isbn10).toBe("0000000099");
+    expect(bookRow.isbn13).toBe("0000000000099");
+  });
+
+  it("a trusted, high-confidence provider candidate's thumbnail becomes the display cover on BOTH approval branches", async () => {
+    const [category] = await db.select().from(physicalCategories).where(eq(physicalCategories.slug, "stories-imagination")).limit(1);
+    const trustedThumbnail = "http://books.google.com/books/content?id=abc&printsec=frontcover";
+
+    const [pendingBook] = await db
+      .insert(books)
+      .values({ title: "Trusted Cover Book", normalizedTitle: "trusted cover book", sortTitle: "Trusted Cover Book", languageCode: "en", reviewStatus: "pending_review" })
+      .returning({ id: books.id });
+    createdBookIds.push(pendingBook.id);
+
+    const itemId = await makeIngestionItem();
+    const draft = draftWithFullMetadata({
+      proposedBookValues: { ...draftWithFullMetadata().proposedBookValues!, title: "Trusted Cover Book" },
+      reconciliationOutcome: "high_confidence",
+      selectedCandidateProviderIdentifier: "provider-1",
+      metadataCandidates: [
+        { provider: "google_books", providerIdentifier: "provider-1", title: "Trusted Cover Book", matchScore: 1, matchedSignals: ["title"], thumbnailUrl: trustedThumbnail },
+      ],
+    });
+    await markNeedsReview(itemId, draft, pendingBook.id);
+
+    const result = await approveReviewLater(db, { ingestionItemId: itemId, edits: {}, categorySlug: category.slug });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const [bookRow] = await db.select().from(books).where(eq(books.id, result.bookId)).limit(1);
+    expect(bookRow.displayCoverUrl).toBe("https://books.google.com/books/content?id=abc&printsec=frontcover");
+    expect(bookRow.displayCoverSource).toBe("external_provider_thumbnail");
+  });
+
+  it("an ambiguous (not high-confidence) candidate's thumbnail never becomes the display cover, even if one was supplied", async () => {
+    const [category] = await db.select().from(physicalCategories).where(eq(physicalCategories.slug, "stories-imagination")).limit(1);
+
+    const itemId = await makeIngestionItem();
+    const draft = draftWithFullMetadata({
+      proposedBookValues: { ...draftWithFullMetadata().proposedBookValues!, title: "Ambiguous Cover Book" },
+      reconciliationOutcome: "ambiguous",
+      selectedCandidateProviderIdentifier: null,
+      metadataCandidates: [
+        { provider: "google_books", providerIdentifier: "provider-2", title: "Ambiguous Cover Book", matchScore: 0.5, matchedSignals: ["title"], thumbnailUrl: "http://books.google.com/books/content?id=xyz" },
+      ],
+    });
+    await markNeedsReview(itemId, draft);
+
+    const result = await approveReviewLater(db, { ingestionItemId: itemId, edits: {}, categorySlug: category.slug });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    createdBookIds.push(result.bookId);
+
+    const [bookRow] = await db.select().from(books).where(eq(books.id, result.bookId)).limit(1);
+    expect(bookRow.displayCoverUrl).toBeNull();
+  });
+
+  // ---------------------------------------------------------------------
+  // Correction pass §3 — review-flag lifecycle
+  // ---------------------------------------------------------------------
+
+  it("Review Later approval resolves the low_identification_confidence flag it addressed, but an unrelated missing_metadata flag survives", async () => {
+    const [category] = await db.select().from(physicalCategories).where(eq(physicalCategories.slug, "stories-imagination")).limit(1);
+    const [pendingBook] = await db
+      .insert(books)
+      .values({ title: "Flag Lifecycle Book", normalizedTitle: "flag lifecycle book", sortTitle: "Flag Lifecycle Book", languageCode: "en", reviewStatus: "pending_review" })
+      .returning({ id: books.id });
+    createdBookIds.push(pendingBook.id);
+    await db.insert(reviewFlags).values({ bookId: pendingBook.id, flagType: "low_identification_confidence" });
+    await db.insert(reviewFlags).values({ bookId: pendingBook.id, flagType: "missing_metadata", detail: "Unrelated pre-existing concern." });
+
+    const itemId = await makeIngestionItem();
+    await markNeedsReview(itemId, draftWithFullMetadata({ proposedBookValues: { ...draftWithFullMetadata().proposedBookValues!, title: "Flag Lifecycle Book" } }), pendingBook.id);
+
+    const result = await approveReviewLater(db, { ingestionItemId: itemId, edits: {}, categorySlug: category.slug });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const flags = await db.select().from(reviewFlags).where(eq(reviewFlags.bookId, result.bookId));
+    const identityFlag = flags.find((f) => f.flagType === "low_identification_confidence");
+    const unrelatedFlag = flags.find((f) => f.flagType === "missing_metadata");
+    expect(identityFlag?.status).toBe("resolved");
+    expect(unrelatedFlag?.status).toBe("open"); // never falsely resolved
+
+    // The newly-active book must not immediately reappear in Needs Review
+    // because of the flag approval just addressed.
+    const queue = await loadAdminReviewQueue(db);
+    const queueItem = queue.find((i) => i.bookId === result.bookId);
+    expect(queueItem?.reasons.some((r) => r.code === "identity_needs_review" && r.detail == null)).toBeFalsy();
+  });
+
+  it("SAME EDITION duplicate resolution resolves duplicate_uncertain on the archived placeholder but leaves an unrelated metadata_conflict flag open", async () => {
+    const [category] = await db.select().from(physicalCategories).where(eq(physicalCategories.slug, "stories-imagination")).limit(1);
+    const [existingBook] = await db
+      .insert(books)
+      .values({ title: "Flag Narrowing Existing Book", normalizedTitle: "flag narrowing existing book", sortTitle: "x", languageCode: "en", physicalCategoryId: category.id, reviewStatus: "active" })
+      .returning({ id: books.id });
+    createdBookIds.push(existingBook.id);
+    const [placeholder] = await db
+      .insert(books)
+      .values({ title: "Flag Narrowing Placeholder", normalizedTitle: "flag narrowing placeholder", sortTitle: "x", languageCode: "en", reviewStatus: "pending_review" })
+      .returning({ id: books.id });
+    createdBookIds.push(placeholder.id);
+    await db.insert(reviewFlags).values({ bookId: placeholder.id, flagType: "duplicate_uncertain" });
+    await db.insert(reviewFlags).values({ bookId: placeholder.id, flagType: "metadata_conflict", detail: "Unrelated conflict." });
+
+    const itemId = await makeIngestionItem();
+    await markNeedsReview(itemId, baseDraft({ duplicateOutcome: "exact_copy_same_edition", duplicateCandidateBookIds: [existingBook.id] }), placeholder.id);
+
+    const result = await resolveDuplicate(db, { ingestionItemId: itemId, action: "same_edition", existingBookId: existingBook.id });
+    expect(result.ok).toBe(true);
+
+    const flags = await db.select().from(reviewFlags).where(eq(reviewFlags.bookId, placeholder.id));
+    expect(flags.find((f) => f.flagType === "duplicate_uncertain")?.status).toBe("resolved");
+    expect(flags.find((f) => f.flagType === "metadata_conflict")?.status).toBe("open");
+  });
+
+  // ---------------------------------------------------------------------
+  // Correction pass §4 — semantic embedding invalidation
+  // ---------------------------------------------------------------------
+
+  async function setFakeEmbedding(bookId: string): Promise<void> {
+    await db
+      .update(books)
+      .set({
+        embedding: Array.from({ length: EMBEDDING_DIMENSIONS }, () => 0.01),
+        embeddingModel: "test-fake-model",
+        embeddingDimension: EMBEDDING_DIMENSIONS,
+        embeddingCompositionVersion: 1,
+        embeddingSourceHash: "fake-stale-hash",
+        embeddingGeneratedAt: new Date(),
+      })
+      .where(eq(books.id, bookId));
+  }
+
+  it("an admin metadata change invalidates a previously-stored embedding immediately, even with no embedding provider configured", async () => {
+    const [category] = await db.select().from(physicalCategories).limit(1);
+    const [book] = await db
+      .insert(books)
+      .values({ title: "Embedding Invalidation Target", normalizedTitle: "embedding invalidation target", sortTitle: "x", languageCode: "en", physicalCategoryId: category.id, reviewStatus: "active" })
+      .returning({ id: books.id });
+    createdBookIds.push(book.id);
+    await setFakeEmbedding(book.id);
+
+    const before = await db.select({ embedding: books.embedding, embeddingSourceHash: books.embeddingSourceHash }).from(books).where(eq(books.id, book.id)).limit(1);
+    expect(before[0].embedding).not.toBeNull();
+
+    const result = await updateBookMetadata(db, { bookId: book.id, patch: { description: "A brand-new description that changes the embedding document." } });
+    expect(result.ok).toBe(true);
+
+    const after = await db.select({ embedding: books.embedding, embeddingModel: books.embeddingModel, embeddingSourceHash: books.embeddingSourceHash, searchText: books.searchText }).from(books).where(eq(books.id, book.id)).limit(1);
+    expect(after[0].embedding).toBeNull();
+    expect(after[0].embeddingModel).toBeNull();
+    expect(after[0].embeddingSourceHash).toBeNull();
+    // Conventional search sees the new content immediately regardless.
+    expect(after[0].searchText).toContain("brand-new description");
+  });
+
+  it("an ISBN-only patch does NOT invalidate the embedding — it never appears in the composed document", async () => {
+    const [category] = await db.select().from(physicalCategories).limit(1);
+    const [book] = await db
+      .insert(books)
+      .values({ title: "Isbn Only Patch Target", normalizedTitle: "isbn only patch target", sortTitle: "x", languageCode: "en", physicalCategoryId: category.id, reviewStatus: "active" })
+      .returning({ id: books.id });
+    createdBookIds.push(book.id);
+    await setFakeEmbedding(book.id);
+
+    const result = await updateBookMetadata(db, { bookId: book.id, patch: { isbn13: "9999999999999" } });
+    expect(result.ok).toBe(true);
+
+    const after = await db.select({ embedding: books.embedding }).from(books).where(eq(books.id, book.id)).limit(1);
+    expect(after[0].embedding).not.toBeNull(); // untouched — isbn changes never affect the embedding document
+  });
+
+  it("a category label rename invalidates the embedding for every affected book", async () => {
+    const created = await createCategory(db, { label: "Embedding Rename Test Category" });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    createdCategoryIds.push(created.id);
+
+    const [book] = await db
+      .insert(books)
+      .values({ title: "Category Rename Embedding Target", normalizedTitle: "category rename embedding target", sortTitle: "x", languageCode: "en", physicalCategoryId: created.id, reviewStatus: "active" })
+      .returning({ id: books.id });
+    createdBookIds.push(book.id);
+    await setFakeEmbedding(book.id);
+
+    const renameResult = await updateCategory(db, { categoryId: created.id, label: "Renamed Embedding Test Category" });
+    expect(renameResult.ok).toBe(true);
+
+    const after = await db.select({ embedding: books.embedding }).from(books).where(eq(books.id, book.id)).limit(1);
+    expect(after[0].embedding).toBeNull();
+  });
+
+  it("a category guidance-only edit does NOT invalidate embeddings for its books (the label, the only thing that matters, didn't change)", async () => {
+    const created = await createCategory(db, { label: "Guidance Only Embedding Category" });
+    if (!created.ok) return;
+    createdCategoryIds.push(created.id);
+    const [book] = await db
+      .insert(books)
+      .values({ title: "Guidance Only Embedding Target", normalizedTitle: "guidance only embedding target", sortTitle: "x", languageCode: "en", physicalCategoryId: created.id, reviewStatus: "active" })
+      .returning({ id: books.id });
+    createdBookIds.push(book.id);
+    await setFakeEmbedding(book.id);
+
+    const result = await updateCategory(db, { categoryId: created.id, description: "New shelving guidance text." });
+    expect(result.ok).toBe(true);
+
+    const after = await db.select({ embedding: books.embedding }).from(books).where(eq(books.id, book.id)).limit(1);
+    expect(after[0].embedding).not.toBeNull();
+  });
+
+  // ---------------------------------------------------------------------
+  // Correction pass §5 — the admin editor can resolve every queue reason it creates
+  // ---------------------------------------------------------------------
+
+  it("fixing missing contributors through updateBookMetadata makes the missing-metadata queue item disappear", async () => {
+    const [category] = await db.select().from(physicalCategories).limit(1);
+    const [book] = await db
+      .insert(books)
+      .values({
+        title: "Missing Contributors Fixable Book",
+        normalizedTitle: "missing contributors fixable book",
+        sortTitle: "x",
+        languageCode: "en",
+        physicalCategoryId: category.id,
+        reviewStatus: "active",
+        shortDescription: "Already has a description.",
+        ageMinMonths: 24,
+        ageMaxMonths: 60,
+        format: "picture_book",
+        visualRealism: "cartoon",
+      })
+      .returning({ id: books.id });
+    createdBookIds.push(book.id);
+
+    let queue = await loadAdminReviewQueue(db);
+    let item = queue.find((i) => i.bookId === book.id);
+    expect(item).toBeDefined();
+    expect(item!.reasons.some((r) => r.code === "missing_metadata" && r.detail?.includes("authors/illustrators"))).toBe(true);
+
+    const result = await updateBookMetadata(db, { bookId: book.id, patch: { authors: ["A Real Author"] } });
+    expect(result.ok).toBe(true);
+
+    queue = await loadAdminReviewQueue(db);
+    item = queue.find((i) => i.bookId === book.id);
+    expect(item).toBeUndefined(); // no more missing-metadata signal at all
+  });
+
+  it("fixing missing visual style through updateBookMetadata makes the missing-metadata queue item disappear", async () => {
+    const [category] = await db.select().from(physicalCategories).limit(1);
+    const [author] = await db.insert(contributors).values({ name: "Visual Fix Author", normalizedName: `visual fix author ${crypto.randomUUID()}` }).returning({ id: contributors.id });
+    const [book] = await db
+      .insert(books)
+      .values({
+        title: "Missing Visual Style Fixable Book",
+        normalizedTitle: "missing visual style fixable book",
+        sortTitle: "x",
+        languageCode: "en",
+        physicalCategoryId: category.id,
+        reviewStatus: "active",
+        shortDescription: "Already has a description.",
+        ageMinMonths: 24,
+        ageMaxMonths: 60,
+        format: "picture_book",
+      })
+      .returning({ id: books.id });
+    createdBookIds.push(book.id);
+    await db.insert(bookContributors).values({ bookId: book.id, contributorId: author.id, role: "author", sortOrder: 0 });
+
+    let queue = await loadAdminReviewQueue(db);
+    expect(queue.find((i) => i.bookId === book.id)?.reasons.some((r) => r.detail?.includes("visual style"))).toBe(true);
+
+    const result = await updateBookMetadata(db, { bookId: book.id, patch: { visualRealism: "cartoon" } });
+    expect(result.ok).toBe(true);
+
+    queue = await loadAdminReviewQueue(db);
+    expect(queue.find((i) => i.bookId === book.id)).toBeUndefined();
+  });
+
+  // ---------------------------------------------------------------------
+  // Correction pass §7 — exactly-once concurrency
+  // ---------------------------------------------------------------------
+
+  function connectSecondTestConnection() {
+    const client = postgres(requireTestDatabaseUrl(), { max: 1 });
+    return { db: drizzle(client, { schema }), client };
+  }
+
+  it("two near-simultaneous SAME EDITION resolutions of the same item cannot both create a copy — the loser gets a calm already-resolved result", async () => {
+    const [category] = await db.select().from(physicalCategories).where(eq(physicalCategories.slug, "stories-imagination")).limit(1);
+    const [existingBook] = await db
+      .insert(books)
+      .values({ title: "Concurrency Same Edition Target", normalizedTitle: "concurrency same edition target", sortTitle: "x", languageCode: "en", physicalCategoryId: category.id, reviewStatus: "active" })
+      .returning({ id: books.id });
+    createdBookIds.push(existingBook.id);
+
+    const itemId = await makeIngestionItem();
+    await markNeedsReview(itemId, baseDraft({ duplicateOutcome: "exact_copy_same_edition", duplicateCandidateBookIds: [existingBook.id] }));
+
+    const { db: db2, client: client2 } = connectSecondTestConnection();
+    try {
+      const [resultA, resultB] = await Promise.all([
+        resolveDuplicate(db, { ingestionItemId: itemId, action: "same_edition", existingBookId: existingBook.id }),
+        resolveDuplicate(db2, { ingestionItemId: itemId, action: "same_edition", existingBookId: existingBook.id }),
+      ]);
+
+      const outcomes = [resultA, resultB];
+      expect(outcomes.filter((r) => r.ok)).toHaveLength(1);
+      expect(outcomes.filter((r) => !r.ok)).toHaveLength(1);
+
+      const copies = await db.select().from(bookCopies).where(eq(bookCopies.bookId, existingBook.id));
+      expect(copies).toHaveLength(1); // never two, regardless of which caller "won"
+    } finally {
+      await client2.end();
+    }
+  });
+
+  it("two near-simultaneous ingestion-only Review Later approvals of the same item cannot both create a book", async () => {
+    const [category] = await db.select().from(physicalCategories).where(eq(physicalCategories.slug, "stories-imagination")).limit(1);
+    const title = "Concurrency Ingestion Only Book";
+    const itemId = await makeIngestionItem();
+    await markNeedsReview(itemId, baseDraft({ proposedBookValues: { title, subtitle: null, authors: [], illustrators: [], publisher: null, languageCode: "en", additionalLanguageCodes: [], isbn10: null, isbn13: null } }));
+
+    const { db: db2, client: client2 } = connectSecondTestConnection();
+    try {
+      const [resultA, resultB] = await Promise.all([
+        approveReviewLater(db, { ingestionItemId: itemId, edits: {}, categorySlug: category.slug }),
+        approveReviewLater(db2, { ingestionItemId: itemId, edits: {}, categorySlug: category.slug }),
+      ]);
+
+      const outcomes = [resultA, resultB];
+      const succeeded = outcomes.filter((r) => r.ok);
+      expect(succeeded).toHaveLength(1);
+      expect(outcomes.filter((r) => !r.ok)).toHaveLength(1);
+      if (succeeded[0].ok) createdBookIds.push(succeeded[0].bookId);
+
+      const allBooksWithThisTitle = await db.select().from(books).where(eq(books.title, title));
+      expect(allBooksWithThisTitle).toHaveLength(1); // never two
+    } finally {
+      await client2.end();
+    }
+  });
+
+  // ---------------------------------------------------------------------
+  // Correction pass §8 — duplicate target validation
+  // ---------------------------------------------------------------------
+
+  it("rejects an arbitrary book id that isn't among the item's persisted duplicate candidates", async () => {
+    const [category] = await db.select().from(physicalCategories).limit(1);
+    const [arbitraryBook] = await db
+      .insert(books)
+      .values({ title: "Arbitrary Non Candidate Book", normalizedTitle: "arbitrary non candidate book", sortTitle: "x", languageCode: "en", physicalCategoryId: category.id, reviewStatus: "active" })
+      .returning({ id: books.id });
+    createdBookIds.push(arbitraryBook.id);
+
+    const itemId = await makeIngestionItem();
+    // No duplicateCandidateBookIds at all — arbitraryBook was never offered as a candidate.
+    await markNeedsReview(itemId, baseDraft({ duplicateOutcome: "exact_copy_same_edition" }));
+
+    const result = await resolveDuplicate(db, { ingestionItemId: itemId, action: "same_edition", existingBookId: arbitraryBook.id });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("invalid_target");
+
+    const copies = await db.select().from(bookCopies).where(eq(bookCopies.bookId, arbitraryBook.id));
+    expect(copies).toHaveLength(0); // no copy was created
+  });
+
+  it("rejects an archived book as a duplicate target even if it was once a legitimate candidate", async () => {
+    const [category] = await db.select().from(physicalCategories).limit(1);
+    const [archivedBook] = await db
+      .insert(books)
+      .values({ title: "Now Archived Candidate", normalizedTitle: "now archived candidate", sortTitle: "x", languageCode: "en", physicalCategoryId: category.id, reviewStatus: "archived" })
+      .returning({ id: books.id });
+    createdBookIds.push(archivedBook.id);
+
+    const itemId = await makeIngestionItem();
+    await markNeedsReview(itemId, baseDraft({ duplicateOutcome: "exact_copy_same_edition", duplicateCandidateBookIds: [archivedBook.id] }));
+
+    const result = await resolveDuplicate(db, { ingestionItemId: itemId, action: "same_edition", existingBookId: archivedBook.id });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("invalid_target");
+  });
+
+  it("rejects a pending item's own placeholder id as a duplicate target of itself", async () => {
+    const [placeholder] = await db
+      .insert(books)
+      .values({ title: "Self Target Placeholder", normalizedTitle: "self target placeholder", sortTitle: "x", languageCode: "en", reviewStatus: "pending_review" })
+      .returning({ id: books.id });
+    createdBookIds.push(placeholder.id);
+
+    const itemId = await makeIngestionItem();
+    await markNeedsReview(itemId, baseDraft({ duplicateOutcome: "exact_copy_same_edition", duplicateCandidateBookIds: [placeholder.id] }), placeholder.id);
+
+    const result = await resolveDuplicate(db, { ingestionItemId: itemId, action: "same_edition", existingBookId: placeholder.id });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("invalid_target");
+  });
+
+  // ---------------------------------------------------------------------
+  // Correction pass §9 — runtime validation at the mutation boundary
+  // ---------------------------------------------------------------------
+
+  it("updateBookMetadata rejects an invalid language code end-to-end, writing nothing", async () => {
+    const [category] = await db.select().from(physicalCategories).limit(1);
+    const [book] = await db
+      .insert(books)
+      .values({ title: "Validation Language Target", normalizedTitle: "validation language target", sortTitle: "x", languageCode: "en", physicalCategoryId: category.id, reviewStatus: "active" })
+      .returning({ id: books.id });
+    createdBookIds.push(book.id);
+
+    const result = await updateBookMetadata(db, { bookId: book.id, patch: { languageCode: "not-a-real-language" } });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("invalid_input");
+
+    const [after] = await db.select({ languageCode: books.languageCode }).from(books).where(eq(books.id, book.id)).limit(1);
+    expect(after.languageCode).toBe("en"); // unchanged
+  });
+
+  it("updateBookMetadata rejects explicitly clearing the title, never silently keeping the old value while still recording a false human_corrected provenance row", async () => {
+    const [category] = await db.select().from(physicalCategories).limit(1);
+    const [book] = await db
+      .insert(books)
+      .values({ title: "Validation Title Target", normalizedTitle: "validation title target", sortTitle: "x", languageCode: "en", physicalCategoryId: category.id, reviewStatus: "active" })
+      .returning({ id: books.id });
+    createdBookIds.push(book.id);
+
+    const result = await updateBookMetadata(db, { bookId: book.id, patch: { title: null } });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("invalid_input");
+
+    const [after] = await db.select({ title: books.title }).from(books).where(eq(books.id, book.id)).limit(1);
+    expect(after.title).toBe("Validation Title Target");
+
+    const provenanceRows = await db.select().from(bookFieldProvenance).where(eq(bookFieldProvenance.bookId, book.id));
+    expect(provenanceRows.some((r) => r.fieldKey === "title")).toBe(false); // no false provenance claim
+  });
+
+  it("updateBookMetadata rejects an out-of-range age, writing nothing", async () => {
+    const [category] = await db.select().from(physicalCategories).limit(1);
+    const [book] = await db
+      .insert(books)
+      .values({ title: "Validation Age Target", normalizedTitle: "validation age target", sortTitle: "x", languageCode: "en", physicalCategoryId: category.id, reviewStatus: "active" })
+      .returning({ id: books.id });
+    createdBookIds.push(book.id);
+
+    const result = await updateBookMetadata(db, { bookId: book.id, patch: { ageMinMonths: 500 } });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("invalid_input");
+  });
+
+  it("a genuinely nullable field can still be explicitly cleared end-to-end", async () => {
+    const [category] = await db.select().from(physicalCategories).limit(1);
+    const [book] = await db
+      .insert(books)
+      .values({ title: "Validation Nullable Clear Target", normalizedTitle: "validation nullable clear target", sortTitle: "x", languageCode: "en", physicalCategoryId: category.id, reviewStatus: "active", shortDescription: "Old description." })
+      .returning({ id: books.id });
+    createdBookIds.push(book.id);
+
+    const result = await updateBookMetadata(db, { bookId: book.id, patch: { description: null } });
+    expect(result.ok).toBe(true);
+
+    const [after] = await db.select({ shortDescription: books.shortDescription }).from(books).where(eq(books.id, book.id)).limit(1);
+    expect(after.shortDescription).toBeNull();
+  });
+
+  // ---------------------------------------------------------------------
+  // Correction pass §10 — audit truthfulness
+  // ---------------------------------------------------------------------
+
+  it("a description-only category edit is logged as category_guidance_updated, never falsely as category_renamed", async () => {
+    const created = await createCategory(db, { label: "Audit Truthfulness Category" });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    createdCategoryIds.push(created.id);
+
+    const result = await updateCategory(db, { categoryId: created.id, description: "New guidance text only." });
+    expect(result.ok).toBe(true);
+
+    const auditRows = await db.select().from(auditLog).where(eq(auditLog.entityId, created.id));
+    const relevant = auditRows.filter((r) => r.action.startsWith("category_") && r.action !== "category_created");
+    expect(relevant).toHaveLength(1);
+    expect(relevant[0].action).toBe("category_guidance_updated");
+    expect(relevant[0].action).not.toBe("category_renamed");
+  });
+
+  it("a real label rename is still logged as category_renamed", async () => {
+    const created = await createCategory(db, { label: "Audit Rename Category" });
+    if (!created.ok) return;
+    createdCategoryIds.push(created.id);
+
+    const result = await updateCategory(db, { categoryId: created.id, label: "Audit Renamed Category" });
+    expect(result.ok).toBe(true);
+
+    const auditRows = await db.select().from(auditLog).where(eq(auditLog.entityId, created.id));
+    const relevant = auditRows.filter((r) => r.action.startsWith("category_") && r.action !== "category_created");
+    expect(relevant.some((r) => r.action === "category_renamed")).toBe(true);
+  });
+
+  it("changing both label and description at once is logged as the bounded category_updated event, listing both changed fields", async () => {
+    const created = await createCategory(db, { label: "Audit Bounded Category" });
+    if (!created.ok) return;
+    createdCategoryIds.push(created.id);
+
+    const result = await updateCategory(db, { categoryId: created.id, label: "Audit Bounded Category Renamed", description: "New guidance too." });
+    expect(result.ok).toBe(true);
+
+    const auditRows = await db.select().from(auditLog).where(eq(auditLog.entityId, created.id));
+    const relevant = auditRows.filter((r) => r.action.startsWith("category_") && r.action !== "category_created");
+    expect(relevant[0].action).toBe("category_updated");
+    expect((relevant[0].detail as { changedFields: string[] }).changedFields.sort()).toEqual(["description", "label"]);
   });
 });

@@ -186,3 +186,126 @@ test.describe("Admin Taxonomy — category deactivation safety (Scenario I)", ()
     expect(categoryRow.isActive).toBe(true);
   });
 });
+
+test.describe("Admin Review — expanded metadata editor resolves a previously-impossible queue reason (correction pass §5)", () => {
+  const { db, client } = connectE2EDatabase();
+  const title = uniqueName("E2E Missing Contributors Book");
+  let categoryId: string;
+  let bookId: string;
+
+  test.beforeAll(async () => {
+    const [category] = await db.select().from(schema.physicalCategories).where(eq(schema.physicalCategories.slug, "stories-imagination")).limit(1);
+    categoryId = category.id;
+    const [book] = await db
+      .insert(schema.books)
+      .values({
+        title,
+        normalizedTitle: title.toLowerCase(),
+        sortTitle: title,
+        languageCode: "en",
+        physicalCategoryId: categoryId,
+        reviewStatus: "active",
+        // Otherwise-complete metadata — the ONLY missing-metadata signal this
+        // fixture should ever produce is the missing author, which the OLD
+        // book-only editor (description/category/age/format only) had no way
+        // to correct at all.
+        shortDescription: "A complete description.",
+        ageMinMonths: 24,
+        ageMaxMonths: 60,
+        format: "picture_book",
+        visualRealism: "cartoon",
+      })
+      .returning({ id: schema.books.id });
+    bookId = book.id;
+  });
+
+  test.afterAll(async () => {
+    await db.delete(schema.books).where(eq(schema.books.id, bookId));
+    await client.end();
+  });
+
+  test("correcting the missing author through the real Admin UI makes the queue item disappear", async ({ page }) => {
+    await loginAsAdmin(page);
+    await page.goto("/admin/review");
+    const queueLink = page.getByRole("link", { name: new RegExp(title) });
+    await expect(queueLink).toBeVisible();
+    await expect(queueLink).toContainText(/Missing authors\/illustrators/);
+
+    await queueLink.click();
+    await expect(page.getByRole("heading", { name: title })).toBeVisible();
+
+    await page.getByLabel("Author(s)").fill("A Real Author");
+    await page.getByRole("button", { name: "Save changes" }).click();
+    await expect(page.getByText("Saved.")).toBeVisible();
+
+    await page.goto("/admin/review");
+    await expect(page.getByRole("link", { name: new RegExp(title) })).toHaveCount(0);
+  });
+});
+
+test.describe("Admin Review — human verification UX (correction pass §6)", () => {
+  const { db, client } = connectE2EDatabase();
+  const title = uniqueName("E2E Category Verify Book");
+  let categoryId: string;
+  let bookId: string;
+  let flagId: string;
+
+  test.beforeAll(async () => {
+    const [category] = await db.select().from(schema.physicalCategories).where(eq(schema.physicalCategories.slug, "stories-imagination")).limit(1);
+    categoryId = category.id;
+    const [book] = await db
+      .insert(schema.books)
+      .values({
+        title,
+        normalizedTitle: title.toLowerCase(),
+        sortTitle: title,
+        languageCode: "en",
+        physicalCategoryId: categoryId,
+        reviewStatus: "active",
+        shortDescription: "A complete description.",
+        ageMinMonths: 24,
+        ageMaxMonths: 60,
+        format: "picture_book",
+        visualRealism: "cartoon",
+      })
+      .returning({ id: schema.books.id });
+    bookId = book.id;
+    const [author] = await db.insert(schema.contributors).values({ name: "Verify Flow Author", normalizedName: `verify flow author ${Date.now()}` }).returning({ id: schema.contributors.id });
+    await db.insert(schema.bookContributors).values({ bookId, contributorId: author.id, role: "author", sortOrder: 0 });
+    const [flag] = await db.insert(schema.reviewFlags).values({ bookId, flagType: "category_uncertain", detail: "AI suggested this category with medium confidence." }).returning({ id: schema.reviewFlags.id });
+    flagId = flag.id;
+  });
+
+  test.afterAll(async () => {
+    await db.delete(schema.reviewFlags).where(eq(schema.reviewFlags.id, flagId));
+    await db.delete(schema.books).where(eq(schema.books.id, bookId));
+    await client.end();
+  });
+
+  test("'Keep current category' marks physical_category human_verified, resolves the category flag, and leaves the category value unchanged", async ({ page }) => {
+    await loginAsAdmin(page);
+    await page.goto(`/admin/review/${encodeURIComponent(`book:${bookId}`)}`);
+    await expect(page.getByRole("heading", { name: title })).toBeVisible();
+
+    const categorySelectBefore = await page.getByLabel("Physical category").inputValue();
+    expect(categorySelectBefore).toBe("stories-imagination");
+
+    await page.getByRole("button", { name: "Keep current category (mark verified)" }).click();
+    await expect(page.getByText("Category kept as-is and marked verified.")).toBeVisible();
+
+    // The UI communicates KEPT, not changed — the category selection is
+    // unaffected, never reset or altered by the verify action.
+    const categorySelectAfter = await page.getByLabel("Physical category").inputValue();
+    expect(categorySelectAfter).toBe("stories-imagination");
+
+    const [categoryProvenance] = await db.select().from(schema.bookFieldProvenance).where(eq(schema.bookFieldProvenance.bookId, bookId));
+    expect(categoryProvenance.fieldKey).toBe("physical_category");
+    expect(categoryProvenance.sourceType).toBe("human_verified");
+
+    const [flagRow] = await db.select().from(schema.reviewFlags).where(eq(schema.reviewFlags.id, flagId));
+    expect(flagRow.status).toBe("resolved");
+
+    const [bookRow] = await db.select({ physicalCategoryId: schema.books.physicalCategoryId }).from(schema.books).where(eq(schema.books.id, bookId));
+    expect(bookRow.physicalCategoryId).toBe(categoryId); // never changed
+  });
+});
