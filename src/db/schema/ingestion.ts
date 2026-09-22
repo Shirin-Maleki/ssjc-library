@@ -102,6 +102,23 @@ export const ingestionItems = pgTable(
      */
     intakeDraft: jsonb("intake_draft"),
     resultingCopyId: uuid("resulting_copy_id").references((): AnyPgColumn => bookCopies.id),
+    /**
+     * The durable link from a Review Later ingestion item to the optional
+     * `pending_review` book `saveForReview()` may have created for it (Phase 8
+     * admin review) — added because no reliable direct relationship existed before:
+     * `resultingCopyId` above is only ever set once an item reaches `completed`
+     * (never for `needs_review`), and the only prior record of "which book, if any,
+     * did this item create" was `audit_log.detail` JSON on the
+     * `intake_marked_for_review` event — never meant to be queried as a relational
+     * join, and not something Phase 8's review queue/resolution flow can safely
+     * build on. Nullable: a genuinely ingestion-only Review Later item (not enough
+     * trustworthy identity data for even a pending book) has no pending book at
+     * all, and this stays null rather than ever being guessed. Set going forward by
+     * `saveForReview()`; backfilled once, non-destructively, for pre-existing
+     * unambiguous Phase 7 rows by migration `0004` (see that migration's own SQL
+     * comment) — left null for any row a backfill couldn't resolve unambiguously.
+     */
+    pendingBookId: uuid("pending_book_id").references(() => books.id),
     errorMessage: text("error_message"),
     retryCount: smallint("retry_count").notNull().default(0),
     startedAt: timestamp("started_at", { withTimezone: true }),

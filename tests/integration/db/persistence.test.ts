@@ -29,8 +29,11 @@ describe.skipIf(!hasTestDb)("intake/persistence (against a real Postgres databas
     // ingestion_items -> book_copies reference must be nulled out before books
     // (which cascades to book_copies) or ingestion_jobs (which cascades to
     // ingestion_items) can be deleted.
+    // `ingestion_items.pending_book_id` (Phase 8) is a second FK into `books` with
+    // no cascade — must also be nulled before a `books` row it points to can be
+    // deleted, exactly like `resulting_copy_id` above.
     for (const id of createdIngestionItemIds.splice(0)) {
-      await db.update(ingestionItems).set({ resultingCopyId: null }).where(eq(ingestionItems.id, id));
+      await db.update(ingestionItems).set({ resultingCopyId: null, pendingBookId: null }).where(eq(ingestionItems.id, id));
     }
     for (const id of createdBookIds.splice(0)) {
       await db.delete(books).where(eq(books.id, id));

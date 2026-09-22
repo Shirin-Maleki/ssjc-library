@@ -26,8 +26,9 @@ import type { IntakeDraft } from "./draft";
 /** The exact type Drizzle's `db.transaction(async (tx) => ...)` callback receives —
  * structurally close to but not identical to `Database` (it lacks `$client`), so a
  * helper function called from inside a transaction needs this type, not `Database`
- * itself. */
-type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
+ * itself. Exported for Phase 8's admin persistence layer, which composes its own
+ * transactions calling into `upsertPublisher`/`upsertContributor`/`upsertTag`. */
+export type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
 
 /**
  * Dedicated, transactional new-book/another-copy/review-later persistence (Phase 7,
@@ -80,7 +81,10 @@ export interface NewBookResult {
   copyId: string;
 }
 
-async function upsertPublisher(tx: Transaction, name: string): Promise<string> {
+/** Exported for Phase 8's admin persistence layer (`src/lib/admin/persistence.ts`)
+ * — reused rather than re-implemented, per §32's "use the established normalized
+ * publisher logic" for any admin metadata correction that touches publisher name. */
+export async function upsertPublisher(tx: Transaction, name: string): Promise<string> {
   const [row] = await tx
     .insert(publishers)
     .values({ name, normalizedName: normalizeSearchText(name) })
@@ -89,7 +93,8 @@ async function upsertPublisher(tx: Transaction, name: string): Promise<string> {
   return row.id;
 }
 
-async function upsertContributor(tx: Transaction, name: string): Promise<string> {
+/** Exported for Phase 8's admin persistence layer — see `upsertPublisher`'s comment. */
+export async function upsertContributor(tx: Transaction, name: string): Promise<string> {
   const normalizedName = normalizeSearchText(name);
   const [row] = await tx
     .insert(contributors)
@@ -99,7 +104,8 @@ async function upsertContributor(tx: Transaction, name: string): Promise<string>
   return row.id;
 }
 
-async function upsertTag(tx: Transaction, name: string): Promise<string> {
+/** Exported for Phase 8's admin persistence layer — see `upsertPublisher`'s comment. */
+export async function upsertTag(tx: Transaction, name: string): Promise<string> {
   const normalizedName = normalizeSearchText(name);
   const [row] = await tx
     .insert(tags)
@@ -383,7 +389,12 @@ export async function saveForReview(db: Database, input: SaveForReviewInput): Pr
 
     const [updatedItem] = await tx
       .update(ingestionItems)
-      .set({ status: "needs_review", reviewReason: input.reviewReason, intakeDraft: input.draft })
+      .set({
+        status: "needs_review",
+        reviewReason: input.reviewReason,
+        intakeDraft: input.draft,
+        ...(bookId ? { pendingBookId: bookId } : {}),
+      })
       .where(eq(ingestionItems.id, input.ingestionItemId))
       .returning({ jobId: ingestionItems.jobId });
 

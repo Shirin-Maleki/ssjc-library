@@ -4,6 +4,7 @@ import { migrate } from "drizzle-orm/postgres-js/migrator";
 import postgres from "postgres";
 import * as schema from "./schema";
 import { rebuildSearchText } from "../lib/search/searchTextMaintenance";
+import { backfillPendingBookLinks } from "./backfillPendingBookLinks";
 
 /**
  * Standalone migration runner (`npm run db:migrate`) — deliberately not the app's own
@@ -47,6 +48,14 @@ async function main() {
     console.log(
       `Backfilled search_text for ${backfillResult.updated} existing book(s) left behind by a schema change ` +
         `(${backfillResult.considered} considered, ${backfillResult.unchanged} already correct).`
+    );
+  }
+
+  const pendingBookLinkResult = await backfillPendingBookLinks(db);
+  if (pendingBookLinkResult.considered > 0) {
+    console.log(
+      `Backfilled ingestion_items.pending_book_id for ${pendingBookLinkResult.linked} pre-existing Review Later item(s) ` +
+        `(${pendingBookLinkResult.considered} considered, ${pendingBookLinkResult.skippedAmbiguous} left null as ambiguous).`
     );
   }
 
