@@ -16,21 +16,21 @@ exactly what exists right now versus what is planned.
 
 ## Project status
 
-**Current phase: Phase 7 — Add a Book (single-book intake) — COMPLETE, real-provider
-validation performed (2026-09-20/21).** A teacher can photograph a book's front cover and,
-through one continuous flow, have it identified (Google Gemini vision), looked up against
-Google Books/Open Library, checked for duplicates against the real catalog, enriched with a
-description/tags/physical-category suggestion, confirmed or Quick-Edited, and saved — ending
-in a real shelving instruction. Full architecture: `docs/AI_PIPELINE.md`. One real,
-significant architecture correction happened this phase: the Phase 6-approved direct-
-browser-to-Drive upload was proven, via real browser testing, to be blocked by Drive's CORS
-behavior, and was corrected to a server-mediated upload — see `docs/DECISIONS.md`. Phase 6
-(Google Drive connection) and Phase 5 (real search architecture, including real-provider
-validation against a live Gemini API key) remain complete and approved, unaffected except
-where Phase 7 built directly on Phase 6's Drive infrastructure. Find a Book, Reading Lists,
-voice search, and staff/admin authentication are all unaffected. See
-`docs/IMPLEMENTATION_STATUS.md` for exactly what's built, `docs/DATABASE_SETUP.md` for the
-database itself, `docs/SEARCH.md` for the full search architecture, and
+**Current phase: Phase 8 — Admin Review + Taxonomy — COMPLETE (2026-09-22).** An admin can
+open a real, database-backed review queue (uncertain identity/duplicates, category decisions,
+metadata conflicts, missing useful metadata), resolve a Phase 7 Review Later item without
+rerunning the AI pipeline, work through a focused five-outcome duplicate comparison (same
+edition / different edition / different language / false match / unresolved — never a general
+merge engine), correct catalog metadata with the same presence-based provenance semantics
+Quick Edit already established, and manage physical shelving categories and taxonomy
+suggestions — always as an explicit human action; AI never auto-creates or auto-activates a
+category. Full detail: `docs/IMPLEMENTATION_STATUS.md`, `docs/TAXONOMY.md`. One additive
+migration (`drizzle/0004_...`), no new tables. Phase 7 (Add a Book, including its 2026-09-21
+correction pass), Phase 6 (Google Drive connection), and Phase 5 (real search architecture)
+remain complete and approved, unaffected except where Phase 8 built directly on their
+infrastructure. Find a Book, Reading Lists, voice search, and the core Add a Book flow are all
+unaffected. See `docs/IMPLEMENTATION_STATUS.md` for exactly what's built, `docs/DATABASE_SETUP.md`
+for the database itself, `docs/SEARCH.md` for the full search architecture, and
 `docs/GOOGLE_INTEGRATION.md`/`docs/GOOGLE_SETUP.md` for the Drive integration.
 
 ## Local setup
@@ -82,6 +82,7 @@ Start here, in order:
 5. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — the technical architecture: frontend, backend, database, AI, Google integrations, search, deployment.
 6. [`docs/DATA_MODEL.md`](docs/DATA_MODEL.md) — the relational schema in full detail.
 7. [`docs/AI_PIPELINE.md`](docs/AI_PIPELINE.md) — the Add-a-Book AI/external-provider pipeline (Phase 7): vision, metadata lookup, reconciliation, duplicate detection, enrichment.
+8. [`docs/TAXONOMY.md`](docs/TAXONOMY.md) — physical category lifecycle and the taxonomy-suggestion review workflow (Phase 8), and where the Phase 11 boundary sits.
 
 Phase-specific detail, split out once a subject becomes operationally real (per the "don't
 create placeholder docs" rule): [`docs/SECURITY.md`](docs/SECURITY.md),

@@ -568,8 +568,32 @@ must not silently re-decide or re-break:
    code even though it's "only" checked by three call sites. Don't remove it without replacing
    Add-a-Book's E2E coverage with something else that avoids live API calls in CI.
 
-Phase 8 (Admin Review) is the next phase in the plan — it must not begin without explicit
-approval, per the process above. Before starting it, read `docs/AI_PIPELINE.md` §10 for what
-Phase 7's real-provider validation did and didn't confirm (Google Books untested — no key;
-HEIC-with-Gemini not freshly re-confirmed this session — real rate limit), since a
-review/retry UI is exactly where those gaps become relevant.
+**Admin Review + Taxonomy (Phase 8) is a real, complete implementation** — read
+`docs/TAXONOMY.md` and this file's own `docs/DECISIONS.md` Phase 8 entries before touching
+`src/lib/admin/`, `src/app/(staff)/admin/`, or `src/app/api/admin/`. Things a future agent
+must not silently re-decide or re-break:
+1. **`requireAdminSession()` is called independently by every Phase 8 Server Action**, not
+   only by the `/admin` page — a Server Action is directly invokable regardless of which page
+   rendered the button that called it. Any new admin mutation must call it first, exactly like
+   every existing one does.
+2. **`ingestion_items.pending_book_id` is the durable Review Later → pending book link** —
+   never reintroduce reliance on `audit_log.detail` JSON as a relational join for this; it was
+   never meant to be queried that way and the whole point of adding this column was to stop
+   doing that.
+3. **There is no general book-merge engine, and none should be added casually** — duplicate
+   resolution (`src/lib/admin/duplicateResolution.ts`) covers exactly five approved outcomes
+   for a pending intake against an existing book. See `docs/DECISIONS.md`'s "no general
+   book-merge engine" entry before extending this toward anything more general.
+4. **Review Later approval and the general admin metadata editor use two DIFFERENT, both
+   deliberate, provenance rules** (category `ai_inferred`/`human_verified`-only in the former,
+   reusing Phase 7's `resolveConfirmFields()`; any-field `human_corrected`-on-change in the
+   latter, via `resolveProvenanceForPatch()`) — this is not an inconsistency to "fix," see
+   `docs/DECISIONS.md`.
+5. **Re-analyze Cover and existing-category merge were deliberately not built** — both are
+   documented, reasoned scope boundaries (`docs/DECISIONS.md`), not gaps to silently fill in
+   without re-reading why.
+
+Phase 9 is the next phase in the plan — it must not begin without explicit approval, per the
+process above. Before starting it, read `docs/AI_PIPELINE.md` §10 for what Phase 7's
+real-provider validation did and didn't confirm (Google Books untested — no key), and
+`docs/TAXONOMY.md` for what Phase 8 deliberately left for Phase 11.

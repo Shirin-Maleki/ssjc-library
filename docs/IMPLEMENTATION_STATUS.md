@@ -1170,8 +1170,11 @@ explained in `docs/DECISIONS.md`. **Phase 6 adds no migration at all** — `book
 and `ingestion_items.drive_file_id` already existed from the Phase 0 schema review; OAuth
 credentials live in environment/deployment secrets, never PostgreSQL. **Phase 7 adds one
 migration**, `drizzle/0003_naive_silver_surfer.sql` (the `cover_visible` enum value and
-`ingestion_items.intake_draft` column — see `docs/DATA_MODEL.md` §15/§6/§10). See
-`docs/DATABASE_SETUP.md` for the full command reference, including pgvector-capable local
+`ingestion_items.intake_draft` column — see `docs/DATA_MODEL.md` §15/§6/§10). **Phase 8 adds one
+migration**, `drizzle/0004_phase8_admin_review_taxonomy.sql` — four additive, nullable-or-
+defaulted columns only (`physical_categories.description`/`display_order`,
+`ingestion_items.pending_book_id`, `taxonomy_suggestions.resolved_category_id`), no new tables.
+See `docs/DATABASE_SETUP.md` for the full command reference, including pgvector-capable local
 setup.
 
 ## External services
@@ -1198,11 +1201,75 @@ Repository is linked to `github.com/Shirin-Maleki/ssjc-library` (`origin`, `main
 report's own "Git Status" section — see that report for the exact SHAs, push confirmation, and
 final working-tree state; never inferred or assumed here.
 
+## Completed work (Phase 8 — Admin Review + Taxonomy)
+
+Real, database-backed admin maintenance layer, built on the approved Phase 7 dependency
+(`a75f5c9184f3ad3c1c16ef0950ea5c3398b8f654`). See `docs/DECISIONS.md` for the architectural
+reasoning behind each choice below and `docs/SECURITY.md` for the admin-elevation/source-cover
+threat model.
+
+- **Admin guard**: `requireAdminSession()` (redirect-based, for pages/Server Actions) and
+  `hasActiveAdminSession()` (boolean, for the Route Handler) added to `src/lib/auth/guards.ts`.
+  Every Phase 8 Server Action independently calls `requireAdminSession()` first — never relies
+  on `/admin`'s own page-render-time protection alone.
+- **Review queue**: `src/lib/admin/reviewQueue.ts` (pure aggregation/priority/dedup logic,
+  unit-tested) + `src/lib/admin/reviewQueueSource.ts` (the real DB queries across
+  `ingestion_items.status = 'needs_review'`, open `review_flags`, pending `book_duplicates`,
+  low-confidence `book_field_provenance`, and computed missing-metadata on active books) —
+  never a new `review_queue` table.
+- **Review Later resolution**: `src/lib/admin/persistence.ts`'s `approveReviewLater()` reuses
+  Phase 7's own `resolveConfirmFields()` (identical provenance semantics for a human decision,
+  whether teacher or admin) and branches into either `saveNewBook()` (ingestion-only item) or
+  the new `finalizePendingBook()` (an existing `pending_review` placeholder, finalized in place
+  — never a second book row).
+- **Duplicate resolution**: `src/lib/admin/duplicateResolution.ts` (pure outcome→plan mapping)
+  + `resolveDuplicate()`. SAME EDITION attaches a copy to the existing canonical book and
+  archives the placeholder (never hard-deleted, never field-merged); DIFFERENT
+  EDITION/LANGUAGE/FALSE MATCH record a `book_duplicates` relationship and clear the stored
+  draft's `duplicateOutcome` so a later `approveReviewLater()` call isn't permanently blocked.
+  **No general book-merge engine exists.**
+- **Admin metadata editor**: `src/lib/admin/adminPatch.ts` (presence-based patch semantics,
+  reusing Phase 7's `hasEditField`) + `updateBookMetadata()`. `src/lib/admin/provenanceWrite.ts`
+  is the one shared transactional provenance-history helper (retire-then-insert, respecting the
+  partial unique index).
+- **Category management**: `description`/`display_order` columns added; `createCategory()`,
+  `updateCategory()` (never touches `id`/`slug`, rebuilds affected books' `search_text` on a
+  label change), `setCategoryActive()` (blocks deactivation while any non-archived book
+  references it). `src/lib/admin/categoryHealth.ts` computes real counts only.
+- **Taxonomy suggestions**: full lifecycle (`pending`/`approved`/`rejected`/`merged`/
+  `postponed`) on the existing `taxonomy_suggestions` table plus a new nullable
+  `resolved_category_id` FK. Approval/merge are explicit admin actions that create/select the
+  category themselves — AI never auto-creates or auto-activates one.
+- **Admin source-cover proxy**: `src/app/api/admin/source-cover/[ingestionItemId]/route.ts` —
+  admin-only, resolves the Drive file id server-side from `ingestion_items.drive_file_id`,
+  proxies through the existing `CoverStorageProvider`, private/no-store caching.
+- **Admin UI**: `/admin` (calm overview with real counts), `/admin/review` (priority-grouped
+  queue), `/admin/review/[key]` (evidence + identity/classification form + duplicate compare +
+  review-flag resolution), `/admin/taxonomy` (categories + suggestions).
+
+**Migration**: `drizzle/0004_phase8_admin_review_taxonomy.sql` — four additive columns
+(`physical_categories.description`, `physical_categories.display_order`,
+`ingestion_items.pending_book_id`, `taxonomy_suggestions.resolved_category_id`), no new tables,
+no destructive changes. `src/db/backfillPendingBookLinks.ts` runs once per `db:migrate`
+invocation to conservatively backfill `pending_book_id` for pre-existing `needs_review` rows
+from their `audit_log` history, leaving genuinely ambiguous rows null rather than guessing.
+
+**Tests**: 581 unit (was 531; +50 pure-logic tests across `tests/unit/admin/*`), 121 integration
+(was 96; +25 DB-backed tests in `tests/integration/db/adminReview.test.ts` covering the queue,
+Review Later approval, all five duplicate outcomes, metadata/provenance correctness, category
+management, and taxonomy decisions), 145 E2E (was 139; +6 across `auth.spec.ts`'s new admin
+sub-route protection tests and the new `adminReview.spec.ts`, which drives the real browser UI
+through Review Later approval, same-edition duplicate resolution, and category-deactivation
+safety against disposable fixtures). `npm run typecheck`/`npm run lint`/`npm run build` all
+clean.
+
+**Not built / deliberately deferred**: Re-analyze Cover (existing Phase 7 evidence is
+sufficient — see `docs/DECISIONS.md`), a general existing-category merge engine (§27 of the
+phase brief explicitly defers it), Google Sheets/Teacher Catalog (Phase 9+), full-catalog
+taxonomy clustering (Phase 11).
+
 ## Next recommended task
 
-Await explicit review/approval of Phase 7 as complete. **Phase 8 must not begin until that
-approval** — this pass did not start any Phase 8 work (no Admin Review interface, no taxonomy-
-management UI). Whoever picks up Phase 8 should read `docs/AI_PIPELINE.md` in full (the
-pipeline Phase 8's review interface would act on), `docs/DATA_MODEL.md` §8 (review/flags), and
-this file's "Completed work (Phase 7...)" section's "not real-tested"/"not built" notes before
-starting.
+Await explicit review/approval of Phase 8 as complete. **Phase 9 must not begin until that
+approval.** Whoever picks up Phase 9 should read this file's "Completed work (Phase 8...)"
+section, `docs/TAXONOMY.md`, and `docs/DECISIONS.md`'s Phase 8 entries before starting.

@@ -4,6 +4,50 @@ A simple, phase-level record of what actually shipped — not a verbose release 
 Entries are dated by when the work was completed; see `docs/IMPLEMENTATION_STATUS.md` for the
 current state and `docs/DECISIONS.md` for the reasoning behind any of these.
 
+## Phase 8 complete — Admin Review + Taxonomy — 2026-09-22
+
+An admin can now open uncertain/incomplete/pending catalog records and act on them
+without rerunning the AI intake pipeline: a real, database-backed review queue
+(needs-review ingestion items — with or without a book row yet, open review
+flags, pending duplicates, low-confidence fields, and missing useful metadata),
+a Review Later resolution flow that finalizes an existing pending placeholder or
+creates a brand-new book, a focused five-outcome duplicate comparison (same
+edition / different edition / different language / false match / unresolved —
+never a general merge engine), a fuller admin metadata editor with the same
+presence-based correction philosophy Quick Edit already established, and real
+physical-category and taxonomy-suggestion management (create/rename/
+activate-deactivate categories with a safe-deactivation rule; a full
+pending → approved/rejected/merged/postponed taxonomy suggestion lifecycle,
+always gated behind an explicit admin action — AI never auto-creates a category).
+Full detail: `docs/IMPLEMENTATION_STATUS.md`, `docs/TAXONOMY.md`, `docs/DATA_MODEL.md`,
+`docs/DECISIONS.md`.
+
+**One additive migration** (`drizzle/0004_phase8_admin_review_taxonomy.sql`): two new
+`physical_categories` columns (`description`, `display_order`), and two new nullable
+FKs (`ingestion_items.pending_book_id`, `taxonomy_suggestions.resolved_category_id`)
+— no new tables, no destructive changes, safely upgrades an existing Phase 7 database
+(verified with a real integration test run against the populated dev/E2E databases).
+
+**A real coordination bug found and fixed during this pass**: resolving a duplicate
+as "different edition/language" or "false match" recorded the decision but never
+cleared the ingestion item's own stored `duplicateOutcome` — a subsequent Review
+Later approval would have stayed permanently blocked by its own unresolved-duplicate
+guard, even though the admin had just resolved it. Caught by an integration test
+before it ever reached a real admin.
+
+**Reused rather than re-implemented**: `resolveConfirmFields()` (Phase 7) for Review
+Later's identity/category/provenance resolution; `rebuildSearchTextForBooks()`
+(Phase 5) for category-rename and metadata-edit search consistency;
+`generateEmbeddingForBook()` (Phase 5) for post-mutation embedding refresh, always
+fire-and-forget and never able to block or fail an admin save.
+
+**Deliberately not built this phase, and documented as such** (`docs/DECISIONS.md`):
+Re-analyze Cover, a general book-merge engine, an existing-category merge engine,
+any real collection-wide taxonomy analysis.
+
+Tests: 581 unit (+50), 121 integration (+25), 145 E2E (+6). `npm run typecheck` /
+`npm run lint` / `npm run build` all clean.
+
 ## Phase 7 complete — Add a Book, end to end — 2026-09-20/21
 
 A teacher can now photograph a book cover and, ~30-60 seconds later, have it shelved:

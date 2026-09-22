@@ -322,8 +322,14 @@ usage doesn't need.
 | `supporting_book_ids` | uuid[], not null default `'{}'` | GIN-indexable if reverse lookup is ever needed |
 | `status` | enum(`pending`,`approved`,`rejected`,`merged`,`postponed`), not null default `pending` | |
 | `decision_note` | text | nullable |
+| `resolved_category_id` | uuid, FK → `physical_categories.id` | **Phase 8.** Set on `approved` (the brand-new category this suggestion became) or `merged` (the existing category it was merged into); null otherwise. A small nullable FK rather than relying on `decision_note` prose for this relational fact. |
 | `created_at` / `reviewed_at` | timestamptz | nullable where applicable |
-| `reviewed_by` | text | nullable |
+| `reviewed_by` | text | nullable — always the literal `"admin"` (§Accounts); never a named individual |
+
+`physical_categories` gains two Phase 8 columns: `description` (text, nullable — optional
+admin-facing shelving guidance, never shown to a teacher as bibliographic fact) and
+`display_order` (smallint, not null default `0` — a plain sort hint for the admin category
+list). Neither changes `id`/`slug` identity; a label rename touches only `label`.
 
 ## 9. Reading lists
 
@@ -358,6 +364,7 @@ books/copies split rather than pointing at two overlapping targets.
 | `review_reason` | text | nullable, e.g. `multiple_books_or_ambiguous_image` |
 | `intake_draft` | jsonb | nullable (Phase 7) — see below |
 | `resulting_copy_id` | uuid, FK → `book_copies.id` | nullable |
+| `pending_book_id` | uuid, FK → `books.id` | nullable (Phase 8) — see below |
 | `error_message` | text | nullable |
 | `retry_count` | smallint, not null default 0 | |
 | `started_at` / `completed_at` | timestamptz | nullable |
@@ -378,6 +385,18 @@ draft, never an arbitrary raw AI response dump — it never contains a secret, a
 image byte, or a resumable Drive upload session URI, and never persists verbose
 model chain-of-thought or raw AI prose, only the already-schema-validated
 structures the vision/enrichment provider calls produce.
+
+**`pending_book_id` (Phase 8)** — the durable link from a Review Later ingestion item to the
+optional `pending_review` book `saveForReview()` may have created for it. Added because no
+reliable direct relationship existed before: `resulting_copy_id` is only ever set once an item
+reaches `completed` (never for `needs_review`), and the only prior record of "which book, if
+any, did this item create" was `audit_log.detail` JSON on the `intake_marked_for_review`
+event — never meant to be queried as a relational join. Nullable: a genuinely ingestion-only
+Review Later item (not enough trustworthy identity data for even a pending book) has no pending
+book at all, and this stays null rather than being guessed. Set going forward by
+`saveForReview()`; `src/db/backfillPendingBookLinks.ts` backfills pre-existing rows
+conservatively (only when exactly one unambiguous `audit_log` record names the book and no
+other ingestion item already claims it), leaving a genuinely ambiguous row null.
 
 ### `book_identity_candidates` / `metadata_provider_cache`
 
@@ -632,3 +651,14 @@ design:**
   full contract and its `IntakeDraftSchema` validation boundary.
 - **No other schema changes.** One migration
   (`drizzle/0003_naive_silver_surfer.sql`, both statements above).
+
+**2026-09-22 — Phase 8 implementation (Admin Review + Taxonomy):**
+- **`physical_categories` gains `description` (text, nullable) and `display_order`
+  (smallint, not null default `0`)** — see §12/§Accounts-adjacent category
+  section above. Neither changes `id`/`slug` identity.
+- **`ingestion_items.pending_book_id` (uuid, FK → `books.id`, nullable) added** —
+  see §10 above for the full rationale and backfill behavior.
+- **`taxonomy_suggestions.resolved_category_id` (uuid, FK → `physical_categories.id`,
+  nullable) added** — see §8 above.
+- **No new tables.** One migration (`drizzle/0004_phase8_admin_review_taxonomy.sql`,
+  four `ALTER TABLE ADD COLUMN` + two `ADD CONSTRAINT` statements, all additive).

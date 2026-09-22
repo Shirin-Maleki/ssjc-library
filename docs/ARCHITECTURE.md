@@ -399,6 +399,15 @@ This remains lightweight by design — no accounts, no per-user identity, no pas
 flow — the specification above is about making the *mechanism* rigorous, not about turning
 this into an account system.
 
+**Phase 8 addition, no mechanism change:** `requireAdminSession()`
+(`src/lib/auth/guards.ts`) is the one centralized check every Phase 8 Server
+Action calls first — valid staff session AND `isAdminActive()` currently true,
+redirecting to `/admin`'s existing unlock prompt otherwise. `hasActiveAdminSession()`
+is the same check without the redirect, for the one Route Handler
+(`/api/admin/source-cover/[ingestionItemId]`) that needs a real HTTP status
+instead. Neither introduces a new cookie, token format, or elevation duration —
+both read the exact same session the mechanism above already produces.
+
 ## 15. Image storage / display strategy
 
 See §7.
@@ -455,27 +464,51 @@ limit and returning — a serverless-compatible way to achieve the same resumabl
 without a separate host. Both are compatible with the existing `ingestion_jobs`/
 `ingestion_items` schema with no data-model change; only the execution host changes.
 
-## 17. Taxonomy architecture
+## 17. Taxonomy architecture (Phase 8 as-built)
 
-Unchanged from the first draft: `physical_categories` is admin-managed (create/rename/
-deactivate, never a hard delete that would orphan books); AI always selects among existing
-active categories, never creates one; gap analysis is admin-triggered, not continuous, and
-proposals (`taxonomy_suggestions`, now with `supporting_book_ids` as an array rather than a
-join table — see `docs/DATA_MODEL.md` §12) require explicit admin approval before any
-category is created or book reassigned.
+Built as planned, with two small additive columns the first draft didn't
+anticipate: `physical_categories.description` (optional shelving guidance) and
+`physical_categories.display_order`. `physical_categories` is admin-managed —
+`src/lib/admin/persistence.ts`'s `createCategory()`/`updateCategory()`/
+`setCategoryActive()` — rename never touches `id`/`slug` (`src/lib/admin/categorySlug.ts`
+generates a slug once, at creation, only); deactivation is blocked while any
+non-archived book references the category (`src/lib/admin/categoryHealth.ts`
+computes the real referencing count). AI always selects among existing active
+categories (`validateCategorySuggestion()`, unchanged from Phase 7), never creates
+one. Taxonomy suggestion review is admin-triggered (the admin opens `/admin/taxonomy`),
+not continuous/automatic — no Phase 8 code path runs a collection-wide AI taxonomy
+analysis. `taxonomy_suggestions` gained one column, `resolved_category_id` (nullable
+FK to `physical_categories`), set on `approved`/`merged` so the resulting/chosen
+category is a real relational fact, not only prose in `decision_note`. Every category
+creation/activation is an explicit admin Server Action; see `docs/TAXONOMY.md` for the
+full lifecycle and the Phase 11 boundary.
 
 ## 18. Confidence architecture
 
 Unchanged in behavior from the first draft; the underlying table is now
-`book_field_provenance` with a four-way `source_type` (external / AI-inferred /
-human-corrected / human-verified) and a full evidence history rather than only the latest
-value — see `docs/DATA_MODEL.md` §6. Thresholds remain centralized in `system_settings`;
-teachers never see a confidence number, only admins do.
+`book_field_provenance` with a five-way `source_type` (external_provider /
+ai_inferred / cover_visible (Phase 7) / human_corrected / human_verified) and a full
+evidence history rather than only the latest value — see `docs/DATA_MODEL.md` §6.
+Phase 8's admin UI shows only "High confidence"/"Medium confidence"/"Needs review"
+language, never a raw decimal, matching the original "teachers never see a
+confidence number, only admins do" plan — admins now see it as a plain label too,
+not a decimal either. `src/lib/admin/provenanceWrite.ts` is the one shared
+transactional helper every Phase 8 mutation uses to retire the previous current row
+and insert the new one, respecting `book_field_provenance`'s partial unique index.
 
-## 19. Review-queue architecture
+## 19. Review-queue architecture (Phase 8 as-built)
 
-Unchanged: admin dashboard sections are filtered views over `books`, `review_flags`,
-`book_duplicates`, and `taxonomy_suggestions` — no separate queue tables.
+Built exactly as planned: no separate queue table exists.
+`src/lib/admin/reviewQueueSource.ts` computes the queue fresh on every load, as a
+projection over `ingestion_items.status = 'needs_review'` (including items with no
+`books` row at all — the primary Phase 7 Review Later source), open `review_flags`,
+pending `book_duplicates`, low-confidence `book_field_provenance`, and computed
+missing-metadata on active books. `src/lib/admin/reviewQueue.ts` is the pure,
+unit-tested aggregation/priority/dedup layer this source function feeds — multiple
+signals referring to the same underlying book or ingestion item merge into one
+queue entry by a `book:{id}`/`ingestion:{id}` key, never presented as separate rows
+for the admin to resolve individually. `requireAdminSession()` gates every read and
+write in this layer independently of page-level protection.
 
 ## 20. Reading list architecture
 

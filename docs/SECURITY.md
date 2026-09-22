@@ -288,14 +288,48 @@ Full architecture in `docs/AI_PIPELINE.md`; the upload-architecture correction
   session URI — the Drive source is stored as its already-durable file id plus
   safe metadata, never the ephemeral session used to create it.
 
-## What's explicitly out of scope through Phase 7
+## Admin Review + Taxonomy (Phase 8)
+
+- **A dedicated admin guard, checked independently by every mutation** —
+  `requireAdminSession()` (`src/lib/auth/guards.ts`) requires both a valid staff
+  session AND currently-active admin elevation (`isAdminActive`), redirecting to
+  the existing `/admin` unlock prompt otherwise. Every Phase 8 Server Action
+  (`src/lib/admin/actions.ts`) calls this itself, first — never relies on `/admin`'s
+  own page-render-time protection alone, since a Server Action is independently
+  invokable regardless of which page rendered the button that called it. An admin
+  session whose elevation window has lapsed is treated exactly like "never
+  elevated," matching the existing sliding-renewal downgrade behavior — no new
+  cookie/JWT mechanism was introduced.
+- **The admin-only source-cover proxy never accepts a raw Drive file id from the
+  client** — `/api/admin/source-cover/[ingestionItemId]` (a Route Handler, so it
+  uses the non-redirecting `hasActiveAdminSession()` check and returns a real 403
+  JSON response, not a redirect) resolves the Drive file id server-side from
+  `ingestion_items.drive_file_id`, keyed only by the application-owned ingestion
+  item id (checked with `isUuid()` first). OAuth credentials, the resumable
+  upload session, and every other Drive internal stay exactly as inaccessible to
+  the browser as before Phase 8 — this route is a narrow, admin-only read proxy
+  for review, never a general arbitrary-file proxy, and is never used for normal
+  teacher-facing catalog rendering (`Cache-Control: private, no-store`).
+- **Every admin mutation still Zod-/type-validates its input and re-checks live
+  database state before writing** — a category slug is re-resolved against the
+  live `physical_categories` table, never trusted as a client-supplied label; a
+  `Review Later`/duplicate/metadata mutation re-reads the current
+  `ingestion_items.status`/`books.updated_at` before writing (§Concurrency in
+  `docs/DECISIONS.md`) rather than trusting whatever state the admin's browser
+  last rendered.
+- **`actorLabel` for every Phase 8 audit/provenance/resolution write is the
+  literal string `"admin"`** — matching the existing "no individual accounts"
+  decision (`docs/DECISIONS.md`); there is no more precise identity to record,
+  and none was added.
+
+## What's explicitly out of scope through Phase 8
 
 - The rate limiter is still in-memory, not backed by the now-real `login_attempts` table (see
   above).
 - No Google Sheets credentials exist yet — Phase 9 owns that decision.
-- No Phase 8 Admin Review interface exists yet — a `needs_review`/`pending_review`
-  intake is persisted (Phase 7) but there is no staff UI to act on it beyond the
-  same Add a Book flow resuming it.
+- No collaborative-editing locks exist for Admin Review — see
+  `docs/DECISIONS.md`'s Phase 8 concurrency entry for the simple, deliberately
+  non-real-time protections that exist instead.
 
 ## Verified, not assumed
 

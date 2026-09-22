@@ -2275,3 +2275,115 @@ documented design. No database schema change otherwise (drafts are `jsonb`).
 `tests/unit/components/ConfirmBook.test.tsx`;
 `tests/unit/components/DuplicateCheck.test.tsx`;
 `tests/integration/db/persistence.test.ts`; `tests/e2e/addBook.spec.ts`.
+
+## Phase 8: Admin Review reuses Phase 7's confirm-field resolution rather than a parallel resolver
+
+**Decision:** `approveReviewLater()` (`src/lib/admin/persistence.ts`) calls
+`resolveConfirmFields()` — the exact same function `confirmSaveAction` uses — passing
+the admin's corrections in the same `TeacherEdits`-shaped, presence-based `edits`
+object plus the same `categorySlug` fallback convention. This means the admin's
+Review Later approval form is structurally the same interaction as a teacher's
+Confirm screen (a title/authors/language/category/description/fiction/format/age
+form, diffed against original values), and category provenance for THIS flow keeps
+Phase 7's own established rule (untouched → `ai_inferred`, touched whether same or
+different → `human_verified`, never `human_corrected`).
+
+**Why:** Writing a second field-resolution function for Review Later would either
+subtly diverge from Phase 7's already-tested provenance semantics or duplicate
+`resolveConfirmFields()`'s ~60 lines almost verbatim. Review Later approval and the
+original Confirm screen are, conceptually, the same human decision made at a
+different time by a different person — reusing the function makes that identical
+by construction rather than by careful parallel maintenance.
+
+**A separate rule for the general admin metadata editor:** `updateBookMetadata()`
+(the broader, ongoing catalog-maintenance editor — §15 of the phase brief, not the
+Review Later approval moment) uses a DIFFERENT, more general provenance rule via
+`resolveProvenanceForPatch()` (`src/lib/admin/adminPatch.ts`): ANY field the admin
+changes — including physical category — becomes `human_corrected`; `human_verified`
+is reserved for a field the admin explicitly confirms via a dedicated verify
+action WITHOUT changing it (e.g., "Keep current category" in a duplicate/category
+review decision). This is not an inconsistency: Review Later approval and the
+general metadata editor are two different admin interactions with two different,
+each-internally-consistent provenance rules, matching the phase brief's own
+distinct wording for each (§12/§17 vs. §45).
+
+## Phase 8: no general book-merge engine — duplicate resolution stays narrow
+
+**Decision:** `src/lib/admin/duplicateResolution.ts`/`resolveDuplicate()` implement
+exactly the five approved outcomes (same edition, different edition, different
+language, false match, unresolved) for a PENDING Phase 7 intake item against an
+EXISTING catalog book. SAME EDITION never merges two `books` rows — it retains the
+existing canonical book, attaches a new `book_copies` row to it, and archives
+(never hard-deletes, never field-merges) any Phase 7 `pending_review` placeholder
+that intake had created. No function exists that merges two already-active
+bibliographic records, reassigns Reading List references, or reconciles
+contributor/tag/provenance history between two arbitrary books.
+
+**Why:** The phase brief is explicit (§13) that Reading Lists, provenance, source
+images, copies, contributors, tags, external identity candidates, and review
+history all have real safety requirements a general "merge book A into book B"
+feature would have to solve correctly — a materially larger feature than Phase 8's
+actual, narrower need (resolving ambiguity for ONE freshly-photographed intake, not
+retroactively consolidating the existing catalog). Deferred, not forgotten — an
+intentional scope boundary, matching the brief's own instruction to "document the
+absence... as an intentional limitation, not missing accidental work."
+
+## Phase 8: category rename rebuilds search text synchronously, refreshes embeddings afterward
+
+**Decision:** `updateCategory()` (`src/lib/admin/persistence.ts`) detects a label
+change inside its own transaction, and — after that transaction commits —
+immediately calls the existing `rebuildSearchTextForBooks()` (Phase 5's own
+composition helper, unchanged) for every book in that category, then attempts a
+targeted embedding refresh per affected book (fire-and-forget, never blocking,
+never able to fail the rename itself).
+
+**Why:** A category's label is part of every one of its books' composed
+`search_text` (`buildSearchIndexText`) — leaving the old label in `search_text`
+after a rename would mean a book stops matching a full-text search for its NEW
+category name and keeps incorrectly matching the OLD one, indefinitely, with no
+visible symptom to an admin. Rebuilding outside the rename's own transaction
+(rather than inside it) keeps the rename itself fast and simple; `search_text` is
+recomputed from the CURRENT (already-renamed) category label the moment it runs,
+so there is no window where a reader could observe a half-updated state through
+the database itself — only a brief window (a single synchronous follow-up call in
+the same request) before the update happens at all.
+
+## Phase 8: Re-analyze Cover was not implemented
+
+**Decision:** Admin Review reads and acts on Phase 7's already-persisted
+`coverEvidence`/`enrichmentSuggestion`/`categorySuggestion` exclusively. No Phase 8
+Server Action calls the Gemini vision/enrichment provider again for an existing
+ingestion item.
+
+**Why:** The phase brief explicitly gates this feature behind "genuinely necessary
+for a core acceptance criterion" — inspection of every Phase 8 acceptance
+criterion found none that requires re-running vision analysis; the persisted
+Phase 7 evidence is sufficient for an admin to correct, confirm, or reject.
+Re-analyze Cover would add a second, admin-triggered Gemini call path (new cost,
+new failure modes, new "which result is current" bookkeeping) for a capability
+nothing in Phase 8 actually needs. A deliberate cost/predictability decision, not
+an oversight — worth reconsidering in a future phase if real admin usage reveals a
+recurring case where the ORIGINAL photo was misread and no amount of manual
+correction is a reasonable substitute for a second look.
+
+## Phase 8: existing-category merge deferred entirely
+
+**Decision:** No "merge category X into category Y" admin action exists.
+Taxonomy suggestion resolution supports merging a SUGGESTED CONCEPT into an
+existing category (recording the decision on the suggestion row only, never
+moving any book's actual category assignment) — a fundamentally different,
+much narrower operation than merging two already-populated real categories
+and reassigning every book between them.
+
+**Why:** The phase brief's own default is explicit: "DEFER EXISTING CATEGORY
+MERGE... Document it. No unsafe half-merge." A real category merge would need to
+move every referencing book's `physical_category_id`, rebuild search text for
+all of them, and decide what happens to two categories' independently-tracked
+guidance/description/display-order — solvable, but not "extremely small and
+demonstrably safe" as the brief requires to justify doing it this phase.
+
+**Relevant files:** `src/lib/admin/persistence.ts`; `src/lib/admin/duplicateResolution.ts`;
+`src/lib/admin/adminPatch.ts`; `src/lib/admin/reviewQueue.ts`;
+`src/lib/admin/reviewQueueSource.ts`; `src/lib/admin/categoryHealth.ts`;
+`src/lib/admin/provenanceWrite.ts`; `src/db/backfillPendingBookLinks.ts`;
+`src/lib/auth/guards.ts`; `src/app/api/admin/source-cover/[ingestionItemId]/route.ts`.
