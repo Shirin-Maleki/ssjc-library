@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
 import { StatusMessage } from "@/components/ui/StatusMessage";
 import { ISO_639_1_LANGUAGE_NAMES } from "@/lib/catalog/languages";
-import { FORMAT_LABELS, FICTION_TYPE_LABELS } from "@/lib/catalog/labels";
+import { FORMAT_LABELS, FICTION_TYPE_LABELS, ILLUSTRATION_STYLE_LABELS, VISUAL_REALISM_LABELS } from "@/lib/catalog/labels";
 import type { TeacherEdits } from "@/lib/intake/draft";
 import type { PhysicalCategoryOption } from "@/db/repositories/categoryRepository";
 import type { AdminReviewDetail } from "@/lib/admin/reviewDetail";
@@ -86,31 +86,84 @@ export function ReviewDetailClient({ detail, activeCategories }: ReviewDetailCli
   const hasUnresolvedDuplicate = draft?.duplicateOutcome != null && UNRESOLVED_DUPLICATE_OUTCOMES.has(draft.duplicateOutcome);
 
   const book = detail.book;
+  const [bookTitle, setBookTitle] = useState(book?.title ?? "");
+  const [bookAuthorsText, setBookAuthorsText] = useState((book?.authors ?? []).join(", "));
+  const [bookLanguageCode, setBookLanguageCode] = useState(book?.languageCode ?? "");
+  const [bookPublisherName, setBookPublisherName] = useState(book?.publisher ?? "");
+  const [bookIsbn10, setBookIsbn10] = useState(book?.isbn10 ?? "");
+  const [bookIsbn13, setBookIsbn13] = useState(book?.isbn13 ?? "");
   const [bookDescription, setBookDescription] = useState(book?.description ?? "");
   const [bookCategorySlug, setBookCategorySlug] = useState(book?.physicalCategory ?? "");
   const [bookAgeMin, setBookAgeMin] = useState(String(book?.ageMinMonths ?? ""));
   const [bookAgeMax, setBookAgeMax] = useState(String(book?.ageMaxMonths ?? ""));
+  const [bookFictionType, setBookFictionType] = useState(book?.fictionType ?? "");
   const [bookFormat, setBookFormat] = useState(book?.format ?? "");
+  const [bookVisualMediaTypes, setBookVisualMediaTypes] = useState<string[]>(book?.illustrationStyles ?? []);
+  const [bookVisualRealism, setBookVisualRealism] = useState(book?.visualRealism ?? "");
+
+  function buildBookPatch(): AdminMetadataPatch {
+    if (!book) return {};
+    const patch: AdminMetadataPatch = {};
+    const trimmedTitle = bookTitle.trim();
+    if (trimmedTitle !== book.title) patch.title = trimmedTitle || null;
+
+    const originalAuthorsText = book.authors.join(", ");
+    if (bookAuthorsText !== originalAuthorsText) {
+      patch.authors = bookAuthorsText.trim() ? bookAuthorsText.split(",").map((a) => a.trim()).filter(Boolean) : null;
+    }
+    if (bookLanguageCode !== book.languageCode) patch.languageCode = bookLanguageCode || null;
+    if (bookPublisherName !== (book.publisher ?? "")) patch.publisherName = bookPublisherName.trim() || null;
+    if (bookIsbn10 !== (book.isbn10 ?? "")) patch.isbn10 = bookIsbn10.trim() || null;
+    if (bookIsbn13 !== (book.isbn13 ?? "")) patch.isbn13 = bookIsbn13.trim() || null;
+    if (bookDescription !== (book.description ?? "")) patch.description = bookDescription.trim() || null;
+    if (bookCategorySlug !== book.physicalCategory) patch.physicalCategorySlug = bookCategorySlug || null;
+    if (bookAgeMin !== String(book.ageMinMonths ?? "")) patch.ageMinMonths = bookAgeMin ? Number(bookAgeMin) : null;
+    if (bookAgeMax !== String(book.ageMaxMonths ?? "")) patch.ageMaxMonths = bookAgeMax ? Number(bookAgeMax) : null;
+    if (bookFictionType !== (book.fictionType ?? "")) patch.fictionType = bookFictionType ? (bookFictionType as "fiction" | "nonfiction") : null;
+    if (bookFormat !== (book.format ?? "")) patch.format = bookFormat ? (bookFormat as AdminMetadataPatch["format"] & string) : null;
+    const originalVisualMediaTypes = [...(book.illustrationStyles ?? [])].sort().join(",");
+    if ([...bookVisualMediaTypes].sort().join(",") !== originalVisualMediaTypes) {
+      patch.visualMediaTypes = bookVisualMediaTypes.length ? (bookVisualMediaTypes as AdminMetadataPatch["visualMediaTypes"] & string[]) : null;
+    }
+    if (bookVisualRealism !== (book.visualRealism ?? "")) patch.visualRealism = bookVisualRealism ? (bookVisualRealism as AdminMetadataPatch["visualRealism"] & string) : null;
+
+    return patch;
+  }
 
   async function handleUpdateBookMetadata() {
     if (!detail.bookId || !book) return;
     setSubmitting(true);
     setMessage(null);
-    const patch: AdminMetadataPatch = {};
-    if (bookDescription !== (book.description ?? "")) patch.description = bookDescription.trim() || null;
-    if (bookCategorySlug !== book.physicalCategory) patch.physicalCategorySlug = bookCategorySlug || null;
-    if (bookAgeMin !== String(book.ageMinMonths ?? "")) patch.ageMinMonths = bookAgeMin ? Number(bookAgeMin) : null;
-    if (bookAgeMax !== String(book.ageMaxMonths ?? "")) patch.ageMaxMonths = bookAgeMax ? Number(bookAgeMax) : null;
-    if (bookFormat !== (book.format ?? "")) patch.format = bookFormat ? (bookFormat as AdminMetadataPatch["format"] & string) : null;
-
     const result = await updateBookMetadataAction({
       bookId: detail.bookId,
-      patch,
+      patch: buildBookPatch(),
       expectedUpdatedAt: detail.bookUpdatedAt ? new Date(detail.bookUpdatedAt).toISOString() : undefined,
     });
     setSubmitting(false);
     if (result.ok) {
       setMessage({ tone: "success", text: "Saved." });
+      router.refresh();
+    } else {
+      setMessage({ tone: "error", text: result.message });
+    }
+  }
+
+  /** Human-verify UX (§6): "Keep current category" leaves the value unchanged
+   * but records an explicit `human_verified` decision for it — never sent as
+   * a side effect of an ordinary Save, and never applied to any other field. */
+  async function handleKeepCurrentCategory() {
+    if (!detail.bookId) return;
+    setSubmitting(true);
+    setMessage(null);
+    const result = await updateBookMetadataAction({
+      bookId: detail.bookId,
+      patch: {},
+      explicitlyVerifiedFields: ["physical_category"],
+      expectedUpdatedAt: detail.bookUpdatedAt ? new Date(detail.bookUpdatedAt).toISOString() : undefined,
+    });
+    setSubmitting(false);
+    if (result.ok) {
+      setMessage({ tone: "success", text: "Category kept as-is and marked verified." });
       router.refresh();
     } else {
       setMessage({ tone: "error", text: result.message });
@@ -222,7 +275,10 @@ export function ReviewDetailClient({ detail, activeCategories }: ReviewDetailCli
                 <p className="text-sm text-text-secondary">
                   {candidate.authors.join(", ") || "Author not identified"} · {candidate.publisher || "Publisher unknown"} · {candidate.languageCode} · {candidate.copyCount ?? 0} cop{(candidate.copyCount ?? 0) === 1 ? "y" : "ies"}
                 </p>
-                <div className="mt-2 flex flex-wrap gap-2">
+                {/* A 2-column grid (not flex-wrap) keeps this a clean, evenly
+                    spaced touch target grid at 390px — flex-wrap previously
+                    produced an uneven, hard-to-scan wrap on narrow screens. */}
+                <div className="mt-2 grid grid-cols-2 gap-2">
                   <Button size="md" variant="secondary" disabled={submitting} onClick={() => handleDuplicateAction("same_edition", candidate.id)}>
                     Same edition
                   </Button>
@@ -314,39 +370,119 @@ export function ReviewDetailClient({ detail, activeCategories }: ReviewDetailCli
       )}
 
       {!draft && book && (
-        <section className="flex flex-col gap-4 rounded-lg border border-border bg-surface p-4">
-          <h2 className="font-semibold text-text-primary">Metadata</h2>
-          <p className="text-sm text-text-secondary">{book.title}</p>
-          <Field label="Short description">
-            <textarea value={bookDescription} onChange={(e) => setBookDescription(e.target.value)} rows={3} className="rounded-md border border-border-input bg-surface px-3 py-2 text-base" />
-          </Field>
-          <Field label="Physical category">
-            <select value={bookCategorySlug} onChange={(e) => setBookCategorySlug(e.target.value)} className="h-11 rounded-md border border-border-input bg-surface px-3 text-base">
-              {activeCategories.map((category) => (
-                <option key={category.slug} value={category.slug}>
-                  {category.label}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Age from (months)">
-              <input type="number" min={0} max={216} value={bookAgeMin} onChange={(e) => setBookAgeMin(e.target.value)} className="h-11 rounded-md border border-border-input bg-surface px-3 text-base" />
+        <section className="flex flex-col gap-6 rounded-lg border border-border bg-surface p-4">
+          <div>
+            <h2 className="font-semibold text-text-primary">Metadata</h2>
+            <p className="text-sm text-text-secondary">{book.title}</p>
+          </div>
+
+          <div className="flex flex-col gap-4">
+            <h3 className="text-sm font-semibold uppercase tracking-wide text-text-muted">Identity</h3>
+            <Field label="Title">
+              <input value={bookTitle} onChange={(e) => setBookTitle(e.target.value)} className="h-11 rounded-md border border-border-input bg-surface px-3 text-base" />
             </Field>
-            <Field label="Age to (months)">
-              <input type="number" min={0} max={216} value={bookAgeMax} onChange={(e) => setBookAgeMax(e.target.value)} className="h-11 rounded-md border border-border-input bg-surface px-3 text-base" />
+            <Field label="Author(s)">
+              <input value={bookAuthorsText} onChange={(e) => setBookAuthorsText(e.target.value)} placeholder="Separate multiple authors with commas" className="h-11 rounded-md border border-border-input bg-surface px-3 text-base" />
+            </Field>
+            <Field label="Language">
+              <select value={bookLanguageCode} onChange={(e) => setBookLanguageCode(e.target.value)} className="h-11 rounded-md border border-border-input bg-surface px-3 text-base">
+                {Object.entries(ISO_639_1_LANGUAGE_NAMES).map(([code, name]) => (
+                  <option key={code} value={code}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Publisher">
+              <input value={bookPublisherName} onChange={(e) => setBookPublisherName(e.target.value)} className="h-11 rounded-md border border-border-input bg-surface px-3 text-base" />
+            </Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="ISBN-10">
+                <input value={bookIsbn10} onChange={(e) => setBookIsbn10(e.target.value)} className="h-11 rounded-md border border-border-input bg-surface px-3 text-base" />
+              </Field>
+              <Field label="ISBN-13">
+                <input value={bookIsbn13} onChange={(e) => setBookIsbn13(e.target.value)} className="h-11 rounded-md border border-border-input bg-surface px-3 text-base" />
+              </Field>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-4 border-t border-border pt-4">
+            <h3 className="text-sm font-semibold uppercase tracking-wide text-text-muted">Classification</h3>
+            <div className="flex flex-col gap-1.5">
+              <Field label="Physical category">
+                <select value={bookCategorySlug} onChange={(e) => setBookCategorySlug(e.target.value)} className="h-11 rounded-md border border-border-input bg-surface px-3 text-base">
+                  {activeCategories.map((category) => (
+                    <option key={category.slug} value={category.slug}>
+                      {category.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <button type="button" onClick={handleKeepCurrentCategory} disabled={submitting} className="self-start text-sm font-medium text-text-secondary underline underline-offset-4 hover:text-text-primary">
+                Keep current category (mark verified)
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Age from (months)">
+                <input type="number" min={0} max={216} value={bookAgeMin} onChange={(e) => setBookAgeMin(e.target.value)} className="h-11 rounded-md border border-border-input bg-surface px-3 text-base" />
+              </Field>
+              <Field label="Age to (months)">
+                <input type="number" min={0} max={216} value={bookAgeMax} onChange={(e) => setBookAgeMax(e.target.value)} className="h-11 rounded-md border border-border-input bg-surface px-3 text-base" />
+              </Field>
+            </div>
+            <Field label="Fiction / nonfiction">
+              <select value={bookFictionType} onChange={(e) => setBookFictionType(e.target.value)} className="h-11 rounded-md border border-border-input bg-surface px-3 text-base">
+                <option value="">Not specified</option>
+                {Object.entries(FICTION_TYPE_LABELS).map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Format">
+              <select value={bookFormat} onChange={(e) => setBookFormat(e.target.value)} className="h-11 rounded-md border border-border-input bg-surface px-3 text-base">
+                <option value="">Not specified</option>
+                {Object.entries(FORMAT_LABELS).map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </select>
             </Field>
           </div>
-          <Field label="Format">
-            <select value={bookFormat} onChange={(e) => setBookFormat(e.target.value)} className="h-11 rounded-md border border-border-input bg-surface px-3 text-base">
-              <option value="">Not specified</option>
-              {Object.entries(FORMAT_LABELS).map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
-            </select>
-          </Field>
+
+          <div className="flex flex-col gap-4 border-t border-border pt-4">
+            <h3 className="text-sm font-semibold uppercase tracking-wide text-text-muted">Discovery details</h3>
+            <Field label="Short description">
+              <textarea value={bookDescription} onChange={(e) => setBookDescription(e.target.value)} rows={3} className="rounded-md border border-border-input bg-surface px-3 py-2 text-base" />
+            </Field>
+            <Field label="Visual media / style">
+              <select
+                multiple
+                value={bookVisualMediaTypes}
+                onChange={(e) => setBookVisualMediaTypes(Array.from(e.target.selectedOptions, (o) => o.value))}
+                className="min-h-24 rounded-md border border-border-input bg-surface px-3 py-2 text-base"
+              >
+                {Object.entries(ILLUSTRATION_STYLE_LABELS).map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Visual realism">
+              <select value={bookVisualRealism} onChange={(e) => setBookVisualRealism(e.target.value)} className="h-11 rounded-md border border-border-input bg-surface px-3 text-base">
+                <option value="">Not specified</option>
+                {Object.entries(VISUAL_REALISM_LABELS).map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </div>
+
           <Button variant="primary" size="lg" disabled={submitting} onClick={handleUpdateBookMetadata}>
             {submitting ? "Saving…" : "Save changes"}
           </Button>
