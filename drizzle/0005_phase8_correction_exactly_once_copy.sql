@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "book_copies_source_ingestion_item_unique" ON "book_copies" USING btree ("source_ingestion_item_id") WHERE "book_copies"."source_ingestion_item_id" is not null;

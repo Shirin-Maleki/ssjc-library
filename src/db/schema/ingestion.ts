@@ -9,9 +9,11 @@ import {
   text,
   timestamp,
   unique,
+  uniqueIndex,
   uuid,
   type AnyPgColumn,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import {
   availabilityStatusEnum,
   ingestionItemStatusEnum,
@@ -51,7 +53,19 @@ export const bookCopies = pgTable(
     ),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => [index("book_copies_book_idx").on(table.bookId)]
+  (table) => [
+    index("book_copies_book_idx").on(table.bookId),
+    // Phase 8 correction pass — defense-in-depth for "one ingestion item can
+    // result in at most one physical copy" (docs/DECISIONS.md). The real
+    // guarantee is the application-level claim pattern in
+    // `src/lib/admin/persistence.ts` (an atomic conditional UPDATE on the
+    // ingestion item before any copy is inserted) and Phase 7's own
+    // `saveNewBook`/`addAnotherCopy`; this partial unique index (nulls, e.g.
+    // manually seeded copies with no known ingestion source, are exempt) is a
+    // last-resort database-level backstop, never the primary mechanism a
+    // caller is expected to catch a raw unique-violation from.
+    uniqueIndex("book_copies_source_ingestion_item_unique").on(table.sourceIngestionItemId).where(sql`${table.sourceIngestionItemId} is not null`),
+  ]
 );
 
 export const ingestionJobs = pgTable("ingestion_jobs", {
