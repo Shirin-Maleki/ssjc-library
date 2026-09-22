@@ -20,6 +20,7 @@ import {
   type ResolveDuplicateActionInput,
 } from "@/lib/admin/actions";
 import type { AdminMetadataPatch } from "@/lib/admin/adminPatch";
+import { describeConfidence, describeFieldKey, describeProvenanceSource, describeProvider, describeReconciliationOutcome } from "@/lib/admin/provenanceLabels";
 
 const UNRESOLVED_DUPLICATE_OUTCOMES = new Set(["exact_copy_same_edition", "same_title_different_edition", "same_work_different_language", "ambiguous_similar_title"]);
 
@@ -82,6 +83,11 @@ export function ReviewDetailClient({ detail, activeCategories }: ReviewDetailCli
   const [ageMinMonths, setAgeMinMonths] = useState(String(draft?.enrichmentSuggestion?.ageMinMonths ?? ""));
   const [ageMaxMonths, setAgeMaxMonths] = useState(String(draft?.enrichmentSuggestion?.ageMaxMonths ?? ""));
   const [showEvidence, setShowEvidence] = useState(false);
+  /** Auto-expanded when at least one current field needs review (§5) — an
+   * admin should never have to click through a disclosure just to discover
+   * that something needs attention; a fully-confident record still starts
+   * collapsed, keeping this progressive disclosure rather than a wall of text. */
+  const [showProvenance, setShowProvenance] = useState(() => detail.provenance.some((p) => p.confidenceLevel === "low" || p.confidenceLevel == null));
 
   const hasUnresolvedDuplicate = draft?.duplicateOutcome != null && UNRESOLVED_DUPLICATE_OUTCOMES.has(draft.duplicateOutcome);
 
@@ -271,10 +277,23 @@ export function ReviewDetailClient({ detail, activeCategories }: ReviewDetailCli
           <ul className="flex flex-col gap-3">
             {detail.duplicateCandidates.map((candidate) => (
               <li key={candidate.id} className="rounded-md border border-border bg-surface p-3">
-                <p className="font-medium text-text-primary">{candidate.title}</p>
-                <p className="text-sm text-text-secondary">
-                  {candidate.authors.join(", ") || "Author not identified"} · {candidate.publisher || "Publisher unknown"} · {candidate.languageCode} · {candidate.copyCount ?? 0} cop{(candidate.copyCount ?? 0) === 1 ? "y" : "ies"}
-                </p>
+                <div className="flex gap-3">
+                  {candidate.cover.displayUrl && (
+                    // eslint-disable-next-line @next/next/no-img-element -- admin-only comparison thumbnail, not a next/image remote-host case
+                    <img src={candidate.cover.displayUrl} alt="" className="h-20 w-14 shrink-0 rounded border border-border object-cover" />
+                  )}
+                  <div className="flex flex-col gap-1">
+                    <p className="font-medium text-text-primary">{candidate.title}</p>
+                    <p className="text-sm text-text-secondary">
+                      {candidate.authors.join(", ") || "Author not identified"} · {candidate.publisher || "Publisher unknown"} · {candidate.languageCode} · {candidate.copyCount ?? 0} cop{(candidate.copyCount ?? 0) === 1 ? "y" : "ies"}
+                    </p>
+                    {(candidate.isbn10 || candidate.isbn13 || candidate.edition) && (
+                      <p className="text-sm text-text-muted">
+                        {[candidate.edition && `Edition: ${candidate.edition}`, candidate.isbn10 && `ISBN-10: ${candidate.isbn10}`, candidate.isbn13 && `ISBN-13: ${candidate.isbn13}`].filter(Boolean).join(" · ")}
+                      </p>
+                    )}
+                  </div>
+                </div>
                 {/* A 2-column grid (not flex-wrap) keeps this a clean, evenly
                     spaced touch target grid at 390px — flex-wrap previously
                     produced an uneven, hard-to-scan wrap on narrow screens. */}
@@ -489,6 +508,30 @@ export function ReviewDetailClient({ detail, activeCategories }: ReviewDetailCli
         </section>
       )}
 
+      {!draft && book && detail.provenance.length > 0 && (
+        <section className="rounded-lg border border-border bg-surface p-4">
+          <button type="button" onClick={() => setShowProvenance((v) => !v)} className="text-sm font-medium text-text-secondary underline underline-offset-4">
+            {showProvenance ? "Hide evidence" : "Show evidence"}
+          </button>
+          {showProvenance && (
+            <ul className="mt-3 flex flex-col gap-2 text-sm">
+              {detail.provenance.map((entry) => {
+                const needsReview = entry.confidenceLevel === "low" || entry.confidenceLevel == null;
+                return (
+                  <li key={entry.fieldKey} className="flex flex-col gap-0.5 rounded-md border border-border bg-surface-subtle p-2.5 sm:flex-row sm:items-center sm:justify-between">
+                    <span className="font-medium text-text-primary">{describeFieldKey(entry.fieldKey)}</span>
+                    <span className="text-text-secondary">
+                      {describeProvenanceSource(entry.sourceType, entry.sourceLabel)} ·{" "}
+                      <span className={needsReview ? "font-medium text-danger" : "text-text-secondary"}>{describeConfidence(entry.confidenceLevel)}</span>
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </section>
+      )}
+
       {detail.openReviewFlags.length > 0 && (
         <section className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-4">
           <h2 className="font-semibold text-text-primary">Open flags</h2>
@@ -513,7 +556,7 @@ export function ReviewDetailClient({ detail, activeCategories }: ReviewDetailCli
         </section>
       )}
 
-      {(draft?.coverEvidence || draft?.enrichmentSuggestion || draft?.categorySuggestion) && (
+      {(draft?.coverEvidence || draft?.enrichmentSuggestion || draft?.categorySuggestion || (draft?.metadataCandidates && draft.metadataCandidates.length > 0)) && (
         <section className="rounded-lg border border-border bg-surface p-4">
           <button type="button" onClick={() => setShowEvidence((v) => !v)} className="text-sm font-medium text-text-secondary underline underline-offset-4">
             {showEvidence ? "Hide evidence" : "Show evidence"}
@@ -541,6 +584,31 @@ export function ReviewDetailClient({ detail, activeCategories }: ReviewDetailCli
                 <div>
                   <p className="font-medium text-text-primary">AI suggested tags</p>
                   <p>{draft.enrichmentSuggestion.tags.join(", ")}</p>
+                </div>
+              )}
+              {draft?.metadataCandidates && draft.metadataCandidates.length > 0 && (
+                <div>
+                  <p className="font-medium text-text-primary">Saved provider matches</p>
+                  <p className="mb-1">{describeReconciliationOutcome(draft.reconciliationOutcome)}</p>
+                  <ul className="flex flex-col gap-2">
+                    {draft.metadataCandidates.map((candidate) => {
+                      const accepted = draft.selectedCandidateProviderIdentifier != null && candidate.providerIdentifier === draft.selectedCandidateProviderIdentifier;
+                      return (
+                        <li key={candidate.providerIdentifier} className="rounded-md border border-border bg-surface-subtle p-2.5">
+                          <p className="font-medium text-text-primary">
+                            {describeProvider(candidate.provider)}
+                            {accepted && <span className="ml-2 text-xs font-normal text-success">Accepted candidate</span>}
+                          </p>
+                          <p>{candidate.title ?? "Title not returned"}</p>
+                          <p className="text-text-muted">
+                            {[candidate.authors && candidate.authors.length > 0 ? candidate.authors.join(", ") : null, candidate.publisher, candidate.language, candidate.isbn13 ?? candidate.isbn10]
+                              .filter(Boolean)
+                              .join(" · ") || "No further detail returned"}
+                          </p>
+                        </li>
+                      );
+                    })}
+                  </ul>
                 </div>
               )}
             </div>

@@ -32,6 +32,7 @@ import {
   approveTaxonomySuggestion,
   rejectTaxonomySuggestion,
   mergeTaxonomySuggestionIntoCategory,
+  resolveReviewFlag,
 } from "@/lib/admin/persistence";
 import { requireTestDatabaseUrl, createTestDb } from "./testDb";
 
@@ -1244,5 +1245,309 @@ describe.skipIf(!hasTestDb)("Phase 8 admin review + taxonomy (against a real Pos
     const relevant = auditRows.filter((r) => r.action.startsWith("category_") && r.action !== "category_created");
     expect(relevant[0].action).toBe("category_updated");
     expect((relevant[0].detail as { changedFields: string[] }).changedFields.sort()).toEqual(["description", "label"]);
+  });
+
+  // ---------------------------------------------------------------------
+  // Final closure pass §2 — runtime id/state validation reaches a calm
+  // outcome, never a raw Postgres "invalid input syntax for type uuid" or an
+  // unhandled enum-comparison failure.
+  // ---------------------------------------------------------------------
+
+  it("every id-taking function returns a calm not-found/invalid_input result for a malformed id, never a raw Postgres uuid syntax error", async () => {
+    const malformed = "not-a-real-uuid";
+
+    await expect(updateBookMetadata(db, { bookId: malformed, patch: {} })).resolves.toMatchObject({ ok: false, error: "not_found" });
+    await expect(archiveBook(db, malformed)).resolves.toMatchObject({ ok: false });
+    await expect(approveReviewLater(db, { ingestionItemId: malformed, edits: {}, categorySlug: "stories-imagination" })).resolves.toMatchObject({ ok: false, error: "not_found" });
+    await expect(resolveDuplicate(db, { ingestionItemId: malformed, action: "same_edition", existingBookId: malformed })).resolves.toMatchObject({ ok: false, error: "not_found" });
+    await expect(resolveReviewFlag(db, malformed, "resolved")).resolves.toMatchObject({ ok: false });
+    await expect(updateCategory(db, { categoryId: malformed, label: "x" })).resolves.toMatchObject({ ok: false, error: "not_found" });
+    await expect(setCategoryActive(db, malformed, false)).resolves.toMatchObject({ ok: false, error: "not_found" });
+    await expect(approveTaxonomySuggestion(db, malformed, "Confirmed")).resolves.toMatchObject({ ok: false, error: "not_found" });
+    await expect(rejectTaxonomySuggestion(db, malformed)).resolves.toMatchObject({ ok: false, error: "not_found" });
+    await expect(mergeTaxonomySuggestionIntoCategory(db, malformed, malformed)).resolves.toMatchObject({ ok: false, error: "not_found" });
+  });
+
+  it("resolveDuplicate rejects a malformed/unrecognized duplicate action before touching the database", async () => {
+    const [category] = await db.select().from(physicalCategories).limit(1);
+    const [existingBook] = await db
+      .insert(books)
+      .values({ title: "Malformed Action Target", normalizedTitle: "malformed action target", sortTitle: "x", languageCode: "en", physicalCategoryId: category.id, reviewStatus: "active" })
+      .returning({ id: books.id });
+    createdBookIds.push(existingBook.id);
+
+    const ingestionItemId = await makeIngestionItem();
+    await markNeedsReview(ingestionItemId, baseDraft({ duplicateOutcome: "exact_copy_same_edition", duplicateCandidateBookIds: [existingBook.id] }));
+
+    const result = await resolveDuplicate(db, { ingestionItemId, action: "delete_everything" as never, existingBookId: existingBook.id });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("invalid_input");
+
+    const [itemRow] = await db.select().from(ingestionItems).where(eq(ingestionItems.id, ingestionItemId)).limit(1);
+    expect(itemRow.status).toBe("needs_review"); // untouched
+  });
+
+  it("updateBookMetadata rejects an unregistered explicitlyVerifiedFields key, writing nothing", async () => {
+    const [category] = await db.select().from(physicalCategories).limit(1);
+    const [book] = await db
+      .insert(books)
+      .values({ title: "Malformed Verified Field Target", normalizedTitle: "malformed verified field target", sortTitle: "x", languageCode: "en", physicalCategoryId: category.id, reviewStatus: "active" })
+      .returning({ id: books.id });
+    createdBookIds.push(book.id);
+
+    const result = await updateBookMetadata(db, { bookId: book.id, patch: {}, explicitlyVerifiedFields: ["not_a_real_field" as never] });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("invalid_input");
+
+    const provenanceRows = await db.select().from(bookFieldProvenance).where(eq(bookFieldProvenance.bookId, book.id));
+    expect(provenanceRows).toHaveLength(0);
+  });
+
+  // ---------------------------------------------------------------------
+  // Final closure pass §3 — effective (post-merge) age-range validation
+  // ---------------------------------------------------------------------
+
+  it("Review Later approval rejects an effective age min > max even though the admin only touched the minimum, before any book is created", async () => {
+    const ingestionItemId = await makeIngestionItem();
+    const draft = baseDraft({
+      proposedBookValues: { title: "Effective Age Target", subtitle: null, authors: [], illustrators: [], publisher: null, languageCode: "en", additionalLanguageCodes: [], isbn10: null, isbn13: null },
+      enrichmentSuggestion: {
+        description: null,
+        tags: [],
+        fictionType: null,
+        format: null,
+        ageMinMonths: 24,
+        ageMaxMonths: 48,
+        readAloudMinutes: null,
+        visualMediaTypes: [],
+        visualRealism: null,
+        physicalCategorySlug: "stories-imagination",
+        categoryConfidence: "high",
+        categoryReason: "test",
+      },
+    });
+    await markNeedsReview(ingestionItemId, draft);
+
+    // Admin edits ONLY the minimum, past the untouched AI-suggested maximum of 48.
+    const result = await approveReviewLater(db, { ingestionItemId, edits: { ageMinMonths: 60 }, categorySlug: "stories-imagination" });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("invalid_input");
+    expect(result.message).toMatch(/age from cannot be greater/i);
+
+    const [itemRow] = await db.select().from(ingestionItems).where(eq(ingestionItems.id, ingestionItemId)).limit(1);
+    expect(itemRow.status).toBe("needs_review"); // no book created, item untouched
+  });
+
+  // ---------------------------------------------------------------------
+  // Final closure pass §4 — an inactive category can never be a NEW assignment
+  // ---------------------------------------------------------------------
+
+  it("approveReviewLater refuses to assign a newly-deactivated category", async () => {
+    const created = await createCategory(db, { label: "Deactivated For Approval Test" });
+    if (!created.ok) return;
+    createdCategoryIds.push(created.id);
+    await setCategoryActive(db, created.id, false);
+
+    const ingestionItemId = await makeIngestionItem();
+    const draft = baseDraft({ proposedBookValues: { title: "Inactive Category Approval Target", subtitle: null, authors: [], illustrators: [], publisher: null, languageCode: "en", additionalLanguageCodes: [], isbn10: null, isbn13: null } });
+    await markNeedsReview(ingestionItemId, draft);
+
+    const result = await approveReviewLater(db, { ingestionItemId, edits: {}, categorySlug: created.slug });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.message).toMatch(/no longer active/i);
+
+    const [itemRow] = await db.select().from(ingestionItems).where(eq(ingestionItems.id, ingestionItemId)).limit(1);
+    expect(itemRow.status).toBe("needs_review");
+  });
+
+  it("updateBookMetadata refuses to newly assign a deactivated category to an active book, but leaves its current (grandfathered) category display untouched by this check", async () => {
+    const created = await createCategory(db, { label: "Deactivated For Metadata Edit Test" });
+    if (!created.ok) return;
+    createdCategoryIds.push(created.id);
+    await setCategoryActive(db, created.id, false);
+
+    const [otherCategory] = await db.select().from(physicalCategories).where(eq(physicalCategories.isActive, true)).limit(1);
+    const [book] = await db
+      .insert(books)
+      .values({ title: "Inactive Category Edit Target", normalizedTitle: "inactive category edit target", sortTitle: "x", languageCode: "en", physicalCategoryId: otherCategory.id, reviewStatus: "active" })
+      .returning({ id: books.id });
+    createdBookIds.push(book.id);
+
+    const result = await updateBookMetadata(db, { bookId: book.id, patch: { physicalCategorySlug: created.slug } });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toBe("invalid_category");
+    expect(result.message).toMatch(/no longer active/i);
+
+    const [after] = await db.select({ physicalCategoryId: books.physicalCategoryId }).from(books).where(eq(books.id, book.id)).limit(1);
+    expect(after.physicalCategoryId).toBe(otherCategory.id); // unchanged
+  });
+
+  // ---------------------------------------------------------------------
+  // Final closure pass §5/§6 — Review Detail loads current provenance and the
+  // persisted draft's saved provider candidates, never re-running a provider.
+  // ---------------------------------------------------------------------
+
+  it("loadAdminReviewDetail exposes current provenance for an active book, including a low-confidence field, and never a superseded row", async () => {
+    const [category] = await db.select().from(physicalCategories).limit(1);
+    const [book] = await db
+      .insert(books)
+      .values({ title: "Provenance Detail Target", normalizedTitle: "provenance detail target", sortTitle: "x", languageCode: "en", physicalCategoryId: category.id, reviewStatus: "active" })
+      .returning({ id: books.id });
+    createdBookIds.push(book.id);
+
+    await db.insert(bookFieldProvenance).values([
+      { bookId: book.id, fieldKey: "physical_category", sourceType: "ai_inferred", confidenceLevel: "low", isCurrent: true },
+      { bookId: book.id, fieldKey: "title", sourceType: "external_provider", sourceLabel: "Open Library", confidenceLevel: "high", isCurrent: true },
+      { bookId: book.id, fieldKey: "title", sourceType: "ai_inferred", confidenceLevel: "medium", isCurrent: false }, // superseded, must not appear
+    ]);
+
+    const detail = await loadAdminReviewDetail(db, `book:${book.id}`);
+    expect(detail).toBeDefined();
+    if (!detail) return;
+
+    expect(detail.provenance).toHaveLength(2);
+    const category_ = detail.provenance.find((p) => p.fieldKey === "physical_category");
+    expect(category_?.confidenceLevel).toBe("low");
+    const title_ = detail.provenance.find((p) => p.fieldKey === "title");
+    expect(title_?.sourceType).toBe("external_provider");
+    expect(title_?.sourceLabel).toBe("Open Library");
+  });
+
+  it("loadAdminReviewDetail exposes the persisted draft's saved metadata candidates for a Review Later item, without any provider call", async () => {
+    const ingestionItemId = await makeIngestionItem();
+    const draft = baseDraft({
+      metadataCandidates: [
+        { provider: "open_library", providerIdentifier: "OL123M", title: "Candidate Title", authors: ["Candidate Author"], publisher: "Candidate Publisher", language: "en", isbn13: "9780000000002", matchScore: 0.9, matchedSignals: ["title"] },
+      ],
+      selectedCandidateProviderIdentifier: "OL123M",
+      reconciliationOutcome: "high_confidence",
+    });
+    await markNeedsReview(ingestionItemId, draft);
+
+    const detail = await loadAdminReviewDetail(db, `ingestion:${ingestionItemId}`);
+    expect(detail).toBeDefined();
+    if (!detail) return;
+
+    expect(detail.draft?.metadataCandidates).toHaveLength(1);
+    expect(detail.draft?.metadataCandidates[0].title).toBe("Candidate Title");
+    expect(detail.draft?.selectedCandidateProviderIdentifier).toBe("OL123M");
+    expect(detail.draft?.reconciliationOutcome).toBe("high_confidence");
+  });
+
+  // ---------------------------------------------------------------------
+  // Final closure pass §7 — duplicate comparison evidence (edition, ISBN, cover)
+  // ---------------------------------------------------------------------
+
+  it("loadAdminReviewDetail's duplicate candidates include edition, ISBN, and the display cover when the existing book has them", async () => {
+    const [category] = await db.select().from(physicalCategories).limit(1);
+    const [existingBook] = await db
+      .insert(books)
+      .values({
+        title: "Duplicate Evidence Target",
+        normalizedTitle: "duplicate evidence target",
+        sortTitle: "x",
+        languageCode: "en",
+        physicalCategoryId: category.id,
+        reviewStatus: "active",
+        edition: "2nd Edition",
+        isbn10: "0000000001",
+        isbn13: "9780000000001",
+        displayCoverUrl: "https://covers.openlibrary.org/b/id/1-M.jpg",
+      })
+      .returning({ id: books.id });
+    createdBookIds.push(existingBook.id);
+
+    const ingestionItemId = await makeIngestionItem();
+    await markNeedsReview(ingestionItemId, baseDraft({ duplicateOutcome: "exact_copy_same_edition", duplicateCandidateBookIds: [existingBook.id] }));
+
+    const detail = await loadAdminReviewDetail(db, `ingestion:${ingestionItemId}`);
+    expect(detail).toBeDefined();
+    if (!detail) return;
+
+    expect(detail.duplicateCandidates).toHaveLength(1);
+    const candidate = detail.duplicateCandidates[0];
+    expect(candidate.edition).toBe("2nd Edition");
+    expect(candidate.isbn10).toBe("0000000001");
+    expect(candidate.isbn13).toBe("9780000000001");
+    expect(candidate.cover.displayUrl).toBe("https://covers.openlibrary.org/b/id/1-M.jpg");
+  });
+
+  // ---------------------------------------------------------------------
+  // Final closure pass §8 — truthful human-verification audit semantics
+  // ---------------------------------------------------------------------
+
+  it("the real Keep-current-category flow (empty patch, explicitlyVerifiedFields only) audits as metadata_verified, never metadata_corrected", async () => {
+    const [category] = await db.select().from(physicalCategories).limit(1);
+    const [book] = await db
+      .insert(books)
+      .values({ title: "Verify Only Audit Target", normalizedTitle: "verify only audit target", sortTitle: "x", languageCode: "en", physicalCategoryId: category.id, reviewStatus: "active" })
+      .returning({ id: books.id });
+    createdBookIds.push(book.id);
+
+    const result = await updateBookMetadata(db, { bookId: book.id, patch: {}, explicitlyVerifiedFields: ["physical_category"] });
+    expect(result.ok).toBe(true);
+
+    const auditRows = await db.select().from(auditLog).where(eq(auditLog.entityId, book.id));
+    const relevant = auditRows.filter((r) => r.action.startsWith("metadata_"));
+    expect(relevant).toHaveLength(1);
+    expect(relevant[0].action).toBe("metadata_verified");
+    expect((relevant[0].detail as { verifiedFields: string[] }).verifiedFields).toEqual(["physical_category"]);
+  });
+
+  it("a correction-only save still audits as metadata_corrected, and a save mixing a correction with a verification audits as the bounded metadata_updated", async () => {
+    const [category] = await db.select().from(physicalCategories).limit(1);
+    const [book] = await db
+      .insert(books)
+      .values({ title: "Mixed Audit Target", normalizedTitle: "mixed audit target", sortTitle: "x", languageCode: "en", physicalCategoryId: category.id, reviewStatus: "active" })
+      .returning({ id: books.id });
+    createdBookIds.push(book.id);
+
+    const correctionOnly = await updateBookMetadata(db, { bookId: book.id, patch: { description: "corrected" } });
+    expect(correctionOnly.ok).toBe(true);
+    let auditRows = await db.select().from(auditLog).where(eq(auditLog.entityId, book.id));
+    expect(auditRows.filter((r) => r.action.startsWith("metadata_"))[0].action).toBe("metadata_corrected");
+
+    const mixed = await updateBookMetadata(db, { bookId: book.id, patch: { description: "corrected again" }, explicitlyVerifiedFields: ["physical_category"] });
+    expect(mixed.ok).toBe(true);
+    auditRows = await db.select().from(auditLog).where(eq(auditLog.entityId, book.id));
+    const mixedEntry = auditRows.filter((r) => r.action.startsWith("metadata_"))[1];
+    expect(mixedEntry.action).toBe("metadata_updated");
+    const detail = mixedEntry.detail as { correctedFields: string[]; verifiedFields: string[] };
+    expect(detail.correctedFields).toEqual(["description"]);
+    expect(detail.verifiedFields).toEqual(["physical_category"]);
+  });
+
+  // ---------------------------------------------------------------------
+  // Final closure pass §9 — an actual correction resolves the flag it addresses
+  // ---------------------------------------------------------------------
+
+  it("correcting physicalCategorySlug resolves an open category_uncertain flag, but an unrelated visual_style_uncertain flag survives", async () => {
+    const [category] = await db.select().from(physicalCategories).where(eq(physicalCategories.isActive, true)).limit(1);
+    const [otherCategory] = await db.select().from(physicalCategories).where(eq(physicalCategories.isActive, true)).limit(1).offset(1);
+    const targetCategory = otherCategory ?? category;
+    const [book] = await db
+      .insert(books)
+      .values({ title: "Correction Resolves Flag Target", normalizedTitle: "correction resolves flag target", sortTitle: "x", languageCode: "en", physicalCategoryId: category.id, reviewStatus: "active" })
+      .returning({ id: books.id });
+    createdBookIds.push(book.id);
+
+    await db.insert(reviewFlags).values([
+      { bookId: book.id, flagType: "category_uncertain" },
+      { bookId: book.id, flagType: "visual_style_uncertain" },
+    ]);
+
+    const result = await updateBookMetadata(db, { bookId: book.id, patch: { physicalCategorySlug: targetCategory.slug } });
+    expect(result.ok).toBe(true);
+
+    const flags = await db.select().from(reviewFlags).where(eq(reviewFlags.bookId, book.id));
+    const categoryFlag = flags.find((f) => f.flagType === "category_uncertain");
+    const visualFlag = flags.find((f) => f.flagType === "visual_style_uncertain");
+    expect(categoryFlag?.status).toBe("resolved");
+    expect(visualFlag?.status).toBe("open"); // unrelated concern, untouched
   });
 });

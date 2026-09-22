@@ -1,4 +1,6 @@
 import { isLanguageCode } from "@/lib/catalog/languages";
+import { isUuid } from "@/lib/utils/uuid";
+import { isMetadataFieldKey } from "@/lib/metadata/fieldRegistry";
 import { hasPatchField, type AdminMetadataPatch } from "./adminPatch";
 import type { TeacherEdits } from "@/lib/intake/draft";
 
@@ -43,6 +45,58 @@ function isNonEmptyString(value: unknown): value is string {
 
 function isStringArrayOfNonEmpty(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((v) => typeof v === "string" && v.trim().length > 0);
+}
+
+const DUPLICATE_ACTIONS = new Set(["same_edition", "different_edition", "different_language", "false_match", "unresolved"]);
+const REVIEW_FLAG_OUTCOMES = new Set(["resolved", "dismissed"]);
+
+/**
+ * Final closure pass (§2) — every Phase 8 admin id argument is a plain `string`
+ * at the Server Action boundary, regardless of what TypeScript's compile-time
+ * type says; a Server Action is directly invokable with any JSON body. Passing
+ * a non-UUID string straight into a Drizzle `eq(table.id, value)` comparison
+ * against a `uuid` column throws a raw "invalid input syntax for type uuid"
+ * Postgres error — this is the one shared check every id-taking `persistence.ts`
+ * function runs FIRST, turning that into an ordinary "not found" outcome
+ * instead, exactly matching the existing `isUuid()` convention already used at
+ * the intake Server Action boundary (`src/lib/intake/actions.ts`'s
+ * `assertValidId`) and `resolveDuplicate`'s own existing `existingBookId` check.
+ */
+export function isValidId(value: string): boolean {
+  return isUuid(value);
+}
+
+/** The five outcomes `resolveDuplicate()` supports — checked at runtime since
+ * `DuplicateResolutionAction` is a compile-time-only type. */
+export function isValidDuplicateAction(action: string): boolean {
+  return DUPLICATE_ACTIONS.has(action);
+}
+
+/** `resolveReviewFlag()`'s only two real outcomes. */
+export function isValidReviewFlagOutcome(outcome: string): boolean {
+  return REVIEW_FLAG_OUTCOMES.has(outcome);
+}
+
+/** Every entry in `explicitlyVerifiedFields` must be a real, registered
+ * provenance field key (`lib/metadata/fieldRegistry.ts`) — never an arbitrary
+ * string that would otherwise flow straight into a `book_field_provenance`
+ * insert with an unrecognized `field_key`. */
+export function validateVerifiedFieldKeys(fields: string[]): ValidationFailure | undefined {
+  for (const field of fields) {
+    if (!isMetadataFieldKey(field)) return fail("Not a recognized metadata field.");
+  }
+  return undefined;
+}
+
+/** Exposed so callers can validate an EFFECTIVE (already-resolved) age range —
+ * e.g. `approveReviewLater()` validating the age Review Later would actually
+ * save, after merging the admin's edits with the AI/draft values via
+ * `resolveConfirmFields()` — not just each individually-supplied bound's own
+ * range, which cannot catch "admin raised the minimum past an AI-suggested
+ * maximum they never touched." */
+export function validateEffectiveAgeRange(ageMin: number | null | undefined, ageMax: number | null | undefined): ValidationFailure | undefined {
+  const error = validateAgeRange(ageMin, ageMax);
+  return error ? fail(error) : undefined;
 }
 
 function validateAgeRange(ageMin: number | null | undefined, ageMax: number | null | undefined): string | undefined {

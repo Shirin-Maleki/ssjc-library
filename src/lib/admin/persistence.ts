@@ -33,7 +33,17 @@ import { isUuid } from "@/lib/utils/uuid";
 import { writeCurrentProvenance } from "./provenanceWrite";
 import { invalidateEmbedding, invalidateEmbeddings } from "./embeddingInvalidation";
 import { resolveProvenanceForPatch, type AdminMetadataPatch } from "./adminPatch";
-import { validateAdminMetadataPatch, validateApprovalEdits, validateCategoryInput, validateTaxonomyLabel } from "./validation";
+import {
+  validateAdminMetadataPatch,
+  validateApprovalEdits,
+  validateCategoryInput,
+  validateTaxonomyLabel,
+  validateEffectiveAgeRange,
+  validateVerifiedFieldKeys,
+  isValidId,
+  isValidDuplicateAction,
+  isValidReviewFlagOutcome,
+} from "./validation";
 import type { MetadataFieldKey } from "@/lib/metadata/fieldRegistry";
 import { planDuplicateResolution, type DuplicateResolutionAction } from "./duplicateResolution";
 import { generateUniqueCategorySlug } from "./categorySlug";
@@ -120,6 +130,8 @@ const UNRESOLVED_DUPLICATE_OUTCOMES = new Set(["exact_copy_same_edition", "same_
  * row) — never a third, half-duplicated code path.
  */
 export async function approveReviewLater(db: Database, input: ApproveReviewLaterInput): Promise<ApproveReviewLaterResult> {
+  if (!isValidId(input.ingestionItemId)) return { ok: false, error: "not_found", message: "This review item no longer exists." };
+
   const [item] = await db.select().from(ingestionItems).where(eq(ingestionItems.id, input.ingestionItemId)).limit(1);
   if (!item) return { ok: false, error: "not_found", message: "This review item no longer exists." };
   if (item.status !== "needs_review") {
@@ -156,6 +168,25 @@ export async function approveReviewLater(db: Database, input: ApproveReviewLater
   }
   const categorySlug = resolved.categorySlug;
   if (!categorySlug) return { ok: false, error: "insufficient_data", message: "A shelving category is needed before this book can be added." };
+
+  // Effective age-range validation (§3): each supplied bound's own range was
+  // already checked by `validateApprovalEdits()` above, but that alone can't
+  // catch e.g. the admin raising only the minimum past an AI-suggested maximum
+  // they never touched — this checks the actual RESOLVED pair that would be
+  // saved, after `resolveConfirmFields()` has already merged edits with the
+  // draft's AI/proposed values.
+  const effectiveAgeError = validateEffectiveAgeRange(resolved.ageMinMonths ?? null, resolved.ageMaxMonths ?? null);
+  if (effectiveAgeError) return { ok: false, error: "invalid_input", message: effectiveAgeError.message };
+
+  // A new category assignment may never target an inactive category (§4) —
+  // the admin UI only ever offers active categories, but the Server Action is
+  // independently invokable. A previously-assigned inactive category (not
+  // relevant here — this is always a NEW assignment, ingestion-only or
+  // finalizing a pending placeholder) is never displayed as if active.
+  const [activeCategoryRow] = await db.select({ id: physicalCategories.id }).from(physicalCategories).where(and(eq(physicalCategories.slug, categorySlug), eq(physicalCategories.isActive, true))).limit(1);
+  if (!activeCategoryRow) {
+    return { ok: false, error: "insufficient_data", message: "That shelving category is no longer active. Choose a current category." };
+  }
 
   const provenance: ProvenanceInput[] = [...resolved.provenance];
   const enrichment = draft.enrichmentSuggestion;
@@ -460,7 +491,7 @@ export interface ResolveDuplicateInput {
   note?: string;
 }
 
-export type ResolveDuplicateResult = { ok: true } | { ok: false; error: "not_found" | "already_resolved" | "insufficient_data" | "invalid_target"; message: string };
+export type ResolveDuplicateResult = { ok: true } | { ok: false; error: "not_found" | "already_resolved" | "insufficient_data" | "invalid_target" | "invalid_input"; message: string };
 
 /**
  * Resolves a possible-duplicate decision for a Review Later item (§12). Never a
@@ -486,6 +517,9 @@ export type ResolveDuplicateResult = { ok: true } | { ok: false; error: "not_fou
  * near-simultaneous resolutions of the same item can never both succeed (§7).
  */
 export async function resolveDuplicate(db: Database, input: ResolveDuplicateInput): Promise<ResolveDuplicateResult> {
+  if (!isValidId(input.ingestionItemId)) return { ok: false, error: "not_found", message: "This review item no longer exists." };
+  if (!isValidDuplicateAction(input.action)) return { ok: false, error: "invalid_input", message: "Not a recognized duplicate decision." };
+
   const [item] = await db.select().from(ingestionItems).where(eq(ingestionItems.id, input.ingestionItemId)).limit(1);
   if (!item) return { ok: false, error: "not_found", message: "This review item no longer exists." };
   if (item.status !== "needs_review") {
@@ -629,6 +663,8 @@ export interface UpdateBookMetadataInput {
 
 export type UpdateBookMetadataResult = { ok: true } | { ok: false; error: "not_found" | "stale" | "invalid_category" | "invalid_input"; message: string };
 
+const INACTIVE_CATEGORY_MESSAGE = "That shelving category is no longer active. Choose a current category.";
+
 /** Fields whose presence in a patch never changes the composed embedding
  * document (`lib/embeddings/document.ts`'s `EmbeddingDocumentInput`) — every
  * other field does, so any patch touching a field outside this set makes the
@@ -639,11 +675,21 @@ function patchAffectsEmbeddingDocument(patch: AdminMetadataPatch): boolean {
   return (Object.keys(patch) as (keyof AdminMetadataPatch)[]).some((key) => !EMBEDDING_IRRELEVANT_PATCH_FIELDS.has(key));
 }
 
-/** Which open review flag a field being explicitly VERIFIED (kept unchanged)
- * genuinely resolves — only the two fields with an obvious, unambiguous
- * corresponding flag type. Verifying description/title/etc. has no
- * corresponding "uncertain" flag today and resolves nothing extra. */
-const VERIFIED_FIELD_RESOLVES_FLAG_TYPE: Partial<Record<MetadataFieldKey, ReviewFlagType>> = {
+/**
+ * Which open review flag a field genuinely resolves once the admin either
+ * CORRECTS it (changes its value) or explicitly VERIFIES it (keeps it
+ * unchanged via a dedicated action) — only the two fields with an obvious,
+ * unambiguous corresponding flag type. Touching description/title/etc. has no
+ * corresponding "uncertain" flag today and resolves nothing extra.
+ *
+ * Final closure pass (§9): previously this only applied to explicit
+ * verification — correcting an uncertain category or visual style (the far
+ * more common real interaction: the admin sees "category needs confirmation,"
+ * picks the RIGHT one, and saves) left the old `category_uncertain`/
+ * `visual_style_uncertain` flag open, forcing a redundant second manual
+ * Resolve click on a concern the correction itself already addressed.
+ */
+const FIELD_RESOLVES_UNCERTAINTY_FLAG_TYPE: Partial<Record<MetadataFieldKey, ReviewFlagType>> = {
   physical_category: "category_uncertain",
   visual_media_type: "visual_style_uncertain",
   visual_realism: "visual_style_uncertain",
@@ -660,8 +706,13 @@ const VERIFIED_FIELD_RESOLVES_FLAG_TYPE: Partial<Record<MetadataFieldKey, Review
  * fail the save itself).
  */
 export async function updateBookMetadata(db: Database, input: UpdateBookMetadataInput): Promise<UpdateBookMetadataResult> {
+  if (!isValidId(input.bookId)) return { ok: false, error: "not_found", message: "This book could not be found." };
+  const verifiedFieldsInput = input.explicitlyVerifiedFields ?? [];
+  const verifiedFieldsValidation = validateVerifiedFieldKeys(verifiedFieldsInput);
+  if (verifiedFieldsValidation) return { ok: false, error: "invalid_input", message: verifiedFieldsValidation.message };
+
   const { patch } = input;
-  const provenanceDecisions = resolveProvenanceForPatch(patch, input.explicitlyVerifiedFields ?? []);
+  const provenanceDecisions = resolveProvenanceForPatch(patch, verifiedFieldsInput);
 
   const result = await db.transaction(async (tx) => {
     const [existing] = await tx.select().from(books).where(eq(books.id, input.bookId)).limit(1);
@@ -678,8 +729,13 @@ export async function updateBookMetadata(db: Database, input: UpdateBookMetadata
       if (patch.physicalCategorySlug === null) {
         return { ok: false as const, error: "invalid_category" as const, message: "A shelving category is required." };
       }
-      const [category] = await tx.select({ id: physicalCategories.id }).from(physicalCategories).where(eq(physicalCategories.slug, patch.physicalCategorySlug)).limit(1);
+      const [category] = await tx.select({ id: physicalCategories.id, isActive: physicalCategories.isActive }).from(physicalCategories).where(eq(physicalCategories.slug, patch.physicalCategorySlug)).limit(1);
       if (!category) return { ok: false as const, error: "invalid_category" as const, message: "That category no longer exists." };
+      // §4: a NEW assignment may never target an inactive category — a book
+      // already assigned one (grandfathered before deactivation) keeps it
+      // until explicitly re-categorized, but this correction is a fresh
+      // assignment and must go through an active category only.
+      if (!category.isActive) return { ok: false as const, error: "invalid_category" as const, message: INACTIVE_CATEGORY_MESSAGE };
       categoryId = category.id;
     }
 
@@ -740,18 +796,22 @@ export async function updateBookMetadata(db: Database, input: UpdateBookMetadata
       provenanceDecisions.map((d) => ({ fieldKey: d.fieldKey, sourceType: d.sourceType }))
     );
 
-    // A field explicitly VERIFIED (kept unchanged) resolves the one review
-    // flag type that concern unambiguously corresponds to — e.g. "Keep
-    // current category" resolves `category_uncertain`. Never resolves a
-    // flag for a field that was merely CORRECTED (that's audited via
-    // `metadata_corrected` instead, not a flag-specific confirmation) and
-    // never touches an unrelated flag type.
-    const verifiedFlagTypes = [...new Set((input.explicitlyVerifiedFields ?? []).map((f) => VERIFIED_FIELD_RESOLVES_FLAG_TYPE[f]).filter((t): t is ReviewFlagType => t != null))];
-    if (verifiedFlagTypes.length > 0) {
+    const correctedFields = provenanceDecisions.filter((d) => d.sourceType === "human_corrected").map((d) => d.fieldKey);
+    const verifiedFields = provenanceDecisions.filter((d) => d.sourceType === "human_verified").map((d) => d.fieldKey);
+
+    // A field that was either CORRECTED (its value actually changed) or
+    // explicitly VERIFIED (kept unchanged via a dedicated action) resolves
+    // the one review flag type that concern unambiguously corresponds to —
+    // e.g. correcting the category, or explicitly "Keep current category,"
+    // both resolve `category_uncertain`. Never touches an unrelated flag type,
+    // and never resolves a flag for a field with no corresponding entry in
+    // `FIELD_RESOLVES_UNCERTAINTY_FLAG_TYPE` (§9).
+    const addressedFlagTypes = [...new Set([...correctedFields, ...verifiedFields].map((f) => FIELD_RESOLVES_UNCERTAINTY_FLAG_TYPE[f]).filter((t): t is ReviewFlagType => t != null))];
+    if (addressedFlagTypes.length > 0) {
       await tx
         .update(reviewFlags)
-        .set({ status: "resolved", resolvedAt: new Date(), resolvedBy: ADMIN_ACTOR, resolutionNote: "Confirmed unchanged by admin review." })
-        .where(and(eq(reviewFlags.bookId, input.bookId), eq(reviewFlags.status, "open"), inArray(reviewFlags.flagType, verifiedFlagTypes)));
+        .set({ status: "resolved", resolvedAt: new Date(), resolvedBy: ADMIN_ACTOR, resolutionNote: "Resolved by admin review." })
+        .where(and(eq(reviewFlags.bookId, input.bookId), eq(reviewFlags.status, "open"), inArray(reviewFlags.flagType, addressedFlagTypes)));
     }
 
     // Invalidate any stale embedding in THIS SAME transaction as the
@@ -762,12 +822,31 @@ export async function updateBookMetadata(db: Database, input: UpdateBookMetadata
       await invalidateEmbedding(tx, input.bookId);
     }
 
+    // Truthful audit action (§8): a verify-only save (an empty/no-op patch,
+    // only `explicitlyVerifiedFields`) must never be logged as
+    // `metadata_corrected` — nothing was corrected. A correction-only save
+    // stays `metadata_corrected`; a verify-only save is `metadata_verified`;
+    // a save containing both is the bounded `metadata_updated`, with each
+    // field attributed to exactly the thing that happened to it.
+    let auditAction: string;
+    let auditDetail: Record<string, unknown>;
+    if (correctedFields.length > 0 && verifiedFields.length > 0) {
+      auditAction = "metadata_updated";
+      auditDetail = { correctedFields, verifiedFields };
+    } else if (verifiedFields.length > 0) {
+      auditAction = "metadata_verified";
+      auditDetail = { verifiedFields };
+    } else {
+      auditAction = "metadata_corrected";
+      auditDetail = { correctedFields };
+    }
+
     await tx.insert(auditLog).values({
       actorLabel: ADMIN_ACTOR,
-      action: "metadata_corrected",
+      action: auditAction,
       entityType: "book",
       entityId: input.bookId,
-      detail: { fields: provenanceDecisions.map((d) => d.fieldKey) },
+      detail: auditDetail,
     });
 
     return { ok: true as const };
@@ -790,6 +869,8 @@ export interface ArchiveBookResult {
  * confirmation at the UI layer; this function itself just performs the safe,
  * reversible status change and audits it. */
 export async function archiveBook(db: Database, bookId: string, note?: string): Promise<ArchiveBookResult> {
+  if (!isValidId(bookId)) return { ok: false, message: "This book could not be found." };
+
   const [existing] = await db.select({ id: books.id, reviewStatus: books.reviewStatus }).from(books).where(eq(books.id, bookId)).limit(1);
   if (!existing) return { ok: false, message: "This book could not be found." };
   if (existing.reviewStatus === "archived") return { ok: true };
@@ -807,6 +888,9 @@ export interface DismissReviewFlagResult {
 /** Resolves/dismisses exactly ONE review flag (§29) — never every flag on a book
  * merely because one problem was fixed. */
 export async function resolveReviewFlag(db: Database, flagId: string, outcome: "resolved" | "dismissed", note?: string): Promise<DismissReviewFlagResult> {
+  if (!isValidId(flagId)) return { ok: false, message: "This flag could not be found." };
+  if (!isValidReviewFlagOutcome(outcome)) return { ok: false, message: "Not a recognized outcome." };
+
   const updated = await db
     .update(reviewFlags)
     .set({ status: outcome, resolvedAt: new Date(), resolvedBy: ADMIN_ACTOR, resolutionNote: note })
@@ -882,6 +966,7 @@ export type UpdateCategoryResult = { ok: true } | { ok: false; error: "not_found
  * detail lists exactly which fields changed — never a fabricated event.
  */
 export async function updateCategory(db: Database, input: UpdateCategoryInput): Promise<UpdateCategoryResult> {
+  if (!isValidId(input.categoryId)) return { ok: false, error: "not_found", message: "This category could not be found." };
   const inputValidation = validateCategoryInput(input);
   if (inputValidation) return { ok: false, error: "invalid_label", message: inputValidation.message };
 
@@ -942,6 +1027,9 @@ export type SetCategoryActiveResult =
  * restriction (making a retired category available again is always safe).
  */
 export async function setCategoryActive(db: Database, categoryId: string, isActive: boolean): Promise<SetCategoryActiveResult> {
+  if (!isValidId(categoryId)) return { ok: false, error: "not_found", message: "This category could not be found." };
+  if (typeof isActive !== "boolean") return { ok: false, error: "not_found", message: "This category could not be found." };
+
   const [existing] = await db.select({ id: physicalCategories.id }).from(physicalCategories).where(eq(physicalCategories.id, categoryId)).limit(1);
   if (!existing) return { ok: false, error: "not_found", message: "This category could not be found." };
 
@@ -988,6 +1076,7 @@ export async function approveTaxonomySuggestion(
   confirmedLabel: string,
   description?: string
 ): Promise<TaxonomyDecisionResult> {
+  if (!isValidId(suggestionId)) return { ok: false, error: "not_found", message: "This suggestion could not be found." };
   const labelValidation = validateTaxonomyLabel(confirmedLabel);
   if (labelValidation) return { ok: false, error: "invalid_label", message: labelValidation.message };
   const label = confirmedLabel.trim();
@@ -1032,6 +1121,9 @@ export async function postponeTaxonomySuggestion(db: Database, suggestionId: str
  * assignment — merging a SUGGESTION into an existing category is a taxonomy
  * decision about the concept, not a request to re-shelve anything. */
 export async function mergeTaxonomySuggestionIntoCategory(db: Database, suggestionId: string, existingCategoryId: string, note?: string): Promise<TaxonomyDecisionResult> {
+  if (!isValidId(suggestionId)) return { ok: false, error: "not_found", message: "This suggestion could not be found." };
+  if (!isValidId(existingCategoryId)) return { ok: false, error: "invalid_target", message: "That category could not be found." };
+
   return db.transaction(async (tx) => {
     const [suggestion] = await tx.select().from(taxonomySuggestions).where(eq(taxonomySuggestions.id, suggestionId)).limit(1);
     if (!suggestion) return { ok: false, error: "not_found", message: "This suggestion could not be found." };
@@ -1064,6 +1156,8 @@ async function decideTaxonomySuggestion(
   auditAction: string,
   note?: string
 ): Promise<TaxonomyDecisionResult> {
+  if (!isValidId(suggestionId)) return { ok: false, error: "not_found", message: "This suggestion could not be found." };
+
   const updated = await db
     .update(taxonomySuggestions)
     .set({ status, decisionNote: note, reviewedAt: new Date(), reviewedBy: ADMIN_ACTOR })

@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { validateAdminMetadataPatch, validateApprovalEdits, validateCategoryInput, validateTaxonomyLabel } from "@/lib/admin/validation";
+import {
+  isValidDuplicateAction,
+  isValidId,
+  isValidReviewFlagOutcome,
+  validateAdminMetadataPatch,
+  validateApprovalEdits,
+  validateCategoryInput,
+  validateEffectiveAgeRange,
+  validateTaxonomyLabel,
+  validateVerifiedFieldKeys,
+} from "@/lib/admin/validation";
 
 describe("admin/validation — validateAdminMetadataPatch", () => {
   const existing = { ageMinMonths: 24, ageMaxMonths: 60 };
@@ -143,5 +153,86 @@ describe("admin/validation — validateTaxonomyLabel", () => {
 
   it("accepts a real label", () => {
     expect(validateTaxonomyLabel("Ocean Life")).toBeUndefined();
+  });
+});
+
+// Final closure pass (§2) — runtime id/state/enum checks for every remaining
+// admin Server Action boundary. These are plain predicates/validators, not a
+// framework: each one is the single guard `persistence.ts` runs before a raw
+// value would otherwise reach a Postgres `uuid`/enum comparison.
+describe("admin/validation — isValidId", () => {
+  it("accepts a well-formed UUID", () => {
+    expect(isValidId("3fa85f64-5717-4562-b3fc-2c963f66afa6")).toBe(true);
+  });
+
+  it("rejects a malformed id rather than letting it reach a uuid column comparison", () => {
+    expect(isValidId("not-a-uuid")).toBe(false);
+    expect(isValidId("")).toBe(false);
+    expect(isValidId("12345")).toBe(false);
+    expect(isValidId("'; drop table books; --")).toBe(false);
+  });
+});
+
+describe("admin/validation — isValidDuplicateAction", () => {
+  it("accepts every one of the five supported duplicate outcomes", () => {
+    for (const action of ["same_edition", "different_edition", "different_language", "false_match", "unresolved"]) {
+      expect(isValidDuplicateAction(action)).toBe(true);
+    }
+  });
+
+  it("rejects an arbitrary/malformed action", () => {
+    expect(isValidDuplicateAction("delete_everything")).toBe(false);
+    expect(isValidDuplicateAction("")).toBe(false);
+  });
+});
+
+describe("admin/validation — isValidReviewFlagOutcome", () => {
+  it("accepts resolved and dismissed", () => {
+    expect(isValidReviewFlagOutcome("resolved")).toBe(true);
+    expect(isValidReviewFlagOutcome("dismissed")).toBe(true);
+  });
+
+  it("rejects any other outcome", () => {
+    expect(isValidReviewFlagOutcome("approved")).toBe(false);
+    expect(isValidReviewFlagOutcome("")).toBe(false);
+  });
+});
+
+describe("admin/validation — validateVerifiedFieldKeys", () => {
+  it("accepts registered metadata field keys", () => {
+    expect(validateVerifiedFieldKeys(["physical_category", "visual_media_type"])).toBeUndefined();
+  });
+
+  it("accepts an empty list", () => {
+    expect(validateVerifiedFieldKeys([])).toBeUndefined();
+  });
+
+  it("rejects an unregistered/arbitrary field key", () => {
+    const result = validateVerifiedFieldKeys(["physical_category", "not_a_real_field"]);
+    expect(result?.ok).toBe(false);
+  });
+});
+
+describe("admin/validation — validateEffectiveAgeRange", () => {
+  it("accepts a valid effective range", () => {
+    expect(validateEffectiveAgeRange(24, 60)).toBeUndefined();
+  });
+
+  it("accepts either bound being null (open-ended)", () => {
+    expect(validateEffectiveAgeRange(null, 60)).toBeUndefined();
+    expect(validateEffectiveAgeRange(24, null)).toBeUndefined();
+    expect(validateEffectiveAgeRange(null, null)).toBeUndefined();
+  });
+
+  it("rejects an effective minimum greater than the effective maximum — the exact Review Later scenario where the admin only touches one bound", () => {
+    // Persisted/AI age max is 48; admin raises only the minimum to 60.
+    const result = validateEffectiveAgeRange(60, 48);
+    expect(result?.ok).toBe(false);
+    expect(result?.message).toMatch(/age from cannot be greater/i);
+  });
+
+  it("rejects an out-of-range effective bound", () => {
+    expect(validateEffectiveAgeRange(-1, 60)?.ok).toBe(false);
+    expect(validateEffectiveAgeRange(24, 217)?.ok).toBe(false);
   });
 });
