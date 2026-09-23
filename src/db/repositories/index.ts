@@ -1,6 +1,7 @@
 import { db } from "../client";
 import { DrizzleBookRepository } from "./bookRepository";
 import { DrizzleCategoryRepository } from "./categoryRepository";
+import { DrizzleLocationRepository } from "./locationRepository";
 import { DrizzleReadingListRepository } from "./readingListRepository";
 import { DrizzleSearchRepository } from "./searchRepository";
 import { SearchService } from "@/lib/search/searchService";
@@ -15,6 +16,7 @@ import { SearchService } from "@/lib/search/searchService";
  */
 export const bookRepository = new DrizzleBookRepository(db);
 export const categoryRepository = new DrizzleCategoryRepository(db);
+export const locationRepository = new DrizzleLocationRepository(db);
 export const readingListRepository = new DrizzleReadingListRepository(db);
 export const searchRepository = new DrizzleSearchRepository(db);
 
@@ -28,3 +30,4 @@ export async function createSearchService(): Promise<SearchService> {
 
 export type { BookRepository } from "./bookRepository";
 export type { PhysicalCategoryOption } from "./categoryRepository";
+export type { LibraryLocationOption } from "./locationRepository";

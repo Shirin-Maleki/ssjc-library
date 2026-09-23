@@ -50,6 +50,20 @@
       "when": 1790125657957,
       "tag": "0006_phase9_bulk_import_dedup",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1790135284557,
+      "tag": "0007_phase9_library_locations",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1790135294353,
+      "tag": "0008_phase9_drop_legacy_current_location_text",
+      "breakpoints": true
     }
   ]
 }

@@ -94,6 +94,24 @@ const ADDITIONAL_LANGUAGES: Record<string, string[]> = {
  * real to compute against (Phase 4 brief §28). */
 const BOOKS_WITH_TWO_COPIES = new Set(["very-hungry-caterpillar", "the-gruffalo", "goodnight-moon"]);
 
+/**
+ * Deliberately partial and mixed, by design (Phase 9 addendum) — real
+ * dev-fixture coverage for the Move/Return workflow needs a book whose copies
+ * span multiple real locations (`very-hungry-caterpillar`: two named
+ * locations, exercising "ask which source"), a book with one named location
+ * plus one copy left genuinely unassigned (`the-gruffalo`: also the exact
+ * fixture `e2eFixtures.ts` uses for photo-match E2E coverage), and books with
+ * no entry at all (every other seeded book, including `goodnight-moon`,
+ * despite also having two copies) — every copy of those stays with
+ * `current_location_id` left `null`, the same honest "not recorded" state a
+ * real pre-migration copy would have. Never assumed to be Corridor 218 or
+ * anywhere else just because it's unassigned.
+ */
+const COPY_LOCATION_SLUGS_BY_BOOK: Record<string, string[]> = {
+  "very-hungry-caterpillar": ["corridor-218", "blue-room"],
+  "the-gruffalo": ["forest-room"],
+};
+
 function readAloudMinutesEstimate(book: Book): string | null {
   // numeric(4,1) column — drizzle-orm/postgres-js expects numeric values as strings.
   // None of the 48 real fixtures are missing this, but the type now genuinely
@@ -125,7 +143,7 @@ async function main() {
       book_languages,
       book_contributors, contributors,
       books,
-      publishers, physical_categories,
+      publishers, physical_categories, library_locations,
       audit_log, login_attempts, system_settings
     restart identity cascade
   `);
@@ -140,6 +158,28 @@ async function main() {
       .returning({ id: schema.physicalCategories.id });
     categoryIdBySlug.set(category.id, row.id);
     categoryLabelBySlug.set(category.id, category.label);
+  }
+
+  // 1b. Library locations — development fixture spaces only (Phase 9 addendum:
+  // physical copy locations), NOT the school's confirmed physical spaces —
+  // exactly the same "development, not confirmed inventory" caveat this whole
+  // file already carries for categories/books. Exists so the Move/Return
+  // workflow (and its tests) have real, deterministic multi-location data:
+  // "Corridor 218" is one of these three purely because it's the exact
+  // example the addendum itself uses, never because it's been confirmed as
+  // this school's real corridor.
+  const DEV_FIXTURE_LOCATIONS: { slug: string; displayName: string; locationType: "corridor" | "classroom" | "other" }[] = [
+    { slug: "corridor-218", displayName: "Corridor 218", locationType: "corridor" },
+    { slug: "blue-room", displayName: "Blue Room", locationType: "classroom" },
+    { slug: "forest-room", displayName: "Forest Room", locationType: "classroom" },
+  ];
+  const locationIdBySlug = new Map<string, string>();
+  for (const location of DEV_FIXTURE_LOCATIONS) {
+    const [row] = await db
+      .insert(schema.libraryLocations)
+      .values({ slug: location.slug, displayName: location.displayName, locationType: location.locationType })
+      .returning({ id: schema.libraryLocations.id });
+    locationIdBySlug.set(location.slug, row.id);
   }
 
   // 2. Publishers.
@@ -260,8 +300,14 @@ async function main() {
     }
 
     const copyCount = BOOKS_WITH_TWO_COPIES.has(book.id) ? 2 : 1;
+    const copyLocationSlugs = COPY_LOCATION_SLUGS_BY_BOOK[book.id] ?? [];
     for (let i = 0; i < copyCount; i += 1) {
-      await db.insert(schema.bookCopies).values({ bookId, homeLocation: "Preschool Library" });
+      const locationSlug = copyLocationSlugs[i];
+      await db.insert(schema.bookCopies).values({
+        bookId,
+        homeLocation: "Preschool Library",
+        currentLocationId: locationSlug ? locationIdBySlug.get(locationSlug) : undefined,
+      });
     }
   }
 

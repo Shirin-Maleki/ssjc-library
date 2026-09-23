@@ -64,6 +64,11 @@ export const secondaryNav: NavItem[] = [
     description: "Reference view of the catalog in Google Sheets.",
   },
   {
+    href: "/move",
+    label: "Move a Book",
+    description: "Photograph a cover to update where a copy currently is.",
+  },
+  {
     href: "/admin",
     label: "Admin",
     description: "Review queues and taxonomy management.",

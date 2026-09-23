@@ -86,6 +86,15 @@ export interface NewBookInput {
    * it, so a bulk-imported record is truthfully distinguishable from a teacher's
    * own single-add capture rather than silently mislabeled. */
   coverSourceType?: "teacher_upload" | "bulk_import";
+  /** Phase 9 addendum — an explicit initial `library_locations.id` for the
+   * physical copy this call creates (e.g. the bulk importer's `--location`
+   * CLI option, `docs/BULK_IMPORT.md`). Omitted by every existing caller
+   * (Phase 7's teacher Add-a-Book flow never sets this) — `undefined` means
+   * "no location recorded yet," the same honest, never-guessed default
+   * `book_copies.current_location_id` already has, never silently defaulted
+   * to a real location like Corridor 218.
+   */
+  currentLocationId?: string;
 }
 
 export interface NewBookResult {
@@ -170,6 +179,30 @@ export async function advanceParentJob(tx: Transaction, jobId: string, outcome: 
   if (job && job.processedItems + job.failedItems + job.skippedItems >= job.totalItems) {
     await tx.update(ingestionJobs).set({ status: "completed", completedAt: new Date() }).where(eq(ingestionJobs.id, jobId));
   }
+}
+
+/**
+ * Reads back a bulk-import job's explicit `--location` CLI option (Phase 9
+ * addendum §10), stored in `ingestion_jobs.config` at job-creation time
+ * (`src/lib/bulkImport/jobs.ts`). One true source for "what initial location
+ * should a copy created from this job get" — read here by BOTH the bulk
+ * pipeline's own automatic-completion path (`saveNewBook`) and, for an item
+ * that instead landed in `needs_review`, by the admin's later manual
+ * Review-Later/duplicate-resolution approval (`src/lib/admin/persistence.ts`)
+ * — so a book approved by an admin days later still gets the same location
+ * the job was configured with, never silently dropped because the copy
+ * happened to be created outside the automatic path. Returns `null` for any
+ * job with no configured location (every `single_add` job, and any
+ * `bulk_import` job run without `--location`) — never a guessed default.
+ */
+export async function getJobInitialLocationId(tx: Transaction | Database, jobId: string): Promise<string | null> {
+  const [job] = await tx.select({ config: ingestionJobs.config }).from(ingestionJobs).where(eq(ingestionJobs.id, jobId)).limit(1);
+  const config = job?.config;
+  if (config && typeof config === "object" && "initialLocationId" in config) {
+    const value = (config as { initialLocationId?: unknown }).initialLocationId;
+    if (typeof value === "string" && value.length > 0) return value;
+  }
+  return null;
 }
 
 /**
@@ -285,7 +318,7 @@ export async function saveNewBook(db: Database, input: NewBookInput): Promise<Ne
 
     const [copyRow] = await tx
       .insert(bookCopies)
-      .values({ bookId, sourceIngestionItemId: input.ingestionItemId })
+      .values({ bookId, sourceIngestionItemId: input.ingestionItemId, currentLocationId: input.currentLocationId })
       .returning({ id: bookCopies.id });
 
     const [completedItem] = await tx

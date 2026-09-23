@@ -58,6 +58,12 @@ export interface BulkPipelineDeps {
    * root a cover belongs to (never the literal immediate parent folder). */
   bulkImportRootFolderId: string;
   counters: BulkImportCallCounters;
+  /** Phase 9 addendum §10 — the job's configured `--location`, resolved once
+   * per run (`scripts/bulkImport/run.ts`) rather than re-queried per item. See
+   * `getJobInitialLocationId`'s own doc comment for why this same value must
+   * also be read again, separately, at admin Review-Later approval time for
+   * an item that instead lands in `needs_review`. */
+  initialLocationId?: string;
 }
 
 export interface ClaimedItemInfo {
@@ -327,6 +333,7 @@ async function runPipeline(deps: BulkPipelineDeps, item: ClaimedItemInfo): Promi
     ingestionItemId: item.itemId,
     actorLabel: "bulk_import",
     coverSourceType: "bulk_import",
+    currentLocationId: deps.initialLocationId,
   });
 
   return { kind: "completed", bookId: result.bookId };

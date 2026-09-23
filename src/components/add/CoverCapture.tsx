@@ -28,6 +28,13 @@ export interface SelectedCover {
 
 interface CoverCaptureProps {
   onConfirm: (cover: SelectedCover) => void;
+  /** Every string below defaults to the original Add-a-Book copy — overridden
+   * by the Move/Return workflow (Phase 9 addendum), which reuses this exact
+   * component rather than duplicating its file-validation/rotation logic. */
+  heading?: string;
+  subheading?: string;
+  helpText?: string;
+  ctaLabel?: string;
 }
 
 function formatFileSize(bytes: number): string {
@@ -83,7 +90,13 @@ export function RotatablePreview({
  * not a custom camera implementation. Selecting a file never uploads it
  * immediately; the teacher must take an explicit "Use this cover" action first.
  */
-export function CoverCapture({ onConfirm }: CoverCaptureProps) {
+export function CoverCapture({
+  onConfirm,
+  heading = "Add a Book",
+  subheading = "Photograph the front cover to get started.",
+  helpText = "Photograph the book cover only. Avoid including people or children.",
+  ctaLabel = "Take or choose a photo",
+}: CoverCaptureProps) {
   const inputId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
   const [selected, setSelected] = useState<SelectedCover | null>(null);
@@ -129,8 +142,8 @@ export function CoverCapture({ onConfirm }: CoverCaptureProps) {
   return (
     <div className="flex flex-col gap-5">
       <div>
-        <h1 className="text-2xl font-semibold text-text-primary">Add a Book</h1>
-        <p className="mt-1 text-text-secondary">Photograph the front cover to get started.</p>
+        <h1 className="text-2xl font-semibold text-text-primary">{heading}</h1>
+        <p className="mt-1 text-text-secondary">{subheading}</p>
       </div>
 
       <input
@@ -149,9 +162,9 @@ export function CoverCapture({ onConfirm }: CoverCaptureProps) {
             htmlFor={inputId}
             className="inline-flex h-12 cursor-pointer items-center justify-center gap-2 rounded-md bg-brand-primary px-6 text-base font-medium text-text-on-brand transition-colors hover:bg-brand-secondary"
           >
-            Take or choose a photo
+            {ctaLabel}
           </label>
-          <p className="max-w-xs text-sm text-text-muted">Photograph the book cover only. Avoid including people or children.</p>
+          <p className="max-w-xs text-sm text-text-muted">{helpText}</p>
         </div>
       )}
 

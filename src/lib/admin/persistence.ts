@@ -18,7 +18,7 @@ import {
 type ReviewFlagType = (typeof reviewFlagTypeEnum.enumValues)[number];
 import { resolveConfirmFields } from "@/lib/intake/confirmFieldResolution";
 import { readIntakeDraft, type TeacherEdits } from "@/lib/intake/draft";
-import { saveNewBook, upsertContributor, upsertPublisher, upsertTag, type ProvenanceInput, type Transaction } from "@/lib/intake/persistence";
+import { saveNewBook, upsertContributor, upsertPublisher, upsertTag, getJobInitialLocationId, type ProvenanceInput, type Transaction } from "@/lib/intake/persistence";
 import { selectTrustworthyDisplayCoverUrl } from "@/lib/intake/displayCover";
 import { isLanguageCode } from "@/lib/catalog/languages";
 import type { Format, IllustrationStyle, LanguageCode, VisualRealism } from "@/lib/catalog/types";
@@ -457,7 +457,13 @@ async function finalizePendingBook(db: Database, input: FinalizePendingBookInput
       .set({ status: "resolved", resolvedAt: new Date(), resolvedBy: ADMIN_ACTOR, resolutionNote: "Resolved by Review Later approval." })
       .where(and(eq(reviewFlags.bookId, bookId), eq(reviewFlags.status, "open"), inArray(reviewFlags.flagType, FLAG_TYPES_RESOLVED_BY_REVIEW_LATER_APPROVAL)));
 
-    const [copyRow] = await tx.insert(bookCopies).values({ bookId, sourceIngestionItemId: input.ingestionItemId }).returning({ id: bookCopies.id });
+    // Phase 9 addendum §10 — a bulk-imported item that landed in
+    // needs_review still carries its originating job's `--location`
+    // configuration (if any); an admin approving it later must not silently
+    // lose that, since this is the only place its physical copy is actually
+    // created.
+    const initialLocationId = await getJobInitialLocationId(tx, claimed[0].jobId);
+    const [copyRow] = await tx.insert(bookCopies).values({ bookId, sourceIngestionItemId: input.ingestionItemId, currentLocationId: initialLocationId ?? undefined }).returning({ id: bookCopies.id });
 
     await tx.update(ingestionItems).set({ resultingCopyId: copyRow.id }).where(eq(ingestionItems.id, input.ingestionItemId));
     await completeParentJob(tx, claimed[0].jobId);
@@ -567,7 +573,14 @@ export async function resolveDuplicate(db: Database, input: ResolveDuplicateInpu
           throw new Error("The existing book to attach a copy to could not be found.");
         }
 
-        const [copyRow] = await tx.insert(bookCopies).values({ bookId: existingBook.id, sourceIngestionItemId: input.ingestionItemId }).returning({ id: bookCopies.id });
+        // Phase 9 addendum §10 — same reasoning as `finalizePendingBook` above:
+        // an existing-edition duplicate resolution is also a copy-creation
+        // point for a bulk-imported item.
+        const initialLocationId = await getJobInitialLocationId(tx, claimed[0].jobId);
+        const [copyRow] = await tx
+          .insert(bookCopies)
+          .values({ bookId: existingBook.id, sourceIngestionItemId: input.ingestionItemId, currentLocationId: initialLocationId ?? undefined })
+          .returning({ id: bookCopies.id });
 
         if (plan.archivePendingPlaceholder && item.pendingBookId) {
           await tx.update(books).set({ reviewStatus: "archived", updatedAt: new Date() }).where(eq(books.id, item.pendingBookId));

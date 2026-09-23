@@ -157,6 +157,16 @@ export const ingestionItemStatusEnum = pgEnum("ingestion_item_status", [
 
 export const sheetSyncStatusEnum = pgEnum("sheet_sync_status", ["pending", "synced", "failed"]);
 
+/**
+ * Physical-copy location "kind" (Phase 9 addendum — physical copy locations) — a
+ * real, small, stable classification of what a `library_locations` row actually
+ * is, distinct from its `display_name` (which can be freely renamed without
+ * touching this). `"other"` covers anything that doesn't cleanly fit corridor or
+ * classroom (a shared space, a temporary staging area, etc.) — never a reason to
+ * invent a new enum value for a one-off.
+ */
+export const libraryLocationTypeEnum = pgEnum("library_location_type", ["corridor", "classroom", "other"]);
+
 /** Tag "families" — see docs/DATA_MODEL.md §12 and the Phase 4 brief §14's examples.
  * A real, stable, small classification (unlike the tag *names* themselves, which are
  * an open, evolving vocabulary and deliberately not an enum). */

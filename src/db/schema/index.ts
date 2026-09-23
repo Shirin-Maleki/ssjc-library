@@ -1,6 +1,7 @@
 export * from "./enums";
 export * from "./publishers";
 export * from "./categories";
+export * from "./locations";
 export * from "./books";
 export * from "./contributors";
 export * from "./languages";

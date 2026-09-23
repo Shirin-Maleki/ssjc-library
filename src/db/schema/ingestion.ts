@@ -22,6 +22,7 @@ import {
   ingestionSourceEnum,
 } from "./enums";
 import { books } from "./books";
+import { libraryLocations } from "./locations";
 
 /**
  * `book_copies` and the ingestion tables live in one file specifically because they
@@ -45,7 +46,19 @@ export const bookCopies = pgTable(
       .notNull()
       .references(() => books.id, { onDelete: "cascade" }),
     homeLocation: text("home_location"),
-    currentLocation: text("current_location"),
+    /**
+     * Phase 9 addendum correction: replaces the original free-text
+     * `current_location` column (documented from the start as "future-ready,
+     * unused by any v1 screen" — `docs/DATA_MODEL.md` §9/§12 — and, confirmed
+     * by a repo-wide search, never actually read or written by any real code
+     * path) with a real, stable FK to `library_locations`. A classroom/corridor
+     * can be renamed without silently orphaning every copy already recorded
+     * there, which free text could never guarantee. `null` is a legitimate,
+     * honest state — "no location has been recorded for this copy yet" (every
+     * copy that existed before this migration, and any copy created without an
+     * explicit location) — never defaulted to a guessed real location.
+     */
+    currentLocationId: uuid("current_location_id").references(() => libraryLocations.id),
     availabilityStatus: availabilityStatusEnum("availability_status").notNull().default("on_shelf"),
     acquiredAt: timestamp("acquired_at", { withTimezone: true }),
     sourceIngestionItemId: uuid("source_ingestion_item_id").references(
@@ -55,6 +68,12 @@ export const bookCopies = pgTable(
   },
   (table) => [
     index("book_copies_book_idx").on(table.bookId),
+    // Phase 9 addendum — the exact access pattern the Move/Return workflow and
+    // the Sheet's Location column both need: "every copy of book X, grouped by
+    // current location." Nulls (no location recorded) are included in results
+    // by a plain `IS NULL` scan without this index, but a book with many copies
+    // across several locations benefits from it regardless.
+    index("book_copies_current_location_idx").on(table.currentLocationId),
     // Phase 8 correction pass — defense-in-depth for "one ingestion item can
     // result in at most one physical copy" (docs/DECISIONS.md). The real
     // guarantee is the application-level claim pattern in

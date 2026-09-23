@@ -34,6 +34,14 @@ export interface CreateBulkImportJobInput {
    * when present, `limit` is ignored (the explicit list IS the bound). */
   fileIds?: string[];
   createdBy?: string;
+  /** Phase 9 addendum §10 — the `library_locations.id` every physical copy
+   * this job creates should start at (`--location <slug>`, resolved and
+   * validated as active by `scripts/bulkImport/createJob.ts` before this is
+   * ever called). `undefined` when the operator didn't pass `--location` —
+   * copies from this job are then created with no location recorded, exactly
+   * like any other copy, never defaulted to a guessed real location (e.g.
+   * Corridor 218) just because it came from bulk import. */
+  initialLocationId?: string;
 }
 
 export interface CreateBulkImportJobResult {
@@ -81,7 +89,13 @@ export async function createBulkImportJob(db: Database, input: CreateBulkImportJ
       source: "admin_bulk_drive",
       status: "pending",
       totalItems: toCreate.length,
-      config: { sourceFolderId: input.sourceFolderId, requestedLimit: input.limit ?? null, requestedFileIds: input.fileIds ?? null, totalDiscovered },
+      config: {
+        sourceFolderId: input.sourceFolderId,
+        requestedLimit: input.limit ?? null,
+        requestedFileIds: input.fileIds ?? null,
+        totalDiscovered,
+        initialLocationId: input.initialLocationId ?? null,
+      },
       createdBy: input.createdBy ?? "bulk-import-cli",
     })
     .returning({ id: ingestionJobs.id });

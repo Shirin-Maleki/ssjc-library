@@ -32,8 +32,18 @@ import {
   type UpdateCategoryResult,
 } from "./persistence";
 import type { AdminReviewItem } from "./reviewQueue";
-import { categoryRepository } from "@/db/repositories";
+import { categoryRepository, locationRepository, type LibraryLocationOption } from "@/db/repositories";
 import { listCategoriesWithHealth, listTaxonomySuggestionsWithBooks, type CategoryHealthRow, type TaxonomySuggestionRow } from "./categoryHealth";
+import {
+  createLocation,
+  updateLocation,
+  setLocationActive,
+  listLocationsWithUsage,
+  type CreateLocationResult,
+  type UpdateLocationResult,
+  type SetLocationActiveResult,
+  type LocationType,
+} from "@/lib/locations/persistence";
 
 /**
  * The Phase 8 admin Server Action boundary — mirrors `src/lib/intake/actions.ts`'s
@@ -168,4 +178,42 @@ export async function mergeTaxonomySuggestionAction(suggestionId: string, existi
 export async function listActiveCategoriesForAdminAction() {
   await requireAdminSession();
   return categoryRepository.listActiveCategories();
+}
+
+// --- Location management (Phase 9 addendum §8) --------------------------------
+
+export async function listLocationsWithUsageAction() {
+  await requireAdminSession();
+  return listLocationsWithUsage(db);
+}
+
+export interface CreateLocationActionInput {
+  displayName: string;
+  locationType?: LocationType;
+}
+
+export async function createLocationAction(input: CreateLocationActionInput): Promise<CreateLocationResult> {
+  await requireAdminSession();
+  return createLocation(db, input);
+}
+
+export interface UpdateLocationActionInput {
+  locationId: string;
+  displayName?: string;
+  locationType?: LocationType;
+}
+
+export async function updateLocationAction(input: UpdateLocationActionInput): Promise<UpdateLocationResult> {
+  await requireAdminSession();
+  return updateLocation(db, input);
+}
+
+export async function setLocationActiveAction(locationId: string, isActive: boolean): Promise<SetLocationActiveResult> {
+  await requireAdminSession();
+  return setLocationActive(db, locationId, isActive);
+}
+
+export async function listActiveLocationsForAdminAction(): Promise<LibraryLocationOption[]> {
+  await requireAdminSession();
+  return locationRepository.listActiveLocations();
 }

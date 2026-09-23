@@ -6,7 +6,7 @@ import { SecretGate } from "@/components/auth/SecretGate";
 import { db } from "@/db/client";
 import { loadAdminReviewQueue } from "@/lib/admin/reviewQueueSource";
 import { listCategoriesWithHealth } from "@/lib/admin/categoryHealth";
-import { taxonomySuggestions } from "@/db/schema";
+import { taxonomySuggestions, libraryLocations } from "@/db/schema";
 import { eq } from "drizzle-orm";
 
 export default async function AdminPage() {
@@ -34,10 +34,11 @@ export default async function AdminPage() {
     );
   }
 
-  const [queue, categories, pendingSuggestions] = await Promise.all([
+  const [queue, categories, pendingSuggestions, activeLocations] = await Promise.all([
     loadAdminReviewQueue(db),
     listCategoriesWithHealth(db),
     db.select({ id: taxonomySuggestions.id }).from(taxonomySuggestions).where(eq(taxonomySuggestions.status, "pending")),
+    db.select({ id: libraryLocations.id }).from(libraryLocations).where(eq(libraryLocations.isActive, true)),
   ]);
 
   const needsReviewCount = queue.filter((i) => i.primaryReason.code === "identity_needs_review" || i.primaryReason.code === "metadata_conflict" || i.primaryReason.code === "low_confidence_field" || i.primaryReason.code === "missing_metadata").length;
@@ -69,6 +70,12 @@ export default async function AdminPage() {
       title: "Taxonomy",
       count: pendingSuggestions.length,
       description: pendingSuggestions.length === 0 ? "No taxonomy suggestions are waiting." : `${pendingSuggestions.length} suggestion${pendingSuggestions.length === 1 ? "" : "s"} awaiting a decision.`,
+    },
+    {
+      href: "/admin/locations",
+      title: "Locations",
+      count: 0,
+      description: `${activeLocations.length} active location${activeLocations.length === 1 ? "" : "s"} — corridors, classrooms, and other spaces.`,
     },
   ];
 

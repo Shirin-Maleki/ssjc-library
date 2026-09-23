@@ -36,6 +36,7 @@ export const CATALOG_HEADER_ROW = [
   "Visual Realism",
   "Read Time",
   "Physical Category",
+  "Location",
   "Copy Count",
   "book_id (hidden)",
 ] as const;
@@ -85,9 +86,26 @@ function escapeTextCell(value: string): string {
   return `'${value}`;
 }
 
-export type CatalogRow = readonly [string, string, string, string, string, string, string, string, string, string, string, string, string, string, number, string];
+export type CatalogRow = readonly [string, string, string, string, string, string, string, string, string, string, string, string, string, string, string, number, string];
 
-export function buildCatalogRow(book: Book, categoryLabel: string): CatalogRow {
+/** "Corridor 218" (one location, one copy) / "Corridor 218 (2)" (one location,
+ * several copies) / "Corridor 218 (1), Blue Room (1)" (several locations) —
+ * the exact deterministic formats the addendum specifies. A bare label
+ * (no count) only ever appears for the single-location, single-copy case;
+ * every other case always shows each bucket's count, so "2 copies, same
+ * place" is never visually indistinguishable from "1 copy." Never exposes an
+ * internal `book_copies` row id — only human-facing location names and
+ * counts. */
+export function formatLocationSummary(counts: readonly { label: string; count: number }[]): string {
+  if (counts.length === 0) return NOT_SPECIFIED;
+  if (counts.length === 1) {
+    const only = counts[0];
+    return only.count > 1 ? `${only.label} (${only.count})` : only.label;
+  }
+  return counts.map((c) => `${c.label} (${c.count})`).join(", ");
+}
+
+export function buildCatalogRow(book: Book, categoryLabel: string, locationSummary: string): CatalogRow {
   const readMinutes = book.readAloudMinutes;
   const durationBand = getReadDurationBand(readMinutes);
   const readTime = durationBand ? DURATION_BAND_LABELS[durationBand] : NOT_SPECIFIED;
@@ -109,6 +127,7 @@ export function buildCatalogRow(book: Book, categoryLabel: string): CatalogRow {
     escapeTextCell(book.visualRealism ? VISUAL_REALISM_LABELS[book.visualRealism] : NOT_SPECIFIED),
     escapeTextCell(readTime),
     escapeTextCell(categoryLabel),
+    escapeTextCell(locationSummary),
     book.copyCount ?? 0,
     escapeTextCell(book.id),
   ];

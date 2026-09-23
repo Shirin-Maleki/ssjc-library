@@ -44,7 +44,7 @@ export default defineConfig({
       // teacherCatalog.spec.ts's `system_settings` row is the identical situation
       // (Phase 9) — it would otherwise race navigation.spec.ts's "not yet
       // configured" test, which shares the same table/key across projects.
-      testIgnore: ["**/readingLists.spec.ts", "**/teacherCatalog.spec.ts"],
+      testIgnore: ["**/readingLists.spec.ts", "**/teacherCatalog.spec.ts", "**/moveBookLocation.spec.ts"],
     },
     {
       name: "desktop",

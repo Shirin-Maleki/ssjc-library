@@ -10,8 +10,9 @@ import { bookSheetSync } from "@/db/schema";
 // import these two classes the same way.
 import { DrizzleBookRepository } from "@/db/repositories/bookRepository";
 import { DrizzleCategoryRepository } from "@/db/repositories/categoryRepository";
+import { getCopyLocationSummaryForBooks } from "@/lib/locations/persistence";
 import type { Book } from "@/lib/catalog/types";
-import { CATALOG_HEADER_ROW, VISIBLE_COLUMN_COUNT, buildCatalogRow, type CatalogRow } from "./rowBuilder";
+import { CATALOG_HEADER_ROW, VISIBLE_COLUMN_COUNT, buildCatalogRow, formatLocationSummary, type CatalogRow } from "./rowBuilder";
 import { getSheetsTarget, setSheetsTarget, type SheetsTarget } from "./targetState";
 import type { SheetsProvider } from "./provider";
 
@@ -150,12 +151,18 @@ export async function syncCatalogToSheet(db: Database, provider: SheetsProvider)
   const categoryRepository = new DrizzleCategoryRepository(db);
   const [visibleBooks, categories] = await Promise.all([bookRepository.listVisibleBooks(), categoryRepository.listCategories()]);
   const categoryLabelBySlug = new Map(categories.map((c) => [c.slug, c.label]));
+  // Phase 9 addendum — one batch query for every visible book's current
+  // copy-location breakdown, never one query per book (§5's "Location"
+  // column).
+  const locationSummaryByBookId = await getCopyLocationSummaryForBooks(db, visibleBooks.map((b) => b.id));
 
   // Deterministic row order — sortTitle is the same stable ordering Find
   // itself uses for browse results, so the Sheet's default order reads the
   // same way the app's own catalog listing does.
   const sortedBooks = [...visibleBooks].sort((a, b) => a.sortTitle.localeCompare(b.sortTitle));
-  const rows = sortedBooks.map((book) => buildCatalogRow(book, categoryLabelBySlug.get(book.physicalCategory) ?? book.physicalCategory));
+  const rows = sortedBooks.map((book) =>
+    buildCatalogRow(book, categoryLabelBySlug.get(book.physicalCategory) ?? book.physicalCategory, formatLocationSummary(locationSummaryByBookId.get(book.id) ?? []))
+  );
 
   const lastColumn = columnLetter(CATALOG_HEADER_ROW.length - 1);
   const dataRange = `'${CATALOG_RANGE_NAME}'!A1:${lastColumn}${rows.length + 1}`;

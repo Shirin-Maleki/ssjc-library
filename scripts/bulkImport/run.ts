@@ -1,3 +1,4 @@
+import { getJobInitialLocationId } from "../../src/lib/intake/persistence";
 import { getJobStatus } from "../../src/lib/bulkImport/jobs";
 import { runBulkImportJob, DEFAULT_CONCURRENCY, MAX_ALLOWED_CONCURRENCY, DEFAULT_MAX_RETRIES } from "../../src/lib/bulkImport/runner";
 import { createCallCounters } from "../../src/lib/bulkImport/costTracking";
@@ -40,12 +41,17 @@ async function main() {
     const aiProvider = buildAiProvider();
     const metadataProviders = buildMetadataProviders();
     const counters = createCallCounters();
+    // Resolved once per run, not per item — this job's `--location` (if any)
+    // was validated/fixed at `import:create-job` time and never changes for
+    // the life of the job (Phase 9 addendum §10).
+    const initialLocationId = (await getJobInitialLocationId(db, jobId)) ?? undefined;
 
     console.log(`Running job ${jobId}: up to ${maxItems} item(s), concurrency=${concurrency}, max retries per item=${maxRetries}.`);
+    console.log(`Initial copy location for items this job completes: ${initialLocationId ?? "(none recorded)"}`);
 
     const result = await runBulkImportJob(db, {
       jobId,
-      deps: { db, driveProvider, aiProvider, metadataProviders, bulkImportRootFolderId: rootFolderId, counters },
+      deps: { db, driveProvider, aiProvider, metadataProviders, bulkImportRootFolderId: rootFolderId, counters, initialLocationId },
       driveProvider,
       maxItems,
       concurrency,
