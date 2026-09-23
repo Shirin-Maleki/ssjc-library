@@ -176,7 +176,15 @@ export class GeminiBookIntelligenceProvider implements BookVisionProvider {
       ANALYSIS_TIMEOUT_MS
     );
 
-    return this.parseCombinedAnalysis(raw.text);
+    const result = this.parseCombinedAnalysis(raw.text);
+    if (raw.usageMetadata) {
+      result.usage = {
+        promptTokens: raw.usageMetadata.promptTokenCount ?? 0,
+        candidateTokens: raw.usageMetadata.candidatesTokenCount ?? 0,
+        totalTokens: raw.usageMetadata.totalTokenCount ?? 0,
+      };
+    }
+    return result;
   }
 
   private async callWithTimeout<T>(action: () => Promise<T>, timeoutMs: number): Promise<T> {

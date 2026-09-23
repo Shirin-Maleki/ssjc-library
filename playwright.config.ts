@@ -41,7 +41,10 @@ export default defineConfig({
       // mean two concurrent workers mutating the same shared list data at once. Its
       // CRUD/idempotency coverage is viewport-independent, so it runs on desktop only
       // (see tests/e2e/readingLists.spec.ts for the serial-mode reasoning).
-      testIgnore: ["**/readingLists.spec.ts"],
+      // teacherCatalog.spec.ts's `system_settings` row is the identical situation
+      // (Phase 9) — it would otherwise race navigation.spec.ts's "not yet
+      // configured" test, which shares the same table/key across projects.
+      testIgnore: ["**/readingLists.spec.ts", "**/teacherCatalog.spec.ts"],
     },
     {
       name: "desktop",

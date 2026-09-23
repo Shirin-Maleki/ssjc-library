@@ -20,6 +20,7 @@ import {
   tags,
 } from "../schema";
 import type { Book, FictionType, IllustrationStyle, LanguageCode, VisualRealism } from "@/lib/catalog/types";
+import { TEACHER_VISIBLE_REVIEW_STATUS } from "@/lib/catalog/visibility";
 
 /**
  * The catalog data-access boundary (Phase 4 brief §29) — the only thing Find, Book
@@ -42,6 +43,12 @@ export interface BookRepository {
    * `Book` objects, never by fetching the whole catalog (`docs/SEARCH.md` §1). Order
    * is not guaranteed to match `ids`; callers that care about order re-sort. */
   getBooksByIds(ids: string[]): Promise<Book[]>;
+  /** Phase 9 — every book Find/autocomplete/facets already treat as visible
+   * (`TEACHER_VISIBLE_REVIEW_STATUS`, the exact same predicate `searchRepository.ts`
+   * scopes to), projected in full. The Google Sheets sync's one and only export-
+   * eligibility rule: reuse this, never a second parallel "is this book real"
+   * definition that could quietly drift from Find's own. */
+  listVisibleBooks(): Promise<Book[]>;
 }
 
 /** Deterministic per-book placeholder-cover variant, replacing the fixture-only
@@ -111,6 +118,11 @@ export class DrizzleBookRepository implements BookRepository {
   async getBooksByIds(ids: string[]): Promise<Book[]> {
     if (ids.length === 0) return [];
     const rows = await this.db.select().from(books).where(inArray(books.id, ids));
+    return this.projectMany(rows);
+  }
+
+  async listVisibleBooks(): Promise<Book[]> {
+    const rows = await this.db.select().from(books).where(eq(books.reviewStatus, TEACHER_VISIBLE_REVIEW_STATUS));
     return this.projectMany(rows);
   }
 

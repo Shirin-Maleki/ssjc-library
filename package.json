@@ -22,7 +22,13 @@
     "embeddings:generate": "tsx scripts/embeddings/generate.ts",
     "search:rebuild-text": "tsx scripts/search/rebuildSearchText.ts",
     "google:authorize": "tsx scripts/google/authorize.ts",
-    "google:smoke": "tsx scripts/google/smoke.ts"
+    "google:smoke": "tsx scripts/google/smoke.ts",
+    "import:list": "tsx scripts/bulkImport/list.ts",
+    "import:create-job": "tsx scripts/bulkImport/createJob.ts",
+    "import:run": "tsx scripts/bulkImport/run.ts",
+    "import:resume": "tsx scripts/bulkImport/run.ts",
+    "import:status": "tsx scripts/bulkImport/status.ts",
+    "sheets:sync": "tsx scripts/sheets/sync.ts"
   },
   "dependencies": {
     "@google/genai": "^2.23.0",

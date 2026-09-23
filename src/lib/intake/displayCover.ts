@@ -15,7 +15,12 @@ import type { ReconciliationOutcome } from "./reconciliation";
  * allowlist. A provider adapter change that starts serving thumbnails from a
  * different real host would need this list updated deliberately, not
  * silently start working. */
-const TRUSTED_THUMBNAIL_HOSTS = new Set(["books.google.com", "books.googleusercontent.com", "covers.openlibrary.org"]);
+/** Exported for Phase 9's Google Sheets sync — a cover image is only ever rendered
+ * via an `IMAGE()` formula in the Sheet when its URL passes this exact same
+ * host/scheme trust boundary a second time at write time (never a fabricated
+ * formula from arbitrary book metadata text), even though `books.display_cover_url`
+ * was already gated through this check once when it was first saved. */
+export const TRUSTED_THUMBNAIL_HOSTS = new Set(["books.google.com", "books.googleusercontent.com", "covers.openlibrary.org"]);
 
 export interface DisplayCoverCandidateInput {
   /** Only a *confirmed* identity (`high_confidence`) ever produces a display

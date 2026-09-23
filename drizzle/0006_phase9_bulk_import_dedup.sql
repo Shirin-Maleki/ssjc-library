@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "ingestion_items_active_drive_file_unique" ON "ingestion_items" USING btree ("drive_file_id") WHERE "ingestion_items"."status" in ('pending', 'processing', 'needs_review');

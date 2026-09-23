@@ -61,7 +61,7 @@ export const secondaryNav: NavItem[] = [
   {
     href: "/teacher-catalog",
     label: "Teacher Catalog",
-    description: "Shared spreadsheet view, coming later.",
+    description: "Reference view of the catalog in Google Sheets.",
   },
   {
     href: "/admin",

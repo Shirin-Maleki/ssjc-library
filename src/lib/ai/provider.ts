@@ -80,6 +80,11 @@ export interface CoverAnalysisResult {
   coverEvidence: CoverIdentification;
   aiSuggestions: EnrichmentSuggestion;
   aiSuggestionsStatus: AiSuggestionsStatus;
+  /** Real token usage Gemini reported for this call, when the SDK response
+   * included it — `undefined` otherwise, never fabricated. Added for Phase 9's
+   * bulk-import cost observability (`docs/COSTS.md`); the interactive teacher
+   * flow has no use for this and simply doesn't read it. */
+  usage?: { promptTokens: number; candidateTokens: number; totalTokens: number };
 }
 
 /** The one Gemini vision task per book (AI-first catalog draft correction, §3) —

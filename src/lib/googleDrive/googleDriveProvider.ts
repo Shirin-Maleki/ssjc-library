@@ -124,8 +124,18 @@ async function mapDriveHttpError(
 export class GoogleDriveCoverStorageProvider implements CoverStorageProvider {
   private readonly rootFolderId: string;
 
-  constructor() {
-    this.rootFolderId = loadDriveConfig().rootFolderId;
+  /**
+   * `rootFolderId` is optional and defaults to the configured interactive-flow root
+   * (`GOOGLE_DRIVE_ROOT_FOLDER_ID`) — every existing call site (`new
+   * GoogleDriveCoverStorageProvider()`) is unaffected by this addition. Phase 9's bulk
+   * importer passes its own, separately-configured root explicitly (never the same env var),
+   * so a teacher's single-add upload root and the bulk-import source tree can be two
+   * genuinely different folders without widening either one's containment boundary —
+   * root-containment (`isWithinRoot`) is still enforced identically either way, just against
+   * whichever root this instance was built with.
+   */
+  constructor(rootFolderId?: string) {
+    this.rootFolderId = rootFolderId ?? loadDriveConfig().rootFolderId;
   }
 
   private async authorizedFetch(url: string, init: RequestInit = {}): Promise<Response> {

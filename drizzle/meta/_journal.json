@@ -43,6 +43,13 @@
       "when": 1790052238849,
       "tag": "0005_phase8_correction_exactly_once_copy",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790125657957,
+      "tag": "0006_phase9_bulk_import_dedup",
+      "breakpoints": true
     }
   ]
 }

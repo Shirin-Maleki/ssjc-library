@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import type { Database } from "@/db/client";
 import {
   auditLog,
@@ -15,6 +15,7 @@ import {
   reviewFlags,
   tags,
   bookFieldProvenance,
+  reviewFlagTypeEnum,
 } from "@/db/schema";
 import { normalizeSearchText, normalizeTitle } from "@/lib/search/normalize";
 import { computeSortTitle } from "@/lib/catalog/sortTitle";
@@ -29,6 +30,11 @@ import type { IntakeDraft } from "./draft";
  * itself. Exported for Phase 8's admin persistence layer, which composes its own
  * transactions calling into `upsertPublisher`/`upsertContributor`/`upsertTag`. */
 export type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0];
+
+/** The `review_flags.flag_type` enum's real value union — derived from the schema's
+ * own `pgEnum`, never a hand-maintained parallel list (mirrors
+ * `src/lib/admin/persistence.ts`'s identical local derivation). */
+type ReviewFlagType = (typeof reviewFlagTypeEnum.enumValues)[number];
 
 /**
  * Dedicated, transactional new-book/another-copy/review-later persistence (Phase 7,
@@ -74,6 +80,12 @@ export interface NewBookInput {
   provenance: ProvenanceInput[];
   ingestionItemId: string;
   actorLabel: string;
+  /** `"teacher_upload"` (default, unchanged Phase 7 behavior) or `"bulk_import"`
+   * (Phase 9) — `books.cover_source_type` already had this second enum value
+   * declared and unused since Phase 4; this is the first caller to actually set
+   * it, so a bulk-imported record is truthfully distinguishable from a teacher's
+   * own single-add capture rather than silently mislabeled. */
+  coverSourceType?: "teacher_upload" | "bulk_import";
 }
 
 export interface NewBookResult {
@@ -116,17 +128,48 @@ export async function upsertTag(tx: Transaction, name: string): Promise<string> 
 }
 
 /**
- * Marks the parent `ingestion_jobs` row completed alongside its one `ingestion_items`
- * row (Phase 7 correction pass §6) — the upload route creates the job with
- * `status: "running"`/`total_items: 1`, but until now nothing ever advanced it past
- * that, leaving every job permanently "running" regardless of real outcome. A
- * single-add job has exactly one item, so "this item finished" and "this job
- * finished" are the same real-world event — reads `jobId` back from the item update
- * that already ran (`.returning()`), no separate lookup needed. Never a new workflow
- * engine — just the two rows a single-item job always had, finally kept coherent.
+ * Records that one `ingestion_items` row under `jobId` reached a terminal outcome,
+ * and marks the parent `ingestion_jobs` row `"completed"` once every one of its
+ * `total_items` has been accounted for (`processed + failed + skipped >= total`) —
+ * never unconditionally after just one item, which would have been wrong the
+ * moment a job legitimately contained more than one item.
+ *
+ * Phase 7's `single_add`/`teacher_capture` jobs always set `totalItems: 1` at
+ * creation (`ingestionRecord.ts`), so for every existing caller this reaches the
+ * same outcome as before — the job completes immediately after its one item
+ * finishes — with byte-for-byte identical behavior to the previous
+ * `completeParentJob` this replaces. Phase 9's multi-item `bulk_import` jobs are
+ * the first real caller where the distinction matters: a job with `totalItems: 25`
+ * must not read as `"completed"` after its first item alone.
+ *
+ * The counter increment is a single atomic `UPDATE ... SET x = x + 1 RETURNING`
+ * (never a separate read-then-write), so concurrent bulk-import workers finishing
+ * different items of the same job at the same moment can never lose an increment
+ * to a race — the same reasoning `docs/DECISIONS.md`'s claim-before-mutate entries
+ * already establish for `ingestion_items` status transitions, applied here to
+ * `ingestion_jobs`' own counters.
  */
-async function completeParentJob(tx: Transaction, jobId: string): Promise<void> {
-  await tx.update(ingestionJobs).set({ status: "completed", processedItems: 1, completedAt: new Date() }).where(eq(ingestionJobs.id, jobId));
+/** Exported for Phase 9's bulk-import worker, which reaches a `"failed"`/`"skipped"`
+ * terminal outcome directly (e.g. a permanently corrupt/unsupported source image)
+ * without ever calling `saveNewBook`/`saveForReview` — it still needs the exact
+ * same job-counter/completion bookkeeping those two already get for free. */
+export async function advanceParentJob(tx: Transaction, jobId: string, outcome: "processed" | "failed" | "skipped" = "processed"): Promise<void> {
+  const setClause =
+    outcome === "failed"
+      ? { failedItems: sql`${ingestionJobs.failedItems} + 1` }
+      : outcome === "skipped"
+        ? { skippedItems: sql`${ingestionJobs.skippedItems} + 1` }
+        : { processedItems: sql`${ingestionJobs.processedItems} + 1` };
+
+  const [job] = await tx
+    .update(ingestionJobs)
+    .set(setClause)
+    .where(eq(ingestionJobs.id, jobId))
+    .returning({ totalItems: ingestionJobs.totalItems, processedItems: ingestionJobs.processedItems, failedItems: ingestionJobs.failedItems, skippedItems: ingestionJobs.skippedItems });
+
+  if (job && job.processedItems + job.failedItems + job.skippedItems >= job.totalItems) {
+    await tx.update(ingestionJobs).set({ status: "completed", completedAt: new Date() }).where(eq(ingestionJobs.id, jobId));
+  }
 }
 
 /**
@@ -203,7 +246,7 @@ export async function saveNewBook(db: Database, input: NewBookInput): Promise<Ne
         coverDriveFolderId: input.coverDriveFolderId,
         coverFilename: input.coverFilename,
         coverMimeType: input.coverMimeType,
-        coverSourceType: "teacher_upload",
+        coverSourceType: input.coverSourceType ?? "teacher_upload",
         displayCoverUrl: input.displayCoverUrl,
         displayCoverSource: input.displayCoverUrl ? "external_provider_thumbnail" : undefined,
         reviewStatus: "active",
@@ -250,7 +293,7 @@ export async function saveNewBook(db: Database, input: NewBookInput): Promise<Ne
       .set({ status: "completed", resultingCopyId: copyRow.id, completedAt: new Date() })
       .where(eq(ingestionItems.id, input.ingestionItemId))
       .returning({ jobId: ingestionItems.jobId });
-    await completeParentJob(tx, completedItem.jobId);
+    await advanceParentJob(tx, completedItem.jobId, "processed");
 
     await tx.insert(auditLog).values({
       actorLabel: input.actorLabel,
@@ -295,7 +338,7 @@ export async function addAnotherCopy(db: Database, input: AnotherCopyInput): Pro
       .set({ status: "completed", resultingCopyId: copyRow.id, completedAt: new Date() })
       .where(eq(ingestionItems.id, input.ingestionItemId))
       .returning({ jobId: ingestionItems.jobId });
-    await completeParentJob(tx, completedItem.jobId);
+    await advanceParentJob(tx, completedItem.jobId, "processed");
 
     await tx.insert(auditLog).values({
       actorLabel: input.actorLabel,
@@ -326,7 +369,20 @@ export interface SaveForReviewInput {
     coverDriveFolderId: string;
     coverFilename: string;
     coverMimeType: string;
+    /** `"teacher_upload"` (default, unchanged Phase 7 behavior) or `"bulk_import"` —
+     * see `NewBookInput.coverSourceType`'s identical comment. */
+    coverSourceType?: "teacher_upload" | "bulk_import";
   };
+  /** The `review_flags.flag_type` this needs-review outcome actually represents —
+   * defaults to `"low_identification_confidence"`, Phase 7's only real case (a
+   * teacher's own free-text "review this later" reason is never about a specific
+   * *kind* of uncertainty the system itself detected). Phase 9's bulk importer
+   * routes many distinct kinds of uncertainty here (weak identity, an unresolved
+   * duplicate, an uncertain category, conflicting candidates, a corrupt/unsupported
+   * image) and must record the flag type that actually matches, so Phase 8's
+   * computed Admin Review queue labels/prioritizes it correctly instead of every
+   * bulk-import review reading as the same generic reason. */
+  flagType?: ReviewFlagType;
 }
 
 export interface SaveForReviewResult {
@@ -349,7 +405,7 @@ export interface SaveForReviewResult {
  * the resulting ITEM, which `ingestion_items.status = 'needs_review'` (plus the
  * preserved draft) already represents; that pending work belongs to the item, not
  * to the job that produced it. No new `ingestion_job_status` enum value, no
- * workflow engine — this reuses the exact same `completeParentJob()` helper the
+ * workflow engine — this reuses the exact same `advanceParentJob()` helper the
  * other two terminal save paths already use.
  */
 export async function saveForReview(db: Database, input: SaveForReviewInput): Promise<SaveForReviewResult> {
@@ -369,7 +425,7 @@ export async function saveForReview(db: Database, input: SaveForReviewInput): Pr
           coverDriveFolderId: input.pendingBook.coverDriveFolderId,
           coverFilename: input.pendingBook.coverFilename,
           coverMimeType: input.pendingBook.coverMimeType,
-          coverSourceType: "teacher_upload",
+          coverSourceType: input.pendingBook.coverSourceType ?? "teacher_upload",
           reviewStatus: "pending_review",
         })
         .returning({ id: books.id });
@@ -382,7 +438,7 @@ export async function saveForReview(db: Database, input: SaveForReviewInput): Pr
 
       await tx.insert(reviewFlags).values({
         bookId,
-        flagType: "low_identification_confidence",
+        flagType: input.flagType ?? "low_identification_confidence",
         detail: input.reviewReason,
       });
     }
@@ -398,7 +454,7 @@ export async function saveForReview(db: Database, input: SaveForReviewInput): Pr
       .where(eq(ingestionItems.id, input.ingestionItemId))
       .returning({ jobId: ingestionItems.jobId });
 
-    await completeParentJob(tx, updatedItem.jobId);
+    await advanceParentJob(tx, updatedItem.jobId, "processed");
 
     await tx.insert(auditLog).values({
       actorLabel: input.actorLabel,

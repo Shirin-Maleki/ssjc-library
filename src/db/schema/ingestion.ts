@@ -139,7 +139,25 @@ export const ingestionItems = pgTable(
     completedAt: timestamp("completed_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (table) => [index("ingestion_items_job_idx").on(table.jobId), index("ingestion_items_status_idx").on(table.status)]
+  (table) => [
+    index("ingestion_items_job_idx").on(table.jobId),
+    index("ingestion_items_status_idx").on(table.status),
+    // Phase 9 — the smallest correct canonical mechanism for "the same Drive
+    // source file must never be independently processed through two separate
+    // active ingestion items at once" (docs/BULK_IMPORT.md). Scoped to only the
+    // three genuinely ACTIVE statuses (nulls/other rows exempt) rather than a
+    // global unique index on driveFileId, because `ingestion_job_type` already
+    // has an unused `"reimport"` value anticipating a legitimate future case
+    // where the SAME Drive file gets a fresh ingestion_items row under a new
+    // job (e.g. a Phase 10 taxonomy-driven reimport) — a global constraint would
+    // permanently foreclose that. This index is a database-level backstop; the
+    // real mechanism is bulk-import job creation itself looking up existing
+    // items by driveFileId first (`src/lib/bulkImport/jobs.ts`) and never
+    // enqueuing a second one while an earlier one is still active.
+    uniqueIndex("ingestion_items_active_drive_file_unique")
+      .on(table.driveFileId)
+      .where(sql`${table.status} in ('pending', 'processing', 'needs_review')`),
+  ]
 );
 
 /** Every metadata-provider candidate considered for a given ingestion item, retained
