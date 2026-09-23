@@ -130,6 +130,8 @@ data.
 | `npm run db:seed` | Truncates every seeded table and re-inserts the 48-book fixture catalog with its stable UUIDs. Does **not** touch `reading_lists`/`reading_list_items` data you created by hand through the app... actually it does — see "What gets wiped" below. |
 | `npm run db:reset` | Runs migrate then seed, in order, against `DATABASE_URL`. The normal way to get a clean development database. |
 | `npm run db:check` | Runs `drizzle-kit check` — fails if the committed migrations and the current schema have drifted apart (e.g., someone edited a schema file without regenerating a migration). Good to run before opening a PR. |
+| `npm run db:protect -- --reason="..."` | Marks whatever `DATABASE_URL` points at as PROTECTED (Phase 9 data-safety correction, below) — `db:seed`/`db:reset` will refuse to run against it afterward. |
+| `npm run db:unprotect` | Removes that mark — `db:seed`/`db:reset` run against it normally again. |
 | `npm run test:integration` | Runs the real-database repository/migration tests (`tests/integration/`) against `TEST_DATABASE_URL`, migrating and seeding it once per run via a Vitest global setup. |
 | `npx playwright test` | Runs the E2E suite, migrating and seeding `E2E_DATABASE_URL` once per run via `tests/e2e/globalSetup.ts`, then building and starting the app against it. |
 | `npm run embeddings:generate` | Backfills `books.embedding` for every book needing one (Phase 5). `--mode=missing` (default), `--mode=stale` (composition/data changed since the last embedding), or `--mode=all`; `--dry-run` reports what would run without calling the provider or writing anything. Exits cleanly, doing nothing, when `GEMINI_API_KEY` is unset. Idempotent — a second `missing` run after a successful one processes zero books. Never run automatically during a request or migration. |
@@ -145,6 +147,60 @@ against your own development database deletes any Reading Lists you created by h
 testing the app manually. That's expected for a `reset` command; there is no separate
 "seed catalog data only, leave my lists alone" command, since keeping the seed script simple
 and fully reproducible was judged more valuable than preserving disposable local test data.
+
+## Database safety boundary (Phase 9 data-safety correction)
+
+**The incident this section exists to prevent:** verifying the Phase 9 location addendum's new
+schema locally involved running `npm run db:seed` directly against `DATABASE_URL` — which is
+simultaneously "the database the running app uses," "the database `npm run import:*` writes
+real bulk-imported books to" (there is no separate "real import target" variable — bulk import
+intentionally writes to the same canonical database the app serves from), and "whatever
+`db:seed`/`db:reset` truncate unconditionally." Those three roles had never conflicted before
+Phase 9 gave the second one real data worth protecting. The result: 3 real bulk-imported
+validation books, and the real Google Sheet's sync-state pointer, were destroyed by a direct,
+manual `db:seed` invocation. **`TEST_DATABASE_URL`/`E2E_DATABASE_URL` were never at risk** —
+confirmed real, distinct database names (`ssjc_library_test`/`ssjc_library_e2e` locally), and
+`tests/integration/globalSetup.ts`/`tests/e2e/globalSetup.ts` both explicitly override
+`DATABASE_URL`/`DATABASE_MIGRATION_URL` to their own database for every child-process
+migrate/seed call they make — the automated suites cannot reach `DATABASE_URL`'s database even
+by accident. The one real remaining risk was always a direct, manual `db:seed`/`db:reset`
+invocation against a database that also holds real data — exactly what happened.
+
+**The fix — an executable guard, not just this paragraph:** `src/db/dbSafety.ts`'s
+`assertSafeToDestroy()`, called by `src/db/seed.ts` (and therefore `db:reset`, which just shells
+out to seed) before its truncate statement ever runs. A database is "protected" only when
+something explicitly marked it so (`npm run db:protect -- --reason="..."`) — never inferred
+from its name, its connection string, or which env var happened to point at it. An unprotected
+database (every disposable `TEST_DATABASE_URL`/`E2E_DATABASE_URL` target, and any `DATABASE_URL`
+nobody has protected yet) seeds exactly as it always has — this is additive safety with zero
+behavior change for ordinary local development, never a new hoop for the common case.
+
+Protection is stored as a `system_settings` row (`database_protected`), so it travels with the
+database itself regardless of which connection string happens to point at it. A protected
+database refuses `db:seed`/`db:reset` with a clear, actionable error naming the database, why it
+was protected, and the exact bypass. The bypass, `ALLOW_DESTRUCTIVE_RESEED`, must equal the
+**exact database name** being targeted — never merely `"true"`/`"1"` — so an operator must
+positively know and type the real database name to destroy it, not just leave a boolean set out
+of habit. A successful override-authorized reseed clears the protection flag automatically (the
+real data it protected is now gone); re-protect explicitly afterward if the database will hold
+real data again.
+
+```bash
+npm run db:protect -- --reason="holds real Phase 10 collection import data"
+npm run db:seed                                              # refuses — prints the exact fix
+ALLOW_DESTRUCTIVE_RESEED=ssjc_library_dev npm run db:seed     # explicit, exact-name override
+npm run db:unprotect                                          # removes the guard entirely
+```
+
+`npm run db:migrate` is deliberately **not** gated — it only ever adds migrations forward plus a
+non-destructive backfill, never a reason to block ordinary schema-upgrade usability.
+
+**Phase 10's operational rule:** before the first real batch import of any size (100–150, then
+the full ~1,500), run `npm run db:protect -- --reason="Phase 10 real collection import"` against
+whatever `DATABASE_URL` that import writes to. From that point on, no normal `test`,
+`test:integration`, `test:e2e`, or casual `db:reset` run — nor a future agent or developer typing
+`db:seed` from habit — can erase it; only a deliberate, exact-name `ALLOW_DESTRUCTIVE_RESEED`
+override can. Regression coverage: `tests/integration/db/dbSafety.test.ts`.
 
 ## Inspecting the database directly
 

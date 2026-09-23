@@ -378,6 +378,24 @@ reads) — confirming the real header row places "Location" at index 14, directl
 "Physical Category" and "Copy Count," and that the real data row rendered the copy's assigned
 location ("Blue Room") correctly. The temporary book was then removed and the Sheet re-synced.
 
+**A real, disclosed platform finding from the Phase 9 data-safety correction's own re-sync
+(2026-09-23):** after the 3 real books were restored (`docs/IMPLEMENTATION_STATUS.md`'s
+data-safety-correction section) and re-synced, their Cover cells read back as
+`#REF! (Please use a desktop web browser to allow access to fetch data from external urls.)`.
+Diagnosed, not assumed: the formula itself reads back correctly via
+`valueRenderOption=FORMULA` (well-formed, correctly escaped), the source `covers.openlibrary.org`
+URL is independently confirmed reachable (a real `curl -L` returns 200 with a real JPEG), and an
+unrelated diagnostic `IMAGE()` formula pointed at a totally different host (`upload.wikimedia.org`)
+produced the byte-for-byte identical message — ruling out anything specific to this data, this
+code, or this host. This is a genuine, documented Google Sheets platform behavior: an
+`IMAGE()`/`IMPORT*`-style external-fetch formula written via the API (never through a human
+typing directly into the Sheets UI) requires a human to open the spreadsheet in an actual
+desktop browser at least once to authorize the external fetch — a headless API write alone
+cannot grant it. No code change resolves this; the one remaining step is a human opening
+`https://docs.google.com/spreadsheets/d/16OZklgGzgIz8fS-SqLBMKc2xKT-B_rORLmQ0tyMHNa0/edit` in a
+real desktop browser once. Every other column (including the new Location column) rendered
+correctly in the same real sync.
+
 **A real, disclosed mistake during this addendum's own testing:** verifying the new
 `library_locations` schema locally involved re-running `npm run db:seed` against the shared
 development database (`DATABASE_URL`) — a destructive truncate-then-reseed script — which

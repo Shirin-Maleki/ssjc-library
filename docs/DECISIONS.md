@@ -2691,3 +2691,26 @@ keeps both paths honestly consistent by construction rather than by convention.
 
 **Relevant files:** `src/lib/intake/persistence.ts`; `src/lib/bulkImport/pipeline.ts`;
 `src/lib/admin/persistence.ts`; `src/lib/bulkImport/jobs.ts`.
+
+## Phase 9 data-safety correction: an explicit, database-stored protection flag, not a naming convention
+
+**Decision:** `src/db/dbSafety.ts`'s `assertSafeToDestroy()` gates `db:seed`/`db:reset` on a flag
+stored IN the target database itself (`system_settings.database_protected`, set only by an
+explicit `npm run db:protect`), with a bypass that must equal the exact database name — rather
+than inferring safety from the database's name, from a naming convention (e.g. "anything
+without `_test`/`_e2e` in the name is protected"), or from a separate allowlist config file.
+
+**Why:** A naming convention cannot distinguish "currently disposable" from "currently holds
+real data I care about" — the very database this incident destroyed real data in was named
+`ssjc_library_dev`, a name that gives no signal either way, and which will legitimately need to
+hold 100–1,500 real Phase 10 books later while still being "the dev database" by name. A flag
+stored in the database itself travels with the data regardless of which connection string or
+env var happens to point at it, requires a deliberate, out-of-band human action to set (never
+accidentally true), and needs no separate config file to keep in sync with reality. The
+override requiring the *exact* database name (never a boolean) is the same "type the thing to
+confirm you mean it" pattern deliberately destructive tools use elsewhere — cheap to implement,
+hard to trigger by habit.
+
+**Relevant files:** `src/db/dbSafety.ts`; `src/db/seed.ts`; `scripts/db/protect.ts`;
+`scripts/db/unprotect.ts`; `tests/integration/db/dbSafety.test.ts`;
+`docs/DATABASE_SETUP.md`'s "Database safety boundary" section.

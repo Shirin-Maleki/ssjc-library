@@ -8,6 +8,7 @@ import { PHYSICAL_CATEGORIES } from "../lib/catalog/categories";
 import { normalizeTitle } from "../lib/search/normalize";
 import { buildSearchIndexText } from "../lib/embeddings/document";
 import type { Book, LanguageCode } from "../lib/catalog/types";
+import { assertSafeToDestroy, DatabaseProtectedError } from "./dbSafety";
 
 /**
  * DEVELOPMENT / DEMO DATA SEED — NOT CONFIRMED SSJC INVENTORY.
@@ -128,6 +129,19 @@ async function main() {
 
   const client = postgres(connectionString, { max: 1 });
   const db = drizzle(client, { schema });
+
+  // Phase 9 data-safety correction — the one executable guard against ever
+  // truncating a database that holds real, non-fixture data. See
+  // `src/db/dbSafety.ts`'s own doc comment for the full incident this
+  // prevents. A database with no explicit `npm run db:protect` marker (every
+  // TEST_DATABASE_URL/E2E_DATABASE_URL target, and any DATABASE_URL nobody
+  // has protected yet) proceeds exactly as before — zero behavior change.
+  try {
+    await assertSafeToDestroy(db, connectionString);
+  } catch (error) {
+    await client.end();
+    throw error;
+  }
 
   console.log(`Seeding ${fixtureBooks.length} development books (truncate-then-seed)...`);
 
@@ -381,6 +395,10 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error("Seed failed:", error);
+  if (error instanceof DatabaseProtectedError) {
+    console.error(error.message);
+  } else {
+    console.error("Seed failed:", error);
+  }
   process.exit(1);
 });

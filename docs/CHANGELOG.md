@@ -4,6 +4,26 @@ A simple, phase-level record of what actually shipped — not a verbose release 
 Entries are dated by when the work was completed; see `docs/IMPLEMENTATION_STATUS.md` for the
 current state and `docs/DECISIONS.md` for the reasoning behind any of these.
 
+## Phase 9 data-safety correction — 2026-09-23
+
+Required before Phase 9 could close: the location addendum's own disclosed data loss (running
+`db:seed` against the database holding real Phase 9 validation books) revealed no executable
+guard existed against it. Fixed with `src/db/dbSafety.ts`: a database becomes protected only via
+an explicit `npm run db:protect`, stored in the database itself; `db:seed`/`db:reset` then
+refuse to run against it without an exact-database-name `ALLOW_DESTRUCTIVE_RESEED` override.
+Zero behavior change for disposable test/E2E databases. Real-verified end to end; the full
+quality-gate suite was run with the dev database deliberately protected throughout and it
+stayed untouched. The 3 real validation books were restored by reprocessing the exact same 3
+source images through the real importer (not fabricated), the real Sheet was revalidated (a
+real NULL-handling bug in the revalidation script's own exclusion query was found and fixed
+before it mattered), and a genuine Google Sheets platform limitation was found and disclosed
+(API-written `IMAGE()` formulas need a one-time human browser authorization — not a code defect).
+Full detail: `docs/DATABASE_SETUP.md`'s "Database safety boundary" section,
+`docs/IMPLEMENTATION_STATUS.md`.
+
+Tests: 696 unit (unchanged), 209 integration (+7, `dbSafety.test.ts`), 152 E2E (unchanged
+count). `npm run typecheck`/`lint`/`build`/`evaluate:search` (41/41) all clean.
+
 ## Phase 9 addendum complete — physical copy locations + Move/Return workflow — 2026-09-23
 
 A bounded follow-up prompted by a real product requirement found while reviewing the Google

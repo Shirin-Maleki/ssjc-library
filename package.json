@@ -19,6 +19,8 @@
     "db:seed": "tsx src/db/seed.ts",
     "db:reset": "tsx src/db/reset.ts",
     "db:check": "drizzle-kit check",
+    "db:protect": "tsx scripts/db/protect.ts",
+    "db:unprotect": "tsx scripts/db/unprotect.ts",
     "embeddings:generate": "tsx scripts/embeddings/generate.ts",
     "search:rebuild-text": "tsx scripts/search/rebuildSearchText.ts",
     "google:authorize": "tsx scripts/google/authorize.ts",

@@ -1654,9 +1654,83 @@ to use real, dynamically-observed state rather than hardcoded assumptions).
 `drizzle/0008_phase9_drop_legacy_current_location_text.sql` — additive-then-corrective, no data
 loss (the dropped column held no data anywhere it was checked).
 
+## Completed work (Phase 9 data-safety correction — 2026-09-23)
+
+A required correction before Phase 9 could close, addressing a real operational defect the
+location addendum's own disclosure surfaced: verifying its new schema locally involved running
+`npm run db:seed` directly against `DATABASE_URL`, destroying the 3 real bulk-imported
+validation books and the real Sheet's sync-state pointer. Root cause: `DATABASE_URL` was
+simultaneously "the database the app uses," "the database bulk import writes real data to," and
+"whatever `db:seed`/`db:reset` truncate unconditionally" — three roles that had never conflicted
+before Phase 9 gave the second one real data worth protecting. `TEST_DATABASE_URL`/
+`E2E_DATABASE_URL` were confirmed, empirically, never at risk (real distinct database names,
+and both global-setup scripts explicitly override the env for their own child-process seed
+calls) — the one real gap was a direct, manual `db:seed`/`db:reset` invocation.
+
+**Fix**: `src/db/dbSafety.ts` — an executable guard, not documentation. A database becomes
+"protected" only via an explicit `npm run db:protect -- --reason="..."`, stored as a
+`system_settings` row so it travels with the database itself. `db:seed`/`db:reset` (which shells
+out to seed) refuse to run against a protected database unless `ALLOW_DESTRUCTIVE_RESEED` is set
+to the *exact* database name — never a boolean. Zero behavior change for any unprotected
+database (every disposable test/E2E target, and any `DATABASE_URL` nobody has protected yet).
+`npm run db:migrate` is deliberately not gated (non-destructive). Real-verified end to end
+against the actual dev database: a protected `db:seed`/`db:reset` genuinely refuses with a clear
+message and exit code 1; a wrong override and a plain `"true"` override are both refused; the
+exact-name override genuinely authorizes a reseed and clears protection afterward, exactly as
+designed. The full quality-gate suite (unit/integration/E2E/build) was run with the dev database
+deliberately left protected throughout — it stayed at its exact starting book count the entire
+time, empirical proof the suite cannot touch it. 7 new integration tests
+(`tests/integration/db/dbSafety.test.ts`) exercise the guard directly against
+`TEST_DATABASE_URL` without ever invoking the real destructive truncate.
+
+**Real 3-book restoration**: the exact same 3 source images from the original validation
+(`IMG_8320.JPG`/`IMG_8321.JPG`/`IMG_8322.JPG`, confirmed via unchanged deterministic Drive
+enumeration — same file counts, same first-5 order as the original run) were reprocessed via
+`import:create-job --limit=3 --location=blue-room` + `import:run`: 3 real Drive downloads, 3
+real Gemini vision calls, 3 real Open Library lookups (no cache reuse possible — the cache table
+was also lost), all completing automatically. Resulting books: "AMAZING AIRPLANES," "Giraffes
+Can't Dance," "If You Were My Bunny" (the AI's own capitalization reading differed slightly from
+the original run's "GIRAFFES CAN'T DANCE" — a genuine, honestly-reported difference, not
+fabricated) — each active, exactly one copy, all explicitly assigned to Blue Room. Real cost:
+avg $0.00341/item (consistent with the original run's $0.00345/item). Real embeddings generated
+(`embeddings:generate --mode=missing`); real full-text findability reconfirmed
+(`search_vector @@ plainto_tsquery('english', 'giraffes dance')` returns exactly the restored
+book).
+
+**Real Sheet revalidation** (same spreadsheet, `16OZklgGzgIz8fS-SqLBMKc2xKT-B_rORLmQ0tyMHNa0`,
+reconnected after its own sync-state pointer was also lost): dev fixtures excluded exactly as
+before (a real NULL-handling bug in the exclusion query — `ne(coverSourceType, 'bulk_import')`
+silently excludes NULL rows under SQL's three-valued logic, so dev fixtures, which have no
+`cover_source_type`, were never actually being excluded on the first corrected attempt — found
+and fixed before it mattered). Final real Sheet: exactly 4 rows (1 header + the 3 restored real
+books), Location correctly shows "Blue Room" for all three, Copy Count correctly shows 1, no
+duplicate rows, no `drive.google.com` URLs anywhere in the synced data. **A real, disclosed
+finding, not a codebase defect**: the Cover column's `IMAGE()` cells currently read back as
+`#REF! (Please use a desktop web browser to allow access to fetch data from external urls.)` —
+a genuine, documented Google Sheets platform behavior: API-written `IMAGE()`/`IMPORT*`-style
+external-fetch formulas require a human to open the spreadsheet in an actual desktop browser at
+least once to authorize the external fetch; a headless API write alone cannot grant it. Verified
+NOT a code defect: the formula string itself reads back correctly via
+`valueRenderOption=FORMULA`, the source URL is independently confirmed reachable (real 200,
+real JPEG), and an unrelated diagnostic URL on a completely different host showed the identical
+message — ruling out anything specific to this data or this code. No code change addresses this;
+the one remaining step is a human opening the real spreadsheet in a desktop browser once.
+
+**Move/Return regression**: re-ran `tests/integration/db/locations.test.ts` (16/16) and both
+Move E2E specs (3/3) against controlled data — one-copy move, several-copies-one-location,
+copies-split-across-locations, exactly-one-copy-moves, source/destination quantity deltas, no
+copy/book created by a move, and human confirmation required (structural — no code path reaches
+`moveCopyAction` without explicit UI confirmation) all reconfirmed with zero UI scope change.
+
+**Quality gates** (final run, dev database protected throughout): 696 unit, 209 integration
+(+7), 152 E2E (one intermediate run hit the same pre-existing, unrelated `adminReview.spec.ts`
+flake noted in earlier Phase 9 entries — confirmed unrelated by a clean 152/152 retry).
+`typecheck`/`lint`/`build`/`evaluate:search` (41/41) all clean.
+
 ## Next recommended task
 
-Phase 9 (including this addendum) is implemented and real-validated. **Phase 10 has not started
+Phase 9 (including its location addendum and this data-safety correction) is implemented and
+real-validated. **Phase 10 has not started
 and may only begin once the driver thread explicitly decides to start it** — this document being
 current is not itself that decision. Whoever picks up Phase 10 should read this file's "Completed work (Phase 9...)" section
 and `docs/DECISIONS.md`'s Phase 9 entries before starting, and must not need a new bulk importer or

@@ -204,6 +204,16 @@ Invariants that must hold regardless of what a later phase adds:
   database that might hold real, valuable, non-fixture data — check what's there first.** Full
   disclosure: `docs/GOOGLE_INTEGRATION.md`'s Phase 9 addendum section.
 
+**DATABASE SAFETY (Phase 9 data-safety correction) — READ BEFORE RUNNING `db:seed`/`db:reset`
+AGAINST ANY DATABASE THAT MIGHT HOLD REAL DATA.** `DATABASE_URL` is simultaneously "the database
+the app uses," "the database `npm run import:*` writes real books to," and "whatever
+`db:seed`/`db:reset` truncate" — a real incident (disclosed in `docs/IMPLEMENTATION_STATUS.md`)
+happened because of exactly this. Before starting any real batch import (Phase 10 included), run
+`npm run db:protect -- --reason="..."` against that database — from then on, `db:seed`/`db:reset`
+refuse to run against it without an exact-database-name `ALLOW_DESTRUCTIVE_RESEED` override, so
+no ordinary test run, casual reset, or habit can erase it. See `docs/DATABASE_SETUP.md`'s
+"Database safety boundary" section.
+
 **PHASE 10 (Real Collection Import + Taxonomy Finalization) HAS NOT STARTED.** It may only begin
 once the driver thread explicitly decides to start it — this document being current is not itself
 that decision — and per Phase 9's own design intent, it should not need a new importer or a new
