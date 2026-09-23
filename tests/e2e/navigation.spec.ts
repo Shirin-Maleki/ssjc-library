@@ -6,29 +6,14 @@ test.describe("Home navigation", () => {
     await loginAsStaff(page);
   });
 
-  // "Find a Book" (Phase 2), "Reading Lists" / "Library Guide" (Phase 3), and
-  // "Add a Book" (Phase 7) are intentionally not in this list any more — each
-  // replaced its placeholder with a real experience, covered by its own spec file
-  // instead (find.spec.ts, readingLists.spec.ts, guide.spec.ts, addBook.spec.ts).
-  const placeholders: Array<{ link: string; path: string; heading: string; copy: string }> = [
-    {
-      link: "Teacher Catalog",
-      path: "/teacher-catalog",
-      heading: "Teacher Catalog",
-      copy: "This will open a shared, read-only spreadsheet view",
-    },
-  ];
-
-  for (const item of placeholders) {
-    test(`navigating to ${item.link} shows a polished placeholder, not a broken page`, async ({ page }) => {
-      await page.getByRole("link", { name: item.link }).click();
-      await expect(page).toHaveURL(item.path);
-      await expect(page.getByRole("heading", { name: item.heading })).toBeVisible();
-      await expect(page.getByText(item.copy)).toBeVisible();
-      await page.getByRole("link", { name: "Back to Home" }).click();
-      await expect(page).toHaveURL("/home");
-    });
-  }
+  // "Find a Book" (Phase 2), "Reading Lists" / "Library Guide" (Phase 3),
+  // "Add a Book" (Phase 7), and "Teacher Catalog" (Phase 9) are intentionally
+  // not placeholders any more — each replaced its placeholder with a real
+  // experience, covered by its own spec file instead (find.spec.ts,
+  // readingLists.spec.ts, guide.spec.ts, addBook.spec.ts, teacherCatalog.spec.ts
+  // — the Teacher Catalog scenarios both live there, in one serially-ordered
+  // file, specifically to avoid racing a shared `system_settings` row against
+  // whatever order separate spec files happen to be scheduled in).
 
   test("the two primary actions are visually dominant over secondary navigation", async ({ page }) => {
     const findTile = page.getByRole("link", { name: /Find a Book/ });
