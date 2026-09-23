@@ -1584,11 +1584,81 @@ desktop/Chromium) passed 149/149 on its final clean run. An earlier run in this 
 known, pre-existing, unrelated `adminReview.spec.ts` timing flake and (separately) the Teacher
 Catalog cross-file race before it was fixed — both are resolved; the final run is clean.
 
+## Completed work (Phase 9 addendum — physical copy locations + Move/Return workflow — 2026-09-23)
+
+A bounded, real-implemented follow-up to Phase 9, prompted by a real product requirement
+discovered while reviewing the Google Sheet: location belongs to the physical copy, never the
+bibliographic book, and teachers needed a way to record where a copy currently is without
+identifying "Copy #1 vs Copy #2."
+
+**Schema**: new `library_locations` table (`id`, `slug`, `display_name`, `location_type` enum,
+`is_active`, timestamps) — `physical_categories`' own established shape, reused. `book_copies`'
+original free-text `current_location` column (confirmed, by a repo-wide search, never read or
+written by any real code path) replaced with `current_location_id`, a nullable FK to
+`library_locations`. Two migrations (`0007` adds, `0008` drops the old column) — split
+specifically to route around `drizzle-kit generate`'s interactive rename-ambiguity prompt in a
+non-interactive environment (`docs/DECISIONS.md`). `home_location`/`availability_status` are
+untouched. Full detail: `docs/DATA_MODEL.md` §12b.
+
+**Move/Return workflow**: a new teacher-facing page, `/move` (`src/components/move/
+MoveBookFlow.tsx`), added to secondary nav as "Move a Book." Photo → `identifyBookForMoveAction`
+extracts visible identity evidence only (reusing Phase 7's `prepareAnalysisImage`/`analyzeCover`,
+never the full Add Book pipeline — no metadata reconciliation, no duplicate analysis, no
+enrichment, no embedding generation) → matches against the real catalog via the same
+`SearchService` hybrid search Find uses → teacher confirms the book → the real per-location copy
+breakdown is shown (`getCopyLocationSummaryAction`) → teacher picks a source (skipped when only
+one bucket exists) and a destination → `moveCopyAction` atomically moves exactly one physical
+copy. The movement photo is processed in memory only and never persisted anywhere. Location
+administration (`/admin/locations`) mirrors Taxonomy's exact CRUD conventions.
+
+**Bulk import integration**: `import:create-job` gained an optional `--location=<slug>`,
+validated against the real active-location list before the job is created; every copy that job
+creates (whether through automatic completion or a later manual admin approval of a
+`needs_review` item) gets that location — reading from one shared function
+(`getJobInitialLocationId`) so both paths can never disagree. Omitting `--location` leaves
+copies with no location recorded — never a guessed default.
+
+**Google Sheets**: a 17th column, "Location," inserted between "Physical Category" and "Copy
+Count," built via one batch query per sync (`getCopyLocationSummaryForBooks`) and a deterministic
+formatter (`formatLocationSummary`) — reuses the exact same unconditional text-cell escaping
+every other column already has.
+
+**A real, disclosed mistake made and corrected during this addendum's own testing**: verifying
+the new schema locally involved running `npm run db:seed` (a destructive truncate-then-reseed)
+against the shared development database, which unintentionally deleted the 3 real bulk-imported
+books and the real spreadsheet's sync-state pointer from the original Phase 9 real validation.
+The real spreadsheet itself was unaffected; the pointer was reconnected to it directly. A fresh
+bulk-import run was deliberately NOT performed to recreate the lost books — the addendum
+explicitly forbids processing more collection photographs merely to test this feature. The real
+persistent Sheet was instead validated with one temporary, clearly-labeled test book (created and
+removed within the same validation pass), and is left showing zero real active books — an honest
+state, never fabricated substitute data. Full disclosure: `docs/GOOGLE_INTEGRATION.md`'s Phase 9
+addendum section.
+
+**Tests**: 696 unit (+7: `formatLocationSummary` + Location-column row-shape coverage), 202
+integration (+21, real Postgres: 16 new in `locations.test.ts` covering the location read/move/
+admin logic directly, 3 new Location-column cases in `googleSheetsSync.test.ts`, 2 new
+`--location` threading cases in `bulkImport.test.ts`), 152 E2E (+3: `moveBook.spec.ts`'s
+side-effect-free no-match case on every project, `moveBookLocation.spec.ts`'s real move against
+the shared seeded "Gruffalo" copies, desktop-only and serially-ordered to avoid the same class of
+cross-project/cross-file race `teacherCatalog.spec.ts` already had to solve). `npm run
+typecheck`/`npm run lint`/`npm run build`/`npm run evaluate:search` (41/41) all clean. The full
+E2E suite passed 152/152 twice in a row on its final clean runs; one intermediate run hit the
+same pre-existing, unrelated `adminReview.spec.ts` timing flake noted in the original Phase 9
+entry above (confirmed unrelated — it passed cleanly on every other run) plus two real, fixed
+issues in this addendum's own new tests (a wrong assumption that "The Gruffalo" is a unique title
+in the shared E2E catalog, and a wrong assumption about its starting copy count — both corrected
+to use real, dynamically-observed state rather than hardcoded assumptions).
+
+**Migrations**: `drizzle/0007_phase9_library_locations.sql`,
+`drizzle/0008_phase9_drop_legacy_current_location_text.sql` — additive-then-corrective, no data
+loss (the dropped column held no data anywhere it was checked).
+
 ## Next recommended task
 
-Phase 9 is implemented and real-validated. **Phase 10 has not started and may only begin once the
-driver thread explicitly decides to start it** — this document being current is not itself that
-decision. Whoever picks up Phase 10 should read this file's "Completed work (Phase 9...)" section
+Phase 9 (including this addendum) is implemented and real-validated. **Phase 10 has not started
+and may only begin once the driver thread explicitly decides to start it** — this document being
+current is not itself that decision. Whoever picks up Phase 10 should read this file's "Completed work (Phase 9...)" section
 and `docs/DECISIONS.md`'s Phase 9 entries before starting, and must not need a new bulk importer or
 a new Sheets sync architecture to grow the sample size and finalize taxonomy (§48 of the Phase 9
 brief) — Phase 9 was built specifically so Phase 10 can reuse it as-is.

@@ -18,6 +18,23 @@ creating a category, renaming one, deciding a suggestion's fate. Do not read
 anything in this phase as "AI discovered the school's final shelving system"; it
 did not, and nothing in Phase 8 claims otherwise.
 
+## Category ≠ Location (Phase 9 addendum)
+
+Physical Category and physical copy **Location** (`library_locations`,
+`docs/DATA_MODEL.md` §12b) are deliberately separate concepts that this document and
+`docs/ARCHITECTURE.md` §8b both take care never to conflate:
+
+- **Physical Category** — where/how a *book* (the bibliographic/edition record) belongs in the
+  shelving taxonomy. Exactly one per book. Human-controlled. Changes rarely. Everything in this
+  document is about this concept.
+- **Current Location** — where each physical *copy* of a book currently sits (a corridor, a
+  classroom, or another space). Can change often — every time a copy is moved or returned via
+  the `/move` workflow. Lives on `book_copies`, never on `books`.
+
+A category rename never touches location data, and a copy move never touches a book's category.
+Taxonomy finalization (Phase 10) is exclusively about the first concept; nothing about the
+Phase 9 addendum's location model changes when or how that finalization happens.
+
 ## Stable identity vs. display label
 
 - `physical_categories.id` (uuid) is the real relational identity — `books.physical_category_id`

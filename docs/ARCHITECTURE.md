@@ -208,6 +208,45 @@ sync bookkeeping (last synced timestamp, content hash, status) separately. Full 
 [`docs/BULK_IMPORT.md`](BULK_IMPORT.md) (bulk-import half) and
 [`docs/GOOGLE_INTEGRATION.md`](GOOGLE_INTEGRATION.md) (Sheets provider architecture).
 
+**Phase 9 addendum — Location column:** a 16th visible column, "Location," sits between
+"Physical Category" and "Copy Count" (§8b below covers the underlying model). It's built the
+same way every other column is — `getCopyLocationSummaryForBooks()` batch-queries every
+visible book's current copy-location breakdown in one query, `formatLocationSummary()`
+deterministically renders it ("Corridor 218" / "Corridor 218 (2)" /
+"Corridor 218 (1), Blue Room (1)"), and the result goes through the exact same unconditional
+`escapeTextCell()` every other text column already uses — no new formula-injection surface.
+Real-validated against the live Sheets API (see `docs/GOOGLE_INTEGRATION.md`).
+
+## 8b. Physical copy locations + Move/Return workflow (Phase 9 addendum)
+
+**BOOK ≠ COPY, CATEGORY ≠ LOCATION** — see [`docs/DATA_MODEL.md`](DATA_MODEL.md) §12b for the
+full data-model rationale. In short: a book's physical category (one per book, rarely changes,
+human-controlled) and a copy's current location (one per physical copy, can change often) are
+deliberately independent concepts living on different tables (`books.physical_category_id` vs.
+`book_copies.current_location_id → library_locations`).
+
+**The teacher-facing workflow** (`/move`, `src/components/move/MoveBookFlow.tsx`) is
+deliberately NOT the Add Book pipeline reused wholesale — it reuses exactly the pieces that
+make sense (Phase 7's `prepareAnalysisImage`, the same `analyzeCover` vision call, the Phase 5
+`SearchService` hybrid search Find itself uses) and skips everything Add Book needs that this
+workflow doesn't: no metadata-provider reconciliation, no duplicate analysis, no category/
+enrichment suggestion, no embedding generation, no `ingestion_item`/`books` row of any kind.
+The photo's bytes are processed in memory for one request and never persisted (never uploaded
+to Drive, never written to disk) — there is no ever-growing archive of checkout/return photos.
+
+Flow: photo → `identifyBookForMoveAction` extracts visible identity evidence only → matches
+against the existing catalog via real hybrid search → teacher explicitly confirms which book →
+`getCopyLocationSummaryAction` shows real per-location copy counts → teacher picks a source
+(skipped when only one bucket exists) and a destination → `moveCopyAction` atomically moves
+exactly one physical copy (`src/lib/locations/persistence.ts`'s `moveCopy()`, reusing the
+established select-a-candidate-then-conditional-UPDATE claim pattern, §16 below). Never
+infers which specific physical copy a photo shows, and never moves anything without an
+explicit teacher confirmation at both the book-match and destination steps.
+
+Location administration (`/admin/locations`) mirrors the existing Taxonomy admin page's exact
+CRUD conventions — add / rename / change type / activate / deactivate, with deactivation
+blocked while any copy still points there. No enterprise inventory-management dashboard.
+
 ## 9. AI provider abstraction (as built, Phase 7)
 
 The planning-stage `VisionProvider`/`LLMProvider`/`SpeechToTextProvider` split and
@@ -738,6 +777,15 @@ Not created in Phase 0 — this is the target structure Phase 1 will actually cr
 Unchanged — see [`docs/IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md).
 
 ## 28. Changelog
+
+**2026-09-23 — Phase 9 addendum (physical copy locations + Move/Return workflow):**
+- New §8b: `library_locations` + `book_copies.current_location_id`, and the
+  `/move` teacher workflow. See `docs/DATA_MODEL.md` §12b for the full data
+  model and `docs/BULK_IMPORT.md` for the importer's `--location` option.
+- §8 (Google Sheets) gains a Location column, built from the same
+  location model via a batch query + deterministic formatter.
+- No changes to Physical Category (§17 Taxonomy), Search (§12), or Admin
+  Review (§19) architecture — location is a genuinely separate concern.
 
 **2026-09-21 — Phase 7 final closure pass:**
 - §11's single-request upload Route Handler (`src/app/api/intake/cover/route.ts`,

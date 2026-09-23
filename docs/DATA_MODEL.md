@@ -100,9 +100,9 @@ entirely (semantic search was out of scope that phase); Phase 5 added them, plus
 |---|---|---|
 | `id` | uuid PK | never shown to teachers in v1 UI |
 | `book_id` | uuid, FK → `books.id`, not null | |
-| `home_location` | text | nullable, e.g. "Preschool Library" |
-| `current_location` | text | nullable, e.g. "Blue Room" — independent of `home_location` so a copy can be temporarily elsewhere; future-ready, unused by any v1 screen |
-| `availability_status` | enum(`on_shelf`,`in_classroom`,`unknown`), not null default `on_shelf` | future-ready, unused by any v1 screen |
+| `home_location` | text | nullable, e.g. "Preschool Library" — still free text; still future-ready and unused by any v1 screen (unchanged from the original draft) |
+| `current_location_id` | uuid, FK → `library_locations.id`, nullable | **Phase 9 addendum.** Replaces the original free-text `current_location` column (confirmed, by a repo-wide search, to have never been read or written by any real code path) with a real, stable FK — see §12b. `null` is a legitimate, honest "no location recorded for this copy yet" state, not a placeholder for a guessed default. |
+| `availability_status` | enum(`on_shelf`,`in_classroom`,`unknown`), not null default `on_shelf` | still future-ready, unused by any v1 screen |
 | `acquired_at` | timestamptz | nullable |
 | `source_ingestion_item_id` | uuid, FK → `ingestion_items.id` | nullable — which ingestion event registered this specific copy. A partial unique index (Phase 8 correction pass, `where source_ingestion_item_id is not null`) enforces "one ingestion item produces at most one physical copy" as a database-level backstop — the real guarantee is the application-level atomic-claim pattern in `src/lib/admin/persistence.ts`; this index is defense-in-depth, never something a caller is expected to catch a raw unique-violation from. |
 | `created_at` | timestamptz | |
@@ -113,10 +113,49 @@ the catalog (the "Add another copy" duplicate-resolution outcome, §7) now inser
 record. "Copies: 2" shown to a teacher is simply `count(*) from book_copies where book_id =
 ?`, computed on demand, not stored/denormalized anywhere (so it can never drift). This
 directly enables "2 copies of the same edition, one in the preschool library, one in Blue
-Room" without a checkout system — `current_location` differs per copy row, nothing else
+Room" without a checkout system — `current_location_id` differs per copy row, nothing else
 about the record needs to duplicate. No per-copy UI exists in v1; `book_copies.id` is never
-exposed to teachers, and admins see it only as a location list behind the derived count, if
-that's ever built.
+exposed to teachers (the Move/Return workflow, §12b, only ever shows location names and
+counts), and admins see it only as a location list behind the derived count.
+
+### §12b. `library_locations` — physical copy locations (Phase 9 addendum)
+
+**BOOK ≠ COPY, CATEGORY ≠ LOCATION.** These are two genuinely independent axes, deliberately
+never conflated:
+
+- **Physical Category** (`physical_categories`, §12 below): where/how a *book* (the
+  bibliographic/edition record) belongs in the shelving taxonomy — exactly one per book,
+  human-controlled, changes rarely.
+- **Current Location** (`library_locations`, this section): where each physical *copy*
+  currently sits — a corridor, classroom, or other space — can change often (every time a
+  copy is moved or returned), and lives on `book_copies`, never on `books`.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | uuid PK | never shown to teachers |
+| `slug` | text, unique, not null | stable identity — generated once at creation, never regenerated on rename, exactly like `physical_categories.slug` |
+| `display_name` | text, not null | the only thing an admin edits when "renaming" a location |
+| `location_type` | enum(`corridor`,`classroom`,`other`), not null default `other` | a real, small, stable classification — not a reason to invent new enum values for one-off spaces |
+| `is_active` | boolean, not null default `true` | an inactive location can never be a new copy's destination (enforced in `src/lib/locations/persistence.ts`'s `moveCopy`), and cannot itself be deactivated while any copy currently points to it |
+| `created_at` / `updated_at` | timestamptz | |
+
+A book may have copies at several locations at once (the addendum's own example: *The Very
+Hungry Caterpillar* — Corridor 218: 2 copies, Blue Room: 1, Forest Room: 1). Teachers are
+never asked to identify "Copy #1" vs "Copy #2" — identical copies are operationally
+interchangeable unless/until unique QR/barcode labels are added later (a genuinely additive
+future change: a nullable `book_copies.label_code` column, never a redesign of this model).
+`src/lib/locations/persistence.ts`'s `getCopyLocationSummary()` is the one place that turns a
+book's raw `book_copies` rows into the teacher-facing `"Corridor 218 (2), Blue Room (1)"`-style
+summary the Move/Return workflow and the Google Sheet's Location column both use.
+
+**Moving a copy** (`moveCopy()`) is a single atomic conditional `UPDATE ... WHERE id = $1 AND
+current_location_id IS NOT DISTINCT FROM $2` on a specific `book_copies` row selected via a
+plain `SELECT ... LIMIT 1` immediately before it — the exact same select-a-candidate-then-
+conditional-UPDATE pattern already established for ingestion-item claiming
+(`src/lib/bulkImport/claim.ts`, itself reused from Phase 8's `approveReviewLater`/
+`resolveDuplicate`), never a new concurrency primitive. It never infers which specific
+physical copy a photo shows — a teacher confirms both the book and, when a copy could have
+come from more than one location, which location it actually came from.
 
 **Is a separate "Work" entity worthwhile?** No — and this is a distinct question from the
 copies split above. A true bibliographic Work entity (FRBR-style Work → Expression →
@@ -512,7 +551,8 @@ existed for reference completeness or future-proofing rather than a current, sta
 | Age ranges | `books.age_min_months` / `age_max_months` |
 | Read-aloud duration | `books.read_aloud_minutes_estimate`, `books.read_duration_band` |
 | **Physical copies, distinct from the catalog record** | `book_copies` |
-| **Future home/current location, per physical copy** | `book_copies.home_location` / `current_location` / `availability_status` |
+| Current location, per physical copy (Phase 9 addendum) | `book_copies.current_location_id` → `library_locations` |
+| Home location / availability (still future-ready) | `book_copies.home_location` / `availability_status` |
 | Review flags | `review_flags` |
 | Duplicate relationships | `book_duplicates` |
 | Metadata provenance (with history) | `book_field_provenance` |
@@ -543,6 +583,7 @@ erDiagram
     INGESTION_JOBS ||--o{ INGESTION_ITEMS : contains
     INGESTION_ITEMS }o--o| BOOK_COPIES : registers
     BOOKS ||--o| BOOK_SHEET_SYNC : projected_as
+    BOOK_COPIES }o--o| LIBRARY_LOCATIONS : currently_at
 ```
 
 ## 15. Changelog
@@ -691,3 +732,23 @@ design:**
   defense-in-depth backstop for "one ingestion item produces at most one physical copy," see
   above. One migration (`drizzle/0005_phase8_correction_exactly_once_copy.sql`, one
   `CREATE UNIQUE INDEX` statement). No new tables, no other schema changes.
+
+**2026-09-22 — Phase 9 (Google Sheets + Bulk Import Infrastructure):**
+- **`ingestion_items` gains one partial unique index**, `ingestion_items_active_drive_file_unique`
+  (`drive_file_id`, scoped to `pending`/`processing`/`needs_review` statuses only) — prevents the
+  same Drive source file from being independently processed through two separate active
+  ingestion items at once. One migration (`drizzle/0006_phase9_bulk_import_dedup.sql`). No new
+  tables (Google Sheets sync state reuses the existing `system_settings`/`book_sheet_sync`
+  tables; the bulk importer reuses `ingestion_jobs`/`ingestion_items`/`book_copies` unchanged).
+
+**2026-09-23 — Phase 9 addendum (physical copy locations + Move/Return workflow):**
+- **New `library_locations` table** (`id`, `slug`, `display_name`, `location_type` enum,
+  `is_active`, timestamps) — see §12b above.
+- **`book_copies.current_location` (free text, confirmed unused by any real code path) replaced
+  with `book_copies.current_location_id`** (uuid, FK → `library_locations.id`, nullable) — a
+  stable reference rather than free-form text, so renaming a location never orphans a copy's
+  recorded location. `home_location`/`availability_status` are untouched.
+- Two migrations, deliberately split to avoid `drizzle-kit generate`'s rename-ambiguity prompt
+  in a non-interactive environment: `drizzle/0007_phase9_library_locations.sql` (adds the new
+  table, column, FK, and index) and `drizzle/0008_phase9_drop_legacy_current_location_text.sql`
+  (drops the old text column). No data existed in the old column to migrate (confirmed unused).

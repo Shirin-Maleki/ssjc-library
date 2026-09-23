@@ -143,6 +143,28 @@ categories (never creates or activates one); a weak category fit routes to `need
 than being force-shelved. Collection-wide taxonomy clustering, bulk re-shelving, and category
 restructuring are explicitly Phase 10 work using Phase 8's existing human tools — not built here.
 
+## Initial copy location (Phase 9 addendum)
+
+`import:create-job` accepts an optional `--location=<slug>`, resolved and validated against the
+real, currently-active `library_locations` list (the same list the Move/Return workflow's
+destination picker uses) before the job is ever created — an unknown or inactive slug fails
+immediately with the list of valid options, never silently falling back to a guessed default.
+The resolved location id is stored once, in `ingestion_jobs.config.initialLocationId`, and every
+physical copy that job creates — whether through the automatic completion path (`saveNewBook`)
+or through an admin's later manual Review-Later/duplicate-resolution approval of an item that
+instead landed in `needs_review` — reads it from that one place
+(`getJobInitialLocationId()`, `src/lib/intake/persistence.ts`), so the two paths can never
+silently disagree about a job's configured starting location.
+
+Omitting `--location` entirely leaves every copy that job creates with `current_location_id`
+left `null` ("location not recorded") — the same honest default any other copy has. **This
+importer never assumes imported photos are physically in Corridor 218 (or anywhere else)
+unless an operator explicitly says so.**
+
+```
+npm run import:create-job -- --limit=10 --location=corridor-218
+```
+
 ## CLI reference
 
 ```

@@ -365,3 +365,29 @@ identity; there is no separate Sheets authentication to configure or explain. Se
 `docs/ARCHITECTURE.md` §8 for the sync-mechanism design and `docs/GOOGLE_SETUP.md` for the one
 real, one-time Google Cloud Console step this phase's real validation found was needed (enabling
 the Sheets API for the project — not a scope or credential change).
+
+## Real validation evidence (2026-09-23, Phase 9 addendum — Location column)
+
+Real-validated against the same live, persistent spreadsheet
+(`16OZklgGzgIz8fS-SqLBMKc2xKT-B_rORLmQ0tyMHNa0`) from the original Phase 9 real Sheets
+validation. A temporary, clearly-labeled validation book with a real `library_locations`
+assignment was synced for real via `syncCatalogToSheet()` against the live Sheets API, then the
+Sheet's own values were independently read back with a direct, real
+`spreadsheets.values.get` call (not this application's own provider abstraction, which never
+reads) — confirming the real header row places "Location" at index 14, directly between
+"Physical Category" and "Copy Count," and that the real data row rendered the copy's assigned
+location ("Blue Room") correctly. The temporary book was then removed and the Sheet re-synced.
+
+**A real, disclosed mistake during this addendum's own testing:** verifying the new
+`library_locations` schema locally involved re-running `npm run db:seed` against the shared
+development database (`DATABASE_URL`) — a destructive truncate-then-reseed script — which
+unintentionally deleted the 3 real bulk-imported books (and the `system_settings` row pointing
+at the real spreadsheet) from the original Phase 9 real small-batch validation. The real
+spreadsheet itself was untouched (Google Sheets aren't affected by a local Postgres truncate)
+and the sync-state pointer was reconnected to it directly rather than creating a confusing
+duplicate. **This addendum's own real Sheets validation therefore could not include those
+same 3 books**, and a fresh bulk-import run was deliberately NOT performed to recreate them —
+the addendum explicitly forbids processing more collection photographs merely to test this
+feature. The real persistent Sheet is left showing the current, honest state (dev fixtures
+excluded, since they are not real inventory) rather than fabricated substitute data. See
+`docs/IMPLEMENTATION_STATUS.md`'s Phase 9 addendum section for the full disclosure.

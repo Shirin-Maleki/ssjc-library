@@ -377,6 +377,30 @@ Full architecture in `docs/AI_PIPELINE.md`; the upload-architecture correction
   Phase 7 identification/enrichment schema (title/authors/ISBN/etc.), never
   anything else.
 
+## Move/Return workflow (Phase 9 addendum)
+
+- **The movement photo is never persisted anywhere** — `identifyBookForMoveAction`
+  reads the uploaded photo's bytes into memory, passes them through the exact
+  same `prepareAnalysisImage`/`analyzeCover` calls Add Book uses, and discards
+  them at the end of that one request. Never uploaded to Drive, never written
+  to disk, never stored as a database column — there is no archive of
+  checkout/return photos to secure or leak.
+- **The workflow never runs the Add Book pipeline** — no metadata-provider
+  reconciliation, no duplicate analysis, no category/enrichment suggestion, no
+  embedding generation, and no `ingestion_item`/`books` row of any kind is ever
+  created by a move. It is a read (search) followed by exactly one bounded,
+  audited `book_copies` mutation, gated on two explicit teacher confirmations
+  (which book, then which destination).
+- **No new authentication surface** — `identifyBookForMoveAction`,
+  `getCopyLocationSummaryAction`, and `moveCopyAction` each independently call
+  `requireStaffSession()` first, the same guard every other Server Action in
+  this codebase uses; location administration (`/admin/locations`) requires
+  `requireAdminSession()`, identical to Taxonomy management.
+- **A move is truthfully audited** — `moveCopy()` writes a real `audit_log`
+  row (`book_copy_moved`) recording the copy, previous location, new location,
+  and actor label, reusing the existing narrow audit table rather than a new
+  history subsystem.
+
 ## What's explicitly out of scope through Phase 9
 
 - The rate limiter is still in-memory, not backed by the now-real `login_attempts` table (see

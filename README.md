@@ -16,21 +16,31 @@ exactly what exists right now versus what is planned.
 
 ## Project status
 
-**Current phase: Phase 9 — Google Sheets + Bulk Import Infrastructure — implemented and
-real-validated (2026-09-23).** A real, persistent Google Sheet ("SSJC Library Catalog") now
-syncs from canonical PostgreSQL (`npm run sheets:sync`), and a standalone bulk-import CLI/worker
-(`npm run import:*`) turns Drive photographs into real catalog books by reusing Phase 7's intake
-pipeline end to end — never a second implementation of it. Both were validated against real
-external services: real Drive enumeration found 1,618 real images in the actual SSJC collection;
-a real bounded 3-image run completed automatically (real Drive/Gemini/Open Library calls) into 3
-real active catalog books, one confirmed findable through Find's own real search; a real Sheets
-create/sync/reuse round trip completed against the live Google account. **The full ~1,500-image
-collection was NOT processed** — only this small, bounded validation sample. Full detail:
-`docs/IMPLEMENTATION_STATUS.md`, `docs/BULK_IMPORT.md` (new), `docs/DECISIONS.md`. One additive
-migration (`drizzle/0006_...`), no new tables. Phase 8 (Admin Review + Taxonomy), Phase 7 (Add a
-Book), Phase 6 (Google Drive connection), and Phase 5 (real search architecture) remain complete
-and approved, unaffected except where Phase 9 built directly on their infrastructure. Find a
-Book, Reading Lists, voice search, and the core Add a Book flow are all unaffected. See
+**Current phase: Phase 9 — Google Sheets + Bulk Import Infrastructure, including its physical-
+copy-locations addendum — implemented and real-validated (2026-09-23).** A real, persistent
+Google Sheet ("SSJC Library Catalog") now syncs from canonical PostgreSQL (`npm run
+sheets:sync`), and a standalone bulk-import CLI/worker (`npm run import:*`) turns Drive
+photographs into real catalog books by reusing Phase 7's intake pipeline end to end — never a
+second implementation of it. Both were validated against real external services: real Drive
+enumeration found 1,618 real images in the actual SSJC collection; a real bounded 3-image run
+completed automatically (real Drive/Gemini/Open Library calls) into 3 real active catalog books,
+one confirmed findable through Find's own real search; a real Sheets create/sync/reuse round
+trip completed against the live Google account. **The full ~1,500-image collection was NOT
+processed** — only this small, bounded validation sample.
+
+**Addendum (same day):** physical copy location is now tracked separately from a book's shelving
+category — a new `library_locations` table, a teacher-facing "Move a Book" workflow (`/move`)
+that photographs a cover, matches it against the catalog, and moves exactly one physical copy
+after explicit confirmation, an optional `--location` on the bulk importer, and a Location
+column in the Sheet. Real-validated against the live Sheets API and at real phone width. See
+`docs/DATA_MODEL.md` §12b and `docs/ARCHITECTURE.md` §8b.
+
+Full detail: `docs/IMPLEMENTATION_STATUS.md`, `docs/BULK_IMPORT.md`, `docs/DECISIONS.md`. Three
+additive/corrective migrations (`drizzle/0006_...` through `0008_...`), one new table
+(`library_locations`). Phase 8 (Admin Review + Taxonomy), Phase 7 (Add a Book), Phase 6 (Google
+Drive connection), and Phase 5 (real search architecture) remain complete and approved,
+unaffected except where Phase 9 built directly on their infrastructure. Find a Book, Reading
+Lists, voice search, and the core Add a Book flow are all unaffected. See
 `docs/IMPLEMENTATION_STATUS.md` for exactly what's built, `docs/DATABASE_SETUP.md` for the
 database itself, `docs/SEARCH.md` for the full search architecture, and
 `docs/GOOGLE_INTEGRATION.md`/`docs/GOOGLE_SETUP.md` for the Drive/Sheets integration.

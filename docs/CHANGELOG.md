@@ -4,6 +4,33 @@ A simple, phase-level record of what actually shipped — not a verbose release 
 Entries are dated by when the work was completed; see `docs/IMPLEMENTATION_STATUS.md` for the
 current state and `docs/DECISIONS.md` for the reasoning behind any of these.
 
+## Phase 9 addendum complete — physical copy locations + Move/Return workflow — 2026-09-23
+
+A bounded follow-up prompted by a real product requirement found while reviewing the Google
+Sheet: location belongs to the physical copy, never the bibliographic book. Full detail:
+`docs/DATA_MODEL.md` §12b, `docs/ARCHITECTURE.md` §8b, `docs/IMPLEMENTATION_STATUS.md`.
+
+**New**: a `library_locations` table + `book_copies.current_location_id` (replacing an unused
+free-text column); a teacher-facing "Move a Book" workflow (`/move`) that photographs a cover,
+matches it against the existing catalog via real hybrid search (never re-running the Add Book
+pipeline), and atomically moves exactly one physical copy after explicit teacher confirmation of
+both the book and the destination; location administration at `/admin/locations`; an optional
+`--location` on `import:create-job`; a 17th "Location" column in the Google Sheet.
+
+**Real validation**: the live Sheets API confirmed the Location column renders correctly (a
+temporary, clearly-labeled test row created and removed within the same pass); the Move/Return
+workflow was manually verified at real phone width across every stage via real Playwright
+screenshots.
+
+**A real mistake made and corrected**: verifying the new schema locally involved running the
+destructive `db:seed` script against the shared dev database, which unintentionally deleted the
+3 real bulk-imported books from the original Phase 9 validation below. Disclosed in full in
+`docs/GOOGLE_INTEGRATION.md`; no substitute data was fabricated to hide it.
+
+Tests: 696 unit (+7), 202 integration (+21, real Postgres), 152 E2E (+3). `npm run typecheck`/
+`npm run lint`/`npm run build`/`npm run evaluate:search` (41/41) all clean; the full E2E suite
+passed 152/152 twice in a row on its final runs.
+
 ## Phase 9 complete — Google Sheets + Bulk Import Infrastructure — 2026-09-23
 
 Two deliverables built together: a real, persistent Google Sheets catalog projection, and a

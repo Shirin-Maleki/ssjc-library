@@ -2615,3 +2615,79 @@ behavior is byte-for-byte unchanged.
 
 **Relevant files:** `src/lib/intake/persistence.ts`; `tests/integration/db/persistence.test.ts`;
 `tests/integration/db/bulkImport.test.ts`.
+
+## Phase 9 addendum: current location is a real FK to a new table, not free text widened in place
+
+**Decision:** `book_copies.current_location` (free text, present since the original schema draft
+but confirmed — via a repo-wide search — to have never been read or written by any real code
+path) is replaced with `book_copies.current_location_id`, a nullable FK to a new
+`library_locations` table, rather than simply starting to use the existing text column as-is.
+
+**Why:** Free text cannot represent "this classroom was renamed" without silently orphaning
+every copy already recorded there, and the addendum's own explicit requirement ("Locations
+should have stable identity so a classroom can be renamed without breaking references") rules
+it out directly. A real table also gives a stable `id`/`slug` pair to hang an `is_active` flag,
+a `location_type`, and admin CRUD off of — exactly `physical_categories`' own already-proven
+shape, reused rather than reinvented. `home_location` (a separate, still-unused, still-future-
+ready free-text column) was deliberately left untouched — it's a different concept (a copy's
+"default"/origin location, never wired to any real screen) than "current location," and nothing
+in this addendum needed to touch it.
+
+**Relevant files:** `src/db/schema/locations.ts`; `src/db/schema/ingestion.ts`;
+`drizzle/0007_phase9_library_locations.sql`; `drizzle/0008_phase9_drop_legacy_current_location_text.sql`.
+
+## Phase 9 addendum: two migrations instead of one, to route around a non-interactive `drizzle-kit generate` prompt
+
+**Decision:** The location-model migration was generated as two separate, sequential migrations
+— `0007` adds `current_location_id` while temporarily leaving the old `current_location` column
+in place, and `0008` drops the old column — rather than one migration doing both at once.
+
+**Why:** Removing `current_location` and adding `current_location_id` to the SAME table in the
+SAME `drizzle-kit generate` invocation makes drizzle-kit ask (via an interactive terminal
+prompt) whether this is a rename or a genuine drop+create; that prompt requires a real TTY and
+has no non-interactive flag, and this environment has neither. Splitting the change into two
+separate generate calls — first a pure addition (no ambiguity: nothing else changed to make it
+LOOK like a rename), then a pure drop (also unambiguous once nothing new is being added in the
+same pass) — produces the exact same end schema with zero interactive prompts and, as a real
+bonus, a more honest migration history (an addition, verified, followed by a considered removal,
+rather than one opaque combined step).
+
+**Relevant files:** `drizzle/0007_phase9_library_locations.sql`;
+`drizzle/0008_phase9_drop_legacy_current_location_text.sql`.
+
+## Phase 9 addendum: the Move/Return workflow reuses `CoverCapture` via optional heading/copy props, not a duplicate component
+
+**Decision:** `src/components/add/CoverCapture.tsx` gained four optional props (`heading`,
+`subheading`, `helpText`, `ctaLabel`, all defaulting to Add Book's original exact copy) rather
+than the Move/Return workflow copy-pasting its own version of the same file/rotation-validation
+component.
+
+**Why:** The component's actual logic — MIME/size validation, rotation state, the preview box —
+is identical between "Add a Book" and "Move a Book"; only the screen's own words differ ("Add a
+Book" / "Photograph the front cover to get started." vs. "Move a Book" / "Photograph the cover
+of the book you're moving or returning."). Every existing call site (`AddBookFlow.tsx`) supplies
+no overrides and therefore renders byte-for-byte the same copy as before — confirmed unchanged
+by the existing, untouched `addBook.spec.ts` E2E suite continuing to pass without modification.
+
+**Relevant files:** `src/components/add/CoverCapture.tsx`; `src/components/move/MoveBookFlow.tsx`.
+
+## Phase 9 addendum: a job's initial location is read from one place, at both copy-creation sites
+
+**Decision:** `getJobInitialLocationId()` (`src/lib/intake/persistence.ts`) is the one function
+that reads a bulk-import job's configured `--location` back out of `ingestion_jobs.config` —
+called both by the bulk pipeline's own automatic-completion path (`saveNewBook`, via
+`BulkPipelineDeps.initialLocationId`, resolved once per run) and, separately, by the admin's
+manual Review-Later/duplicate-resolution approval of an item that instead landed in
+`needs_review` (`src/lib/admin/persistence.ts`'s `finalizePendingBook`/`resolveDuplicate`, which
+re-reads it from the job at approval time, since that is the only place THAT item's physical
+copy actually gets created).
+
+**Why:** A `needs_review` item's copy is never created at pipeline time — only later, when a
+human approves it, possibly days afterward. Without this, an admin approving a bulk-imported
+item would silently lose the job's configured starting location, and the automatic-completion
+path and the manual-approval path would risk disagreeing about what a job's location even was.
+Reading from one function, backed by one field (`ingestion_jobs.config.initialLocationId`),
+keeps both paths honestly consistent by construction rather than by convention.
+
+**Relevant files:** `src/lib/intake/persistence.ts`; `src/lib/bulkImport/pipeline.ts`;
+`src/lib/admin/persistence.ts`; `src/lib/bulkImport/jobs.ts`.

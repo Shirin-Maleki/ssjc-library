@@ -180,6 +180,30 @@ above (Phase 9 did not redesign any of them):
   real 3-image validation sample. A plain `import:run` cannot accidentally start an unbounded job;
   `import:create-job` requires an explicit `--limit`/`--file-id`.
 
+**PHASE 9 ADDENDUM (physical copy locations + Move/Return workflow) IS ALSO IMPLEMENTED AND
+REAL-VALIDATED** — `library_locations` + `book_copies.current_location_id`, a `/move` teacher
+workflow, `--location` threading through the bulk importer, and a Location column in the Sheet.
+**Read `docs/DATA_MODEL.md` §12b and `docs/ARCHITECTURE.md` §8b before touching any of it.**
+Invariants that must hold regardless of what a later phase adds:
+
+- BOOK ≠ COPY, CATEGORY ≠ LOCATION — a book's physical category (one per book, rarely changes)
+  and a copy's current location (one per physical copy, can change often) are genuinely
+  independent and live on different tables. Never conflate them.
+- Location belongs to the physical copy (`book_copies.current_location_id`), never the
+  bibliographic book — a book can have copies in several places at once, and teachers are never
+  asked to identify "Copy #1" vs "Copy #2" (identical copies are interchangeable until/unless
+  QR/barcode labels are added later).
+- The Move/Return workflow never runs the Add Book pipeline and never persists the movement
+  photo anywhere — it is a search-then-confirm read, followed by exactly one bounded, audited
+  `book_copies` mutation. Never infers which specific physical copy a photo shows; a teacher
+  always confirms both the book and (when genuinely ambiguous) the source location.
+- A real, disclosed mistake happened during this addendum's own testing: re-running `npm run
+  db:seed` against the shared dev database to verify the new schema unintentionally deleted the
+  3 real bulk-imported books (and the real spreadsheet's sync-state pointer) from the original
+  Phase 9 real validation. **Never run `db:seed` (a destructive truncate-then-reseed) against a
+  database that might hold real, valuable, non-fixture data — check what's there first.** Full
+  disclosure: `docs/GOOGLE_INTEGRATION.md`'s Phase 9 addendum section.
+
 **PHASE 10 (Real Collection Import + Taxonomy Finalization) HAS NOT STARTED.** It may only begin
 once the driver thread explicitly decides to start it — this document being current is not itself
 that decision — and per Phase 9's own design intent, it should not need a new importer or a new
@@ -672,8 +696,9 @@ must not silently re-decide or re-break:
    documented, reasoned scope boundaries (`docs/DECISIONS.md`), not gaps to silently fill in
    without re-reading why.
 
-Phase 9 (Google Sheets + Bulk Import Infrastructure) is complete and real-validated — see
-`docs/IMPLEMENTATION_STATUS.md`. **Phase 10 (Real Collection Import + Taxonomy Finalization,
+Phase 9 (Google Sheets + Bulk Import Infrastructure), including its physical-copy-locations
+addendum, is complete and real-validated — see `docs/IMPLEMENTATION_STATUS.md`. **Phase 10 (Real
+Collection Import + Taxonomy Finalization,
 the old roadmap's Phases 10–12 consolidated) is next and has not started** — it must not begin
 without explicit approval, per the process above. Before starting it, read `docs/BULK_IMPORT.md`
 for the infrastructure Phase 9 already built and validated, `docs/AI_PIPELINE.md` §10 for what
