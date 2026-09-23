@@ -4,6 +4,48 @@ A simple, phase-level record of what actually shipped — not a verbose release 
 Entries are dated by when the work was completed; see `docs/IMPLEMENTATION_STATUS.md` for the
 current state and `docs/DECISIONS.md` for the reasoning behind any of these.
 
+## Phase 9 complete — Google Sheets + Bulk Import Infrastructure — 2026-09-23
+
+Two deliverables built together: a real, persistent Google Sheets catalog projection, and a
+standalone bulk-import CLI/worker that reuses Phase 7's intake pipeline end to end. Full detail:
+`docs/BULK_IMPORT.md` (new), `docs/IMPLEMENTATION_STATUS.md`, `docs/DECISIONS.md`.
+
+**Real external validation, not mocks alone**: real Drive enumeration found 1,618 supported
+images across the actual SSJC collection's three photographer subfolders; a real bounded job of 3
+real photos completed automatically end to end (real Drive download, real `gemini-3.8-flash`
+vision, real Open Library reconciliation) into 3 real active catalog books — one of them
+confirmed findable through Find's own real full-text search query. Idempotency was proven twice
+for free (rerunning both `import:run` and `import:create-job` against the same real files/job did
+nothing further). A real, persistent Google Sheet ("SSJC Library Catalog") was created, reused
+across three subsequent syncs (never recreated), and its real formatting (frozen header, filter,
+column widths, a genuinely hidden `book_id` column) and a real `IMAGE()` cover formula were all
+confirmed by reading the live sheet back via the API.
+
+**A real, one-time external blocker found and resolved**: the Google Sheets API was disabled for
+the project's Google Cloud project (a real `SERVICE_DISABLED` 403) — a one-time console toggle,
+not a scope or code problem; the existing `drive.file` OAuth scope (Phase 6) was confirmed
+sufficient for Sheets once enabled, with no re-consent needed.
+
+**A real gap found and fixed in shared Phase 7 code**: `completeParentJob()` (now
+`advanceParentJob()`) assumed every job had exactly one item — true for every existing caller,
+false for Phase 9's own multi-item bulk jobs, the first caller able to exercise it. Fixed with
+zero behavior change for every existing single-item caller (verified by the existing, unmodified
+`persistence.test.ts` suite still passing).
+
+**The full ~1,500-image collection was NOT processed** — only 3 real images, a deliberately
+bounded validation sample. Real observed cost: ~$0.00345/image → ≈$5.17 projected for the full
+collection (`docs/COSTS.md`).
+
+Tests: 689 unit (+56), 181 integration (+38, real Postgres), 149 E2E (unchanged count — two new
+Teacher Catalog scenarios replace the old placeholder test). `npm run typecheck`/`npm run
+lint`/`npm run build`/`npm run evaluate:search` all clean. One additive migration
+(`drizzle/0006_phase9_bulk_import_dedup.sql`).
+
+**The old 13-phase roadmap's remaining five phases (9: Sheets, 10: bulk import engine, 11:
+taxonomy research batch, 12: full import, 13: hardening/QA/deployment) are now two: Phase 10
+(Real Collection Import + Taxonomy Finalization) and Phase 11 (Final UI/UX Polish + QA +
+Deployment)** — see `docs/IMPLEMENTATION_STATUS.md`'s "revised roadmap" note.
+
 ## Phase 8 complete — Admin Review + Taxonomy — 2026-09-22
 
 An admin can now open uncertain/incomplete/pending catalog records and act on them

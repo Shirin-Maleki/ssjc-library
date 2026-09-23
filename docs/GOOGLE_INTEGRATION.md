@@ -292,14 +292,19 @@ never written to by this application). See "Resumable upload architecture" above
 for the corrected server-mediated flow, and `docs/AI_PIPELINE.md` for the full
 pipeline this upload feeds into.
 
-## How Phase 10 should enumerate this
+## How bulk import enumerates this (as built, Phase 9)
 
-Phase 10 (bulk import) is expected to: use `listChildren()` recursively (its own
-recursion, at that phase's own pace and rate-limit budget — not something Phase 6
-provides), `downloadSource()` each real photo it intends to process, and
-`ingestion_items.drive_file_id` (pre-existing schema) to track which Drive file produced
-which ingestion attempt. Phase 6 deliberately does not process, hash, or import anything
-from the existing ~1,500-photo collection — it only proves the collection is reachable.
+Superseding the old "Phase 10 should..." framing above from before the roadmap was
+consolidated (`docs/IMPLEMENTATION_STATUS.md`'s "revised roadmap" note) — this is now real,
+built, and validated. `src/lib/bulkImport/enumerate.ts` walks `listChildren()` recursively
+(its own bounded recursion — Phase 6's own `listChildren()` stays single-level, unchanged),
+`downloadSource()`s each file the bulk-import CLI actually claims for processing, and reuses
+`ingestion_items.drive_file_id` exactly as this schema already anticipated. Deliberately uses
+its OWN, separately-configured root (`GOOGLE_DRIVE_BULK_IMPORT_ROOT_FOLDER_ID`, never
+`GOOGLE_DRIVE_ROOT_FOLDER_ID`) — see `docs/BULK_IMPORT.md` for the full architecture and
+`docs/GOOGLE_SETUP.md` for the env var. Real enumeration against the actual collection found
+1,618 supported image files across the three real photographer subfolders — see
+"Real validation evidence (2026-09-23, Phase 9)" below.
 
 ## Real validation evidence (2026-09-20)
 
@@ -333,3 +338,30 @@ configured folder, both cleaned up (disposable synthetic test file trashed, its
    `docs/AI_PIPELINE.md` §10. All 5 real files were confirmed unchanged
    (`trashed: false`, original size) after the pass; nothing was renamed, moved,
    or modified.
+
+## Real validation evidence (2026-09-23, Phase 9)
+
+The bulk-import root was inspected directly rather than assumed to be the same folder as
+prior smoke tests — it turned out to be `1KQarSucAchWjX-__x3CS4OUJiL_830IX` ("Scandi library
+books"), the direct PARENT of the interactive flow's own root ("Corridor books"). Real,
+bounded (non-recursive-beyond-what-was-needed) enumeration found **1,618 real supported image
+files** across the three real photographer subfolders (Diamond: 156, Ray: 336, Shirin: 1,126)
+— confirmed via `npm run import:list`, which performs no download and no write. A real bounded
+job of exactly 3 files was then created and run (`npm run import:create-job -- --limit=3`,
+`npm run import:run`): 3 real Drive downloads, 3 real `gemini-3.8-flash` vision calls, 3 real
+Open Library lookups, all completing automatically into 3 real active catalog books. Re-running
+both `import:create-job --limit=3` and `import:run` against the same job/files afterward
+performed zero additional Drive/Gemini calls and created zero duplicates — real idempotency, not
+asserted. No file in the real collection was renamed, moved, deleted, or otherwise altered by
+any of this. Full record, including real Gemini cost and the real book titles identified:
+`docs/IMPLEMENTATION_STATUS.md`'s Phase 9 section and `docs/COSTS.md`.
+
+## Google Sheets provider (as built, Phase 9)
+
+`src/lib/googleSheets/googleSheetsProvider.ts` reuses this SAME OAuth credential and token-
+refresh mechanism (`getAccessToken()` from `oauthClient.ts`, imported directly) — Sheets and
+Drive share one credential, one retry policy (`fetchWithRetry`), and one root-Drive-account
+identity; there is no separate Sheets authentication to configure or explain. See
+`docs/ARCHITECTURE.md` §8 for the sync-mechanism design and `docs/GOOGLE_SETUP.md` for the one
+real, one-time Google Cloud Console step this phase's real validation found was needed (enabling
+the Sheets API for the project — not a scope or credential change).

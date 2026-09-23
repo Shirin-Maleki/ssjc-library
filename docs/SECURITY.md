@@ -337,14 +337,56 @@ Full architecture in `docs/AI_PIPELINE.md`; the upload-architecture correction
   `resolveDuplicate()`'s `action`, `resolveReviewFlag()`'s `outcome`, and
   `explicitlyVerifiedFields` entries against their real, small vocabularies.
 
-## What's explicitly out of scope through Phase 8
+## Google Sheets + Bulk Import (Phase 9)
+
+- **No new credential, no new teacher-facing auth** — the Google Sheets provider
+  (`src/lib/googleSheets/googleSheetsProvider.ts`) reuses the exact same OAuth
+  refresh-token/access-token mechanism Drive already uses (`getAccessToken()`
+  from `googleDrive/oauthClient.ts`, imported directly). No Google Sign-In was
+  added to the app; the Teacher Catalog page is a plain link out to an external
+  Sheet, gated only by the existing shared staff session.
+- **The real Sheet is never authoritative and never writes back to PostgreSQL**
+  — `syncCatalogToSheet()` only ever reads from the database and writes to
+  Sheets, never the reverse. A person editing a cell directly in the Sheet has
+  their edit silently overwritten on the next sync; this is documented,
+  intentional behavior, not a data-loss bug (`docs/DECISIONS.md`).
+- **Formula-injection defended, not merely avoided** — `rowBuilder.ts` escapes
+  every ordinary text cell with a leading `'` before the Sheets API's
+  `USER_ENTERED` input mode ever sees it; the one exception (a real `IMAGE()`
+  cover formula) is only ever built from a URL that independently re-passes
+  `TRUSTED_THUMBNAIL_HOSTS`' host/scheme check, never from arbitrary book
+  metadata text. Covered by dedicated unit tests
+  (`tests/unit/googleSheets/rowBuilder.test.ts`).
+- **No private Drive URL ever reaches the Sheet** — only `books.display_cover_url`
+  (already gated through Phase 7's trust boundary at save time) is ever used for
+  a cover cell; the raw Drive source file id/folder never appears in any synced
+  row.
+- **The bulk-import CLI is server-side/local-operator tooling only** — never
+  exposed as a web route, never reachable by a teacher or an unauthenticated
+  request; it runs with the same server-side `DATABASE_URL`/`GEMINI_API_KEY`/
+  Drive OAuth credentials the rest of the app already trusts, via `tsx`, not
+  through any HTTP boundary.
+- **Real source photographs are never committed** — Phase 9's real validation
+  downloaded 3 real Drive-hosted images into process memory only, for pipeline
+  analysis; none were written to disk, added to fixtures, or committed to this
+  repository. Real book covers created from bulk import store only a Drive
+  file id/folder id/filename/MIME type in PostgreSQL, exactly like the
+  interactive Add-a-Book flow already does — never the image bytes themselves.
+- **No child/student data enters the system through this pipeline** — the
+  bulk-import CLI processes book-cover photographs only, using the exact same
+  Phase 7 identification/enrichment schema (title/authors/ISBN/etc.), never
+  anything else.
+
+## What's explicitly out of scope through Phase 9
 
 - The rate limiter is still in-memory, not backed by the now-real `login_attempts` table (see
   above).
-- No Google Sheets credentials exist yet — Phase 9 owns that decision.
 - No collaborative-editing locks exist for Admin Review — see
   `docs/DECISIONS.md`'s Phase 8 concurrency entry for the simple, deliberately
   non-real-time protections that exist instead.
+- Production OAuth governance (Testing-mode consent screen vs. a verified/Internal app) remains
+  the same open, deliberately deferred decision from Phase 6 — Phase 9 changed nothing about it,
+  reusing the existing credential as-is.
 
 ## Verified, not assumed
 

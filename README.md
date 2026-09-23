@@ -16,22 +16,24 @@ exactly what exists right now versus what is planned.
 
 ## Project status
 
-**Current phase: Phase 8 — Admin Review + Taxonomy — COMPLETE (2026-09-22).** An admin can
-open a real, database-backed review queue (uncertain identity/duplicates, category decisions,
-metadata conflicts, missing useful metadata), resolve a Phase 7 Review Later item without
-rerunning the AI pipeline, work through a focused five-outcome duplicate comparison (same
-edition / different edition / different language / false match / unresolved — never a general
-merge engine), correct catalog metadata with the same presence-based provenance semantics
-Quick Edit already established, and manage physical shelving categories and taxonomy
-suggestions — always as an explicit human action; AI never auto-creates or auto-activates a
-category. Full detail: `docs/IMPLEMENTATION_STATUS.md`, `docs/TAXONOMY.md`. One additive
-migration (`drizzle/0004_...`), no new tables. Phase 7 (Add a Book, including its 2026-09-21
-correction pass), Phase 6 (Google Drive connection), and Phase 5 (real search architecture)
-remain complete and approved, unaffected except where Phase 8 built directly on their
-infrastructure. Find a Book, Reading Lists, voice search, and the core Add a Book flow are all
-unaffected. See `docs/IMPLEMENTATION_STATUS.md` for exactly what's built, `docs/DATABASE_SETUP.md`
-for the database itself, `docs/SEARCH.md` for the full search architecture, and
-`docs/GOOGLE_INTEGRATION.md`/`docs/GOOGLE_SETUP.md` for the Drive integration.
+**Current phase: Phase 9 — Google Sheets + Bulk Import Infrastructure — implemented and
+real-validated (2026-09-23).** A real, persistent Google Sheet ("SSJC Library Catalog") now
+syncs from canonical PostgreSQL (`npm run sheets:sync`), and a standalone bulk-import CLI/worker
+(`npm run import:*`) turns Drive photographs into real catalog books by reusing Phase 7's intake
+pipeline end to end — never a second implementation of it. Both were validated against real
+external services: real Drive enumeration found 1,618 real images in the actual SSJC collection;
+a real bounded 3-image run completed automatically (real Drive/Gemini/Open Library calls) into 3
+real active catalog books, one confirmed findable through Find's own real search; a real Sheets
+create/sync/reuse round trip completed against the live Google account. **The full ~1,500-image
+collection was NOT processed** — only this small, bounded validation sample. Full detail:
+`docs/IMPLEMENTATION_STATUS.md`, `docs/BULK_IMPORT.md` (new), `docs/DECISIONS.md`. One additive
+migration (`drizzle/0006_...`), no new tables. Phase 8 (Admin Review + Taxonomy), Phase 7 (Add a
+Book), Phase 6 (Google Drive connection), and Phase 5 (real search architecture) remain complete
+and approved, unaffected except where Phase 9 built directly on their infrastructure. Find a
+Book, Reading Lists, voice search, and the core Add a Book flow are all unaffected. See
+`docs/IMPLEMENTATION_STATUS.md` for exactly what's built, `docs/DATABASE_SETUP.md` for the
+database itself, `docs/SEARCH.md` for the full search architecture, and
+`docs/GOOGLE_INTEGRATION.md`/`docs/GOOGLE_SETUP.md` for the Drive/Sheets integration.
 
 ## Local setup
 
@@ -60,10 +62,15 @@ npm run embeddings:generate  # backfill semantic embeddings — no-ops cleanly w
 npm run search:rebuild-text  # rebuild conventional full-text search after a metadata edit/import
 npm run google:authorize     # one-time local OAuth setup for Google Drive (see docs/GOOGLE_SETUP.md)
 npm run google:smoke         # real, opt-in Google Drive connectivity proof — needs real OAuth config
+npm run sheets:sync          # sync the canonical catalog to the real Google Sheet (Phase 9)
+npm run import:list          # read-only bulk-import source enumeration (Phase 9)
+npm run import:create-job    # bounded bulk-import job creation — see docs/BULK_IMPORT.md
+npm run import:run           # process a bulk-import job's pending items
 ```
 
-No Google Sheets credentials exist yet — that integration doesn't exist yet (Phase 9). An
-optional `GEMINI_API_KEY` (see [`docs/DATABASE_SETUP.md`](docs/DATABASE_SETUP.md)) activates
+Google Sheets reuses the same OAuth credential as Drive (Phase 9, `docs/GOOGLE_SETUP.md`) — no
+separate Sheets credential to configure, only enabling the Sheets API itself once in Google
+Cloud Console. An optional `GEMINI_API_KEY` (see [`docs/DATABASE_SETUP.md`](docs/DATABASE_SETUP.md)) activates
 real semantic search retrieval/embedding generation (Phase 5) and Add-a-Book cover
 vision/enrichment (Phase 7); every other feature, including conventional search, works
 completely without it. An optional Google Drive OAuth setup (see
@@ -82,7 +89,8 @@ Start here, in order:
 5. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — the technical architecture: frontend, backend, database, AI, Google integrations, search, deployment.
 6. [`docs/DATA_MODEL.md`](docs/DATA_MODEL.md) — the relational schema in full detail.
 7. [`docs/AI_PIPELINE.md`](docs/AI_PIPELINE.md) — the Add-a-Book AI/external-provider pipeline (Phase 7): vision, metadata lookup, reconciliation, duplicate detection, enrichment.
-8. [`docs/TAXONOMY.md`](docs/TAXONOMY.md) — physical category lifecycle and the taxonomy-suggestion review workflow (Phase 8), and where the Phase 11 boundary sits.
+8. [`docs/TAXONOMY.md`](docs/TAXONOMY.md) — physical category lifecycle and the taxonomy-suggestion review workflow (Phase 8), and where taxonomy finalization sits in the revised roadmap (Phase 10).
+9. [`docs/BULK_IMPORT.md`](docs/BULK_IMPORT.md) — the bulk-import CLI/worker architecture and Phase 10 operating procedure (Phase 9).
 
 Phase-specific detail, split out once a subject becomes operationally real (per the "don't
 create placeholder docs" rule): [`docs/SECURITY.md`](docs/SECURITY.md),
@@ -110,10 +118,12 @@ Full detail in [`docs/PRODUCT_SPEC.md`](docs/PRODUCT_SPEC.md).
 
 ## Development process
 
-This project is built in 14 planned phases (Phase 0 through Phase 13), executed one at a
-time with no automatic continuation. Each phase ends with testing, documentation updates,
-and a detailed implementation report, then stops for explicit approval before the next phase
-begins. The full phase plan is recorded in [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md).
+This project is built in planned phases (Phase 0 through Phase 11, per the roadmap revised at
+Phase 9 — the original plan's remaining Phases 9–13 were consolidated into two; see
+`docs/IMPLEMENTATION_STATUS.md`'s "revised roadmap" note), executed one at a time with no
+automatic continuation. Each phase ends with testing, documentation updates, and a detailed
+implementation report, then stops for explicit approval before the next phase begins. The full
+phase plan is recorded in [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md).
 
 ## Branding status
 

@@ -180,11 +180,33 @@ Drive file ID), never physically reorganized — this part of the original draft
 3. **A server-side Drive proxy route**, streamed on demand — last resort only, since it's
    exposed to Drive API latency/rate limits; guarantees something always renders.
 
-## 8. Google Sheets synchronization (teacher catalog)
+## 8. Google Sheets synchronization (teacher catalog) (as built, Phase 9)
 
-Unchanged from the first draft: a service-account-authenticated, read-mostly projection with
-a hidden stable `book_id` column, synchronous incremental writes plus an admin "Sync Now" and
-scheduled full reconciliation as a safety net. See [`docs/DECISIONS.md`](DECISIONS.md).
+Built differently from the first draft, on real implementation evidence — see
+[`docs/DECISIONS.md`](DECISIONS.md)'s Phase 9 entry for the full reasoning. Two corrections from
+the original plan:
+
+**Authentication**: not a separate service account — the SAME OAuth user-consent credential Drive
+already uses (`docs/GOOGLE_SETUP.md`), via the existing `drive.file` scope, which Google's own
+scope reference confirms is valid for the Sheets API for spreadsheets this app itself creates (real
+validation confirmed this end to end; the only real blocker found was the Sheets API being
+disabled for the Google Cloud project, a one-time console toggle, not a scope/code problem). No new
+consent step, no new credential to manage.
+
+**Sync mechanism**: a deterministic full-snapshot rewrite on every explicit `npm run sheets:sync`
+run (`src/lib/googleSheets/sync.ts`), not synchronous incremental writes after every DB write. At
+this project's real scale (~1,500 rows), a full-snapshot rewrite is simpler and more reliable than
+an incremental keyed-row engine, and avoids per-write Sheets API calls during a bulk-import burst
+(Phase 9's own design intent, since Phase 0). A hidden, genuinely-hidden (`hiddenByUser: true`,
+confirmed via the live API) trailing `book_id` column is still present, exactly as originally
+planned, for any future incremental work.
+
+The one persistent target spreadsheet's identity is stored in the existing `system_settings`
+key/value table (present since Phase 4, never previously written to) — `book_sheet_sync` (this
+project's real name for the phase brief's conceptual `google_sheet_sync_state`) tracks per-book
+sync bookkeeping (last synced timestamp, content hash, status) separately. Full detail:
+[`docs/BULK_IMPORT.md`](BULK_IMPORT.md) (bulk-import half) and
+[`docs/GOOGLE_INTEGRATION.md`](GOOGLE_INTEGRATION.md) (Sheets provider architecture).
 
 ## 9. AI provider abstraction (as built, Phase 7)
 
@@ -414,6 +436,16 @@ See §7.
 
 ## 16. Bulk-import architecture (~1,500 existing photos): a standalone worker, not a web request
 
+**Superseded by the real Phase 9 build** (`docs/BULK_IMPORT.md`) — the section below is the
+original Phase 0 speculative design (script path, config shape, and batch-loop details differ
+from what was actually built: a real `src/lib/bulkImport/` job/item/claim architecture with
+`npm run import:*` commands, not `scripts/import/run.ts`/`npm run import:bulk` with a
+`batch_size` config). Kept here for historical record; read `docs/BULK_IMPORT.md` for the real,
+built, real-validated architecture. The one part of this section's REASONING that remains
+exactly correct and still governs the real build: bulk processing cannot run inside a Vercel
+Server Action/API request (serverless time limits), so it must be a standalone process — that
+constraint is real and the real implementation honors it.
+
 **Corrected this review** — this is the most consequential fix in this revision. The first
 draft did not explicitly rule out running bulk processing inside a Vercel Server Action/API
 request, which would not actually work: serverless function execution has a hard time limit
@@ -481,7 +513,7 @@ analysis. `taxonomy_suggestions` gained one column, `resolved_category_id` (null
 FK to `physical_categories`), set on `approved`/`merged` so the resulting/chosen
 category is a real relational fact, not only prose in `decision_note`. Every category
 creation/activation is an explicit admin Server Action; see `docs/TAXONOMY.md` for the
-full lifecycle and the Phase 11 boundary.
+full lifecycle and the Phase 10 boundary (the revised roadmap's "Real Collection Import + Taxonomy Finalization"; see docs/IMPLEMENTATION_STATUS.md's "revised roadmap" note).
 
 ## 18. Confidence architecture
 

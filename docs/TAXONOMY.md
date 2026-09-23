@@ -8,7 +8,7 @@ school's confirmed shelving system.** Phase 8 makes that taxonomy operationally
 *manageable* — an admin can rename, describe, activate/deactivate, and create
 categories, and can review AI-surfaced taxonomy pressure — but it does not decide
 what SSJC's real ~1,500-book collection should actually be organized into. That is
-explicitly Phase 11's job, informed by the real collection, not the 48-book
+explicitly Phase 10's job (the revised roadmap's "Real Collection Import + Taxonomy Finalization" — see docs/IMPLEMENTATION_STATUS.md's "revised roadmap" note), informed by the real collection, not the 48-book
 development seed.
 
 **The Phase 8 story, precisely:** the system can surface taxonomy pressure (via
@@ -101,5 +101,7 @@ already-catalogued book, and no book's `physical_category_id` changes as a resul
   categories (moving every book between them) is deliberately deferred — see
   `docs/DECISIONS.md`.
 - **No taxonomy finalization.** Phase 8 does not attempt to determine SSJC's real
-  final shelving system. That is Phase 11's explicit scope, informed by the real
+  final shelving system. That is Phase 10's explicit scope (the revised roadmap's
+  "Real Collection Import + Taxonomy Finalization" — see
+  `docs/IMPLEMENTATION_STATUS.md`'s "revised roadmap" note), informed by the real
   ~1,500-book collection.

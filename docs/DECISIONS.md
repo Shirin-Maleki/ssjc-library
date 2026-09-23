@@ -353,7 +353,9 @@ prefer external thumbnails) without a code change if that ever proves better in 
 
 ## Google Sheets sync model: synchronous incremental write + admin/cron reconciliation
 
-**Date:** 2026-09-13 · **Status:** Proposed — confirmed in Phase 9
+**Date:** 2026-09-13 · **Status:** Superseded by Phase 9 — see "Phase 9: full-snapshot Sheets
+sync, not incremental keyed updates" below for what was actually built and why. Kept here,
+unmodified, as the historical record of the original Phase 0 plan this decision replaced.
 
 **Problem:** Need the teacher-facing sheet to stay reasonably current without building queue/
 worker infrastructure that this traffic volume doesn't justify.
@@ -2521,3 +2523,95 @@ this client component alike.
 **Relevant files:** `src/lib/admin/reviewDetail.ts`; `src/lib/admin/provenanceLabels.ts`;
 `src/lib/admin/persistence.ts`; `src/components/admin/ReviewDetailClient.tsx`;
 `tests/integration/db/adminReview.test.ts`; `tests/unit/admin/provenanceLabels.test.ts`.
+
+## Phase 9: a second, separately-configured Drive root for bulk import, never widening the interactive one
+
+**Decision:** The bulk importer reads its own env var, `GOOGLE_DRIVE_BULK_IMPORT_ROOT_FOLDER_ID`,
+never `GOOGLE_DRIVE_ROOT_FOLDER_ID` (the interactive Add-a-Book flow's own root). A tiny, additive
+change to `GoogleDriveCoverStorageProvider` (`src/lib/googleDrive/googleDriveProvider.ts`) gives its
+constructor an optional `rootFolderId` override, defaulting to the existing config when omitted —
+every existing call site is unaffected.
+
+**Why:** Real inspection of the live Drive account found the real bulk-import source ("Scandi
+library books") is the direct PARENT of the interactive flow's own configured root ("Corridor
+books"). Simply widening `GOOGLE_DRIVE_ROOT_FOLDER_ID` to the broader folder would have been a
+strictly-widening, technically-safe change (root-containment only ever gets less restrictive, never
+more), but it would still quietly expand the security boundary every OTHER Drive operation (teacher
+uploads, the source-cover proxy) is checked against, for a need that belongs entirely to the bulk
+importer. A second, explicit, independently-configured root keeps the interactive flow's boundary
+exactly as narrow as it already was, regardless of how the real bulk-import folder happens to
+relate to it.
+
+**Consequences:** An operator must set a second env var to run the bulk importer at all — a small,
+one-time setup cost (`docs/GOOGLE_SETUP.md`) in exchange for never touching an already-approved
+security boundary.
+
+**Relevant files:** `src/lib/googleDrive/googleDriveProvider.ts`; `src/lib/bulkImport/driveConfig.ts`;
+`docs/BULK_IMPORT.md`; `docs/GOOGLE_SETUP.md`.
+
+## Phase 9: Google Sheets reuses the existing Drive OAuth credential, not a new service account
+
+**Decision:** `src/lib/googleSheets/googleSheetsProvider.ts` imports `getAccessToken()` from
+`googleDrive/oauthClient.ts` directly — the exact same OAuth refresh-token credential Drive
+already uses, via the already-granted `drive.file` scope. No new Google Cloud service account, no
+new consent screen, no re-running the interactive authorization helper.
+
+**Why:** This project's very first (Phase 0) design note assumed a service-account-authenticated
+Sheets integration, written before any real Google infrastructure existed. Real Phase 9
+implementation found this unnecessary: Google's own OAuth scope reference lists `drive.file` as a
+valid scope for the Sheets API specifically for spreadsheets the authorized app itself creates —
+exactly this project's use case (it always creates its own one target spreadsheet, never touches a
+human's pre-existing one). A service account would have meant a second credential to provision,
+store, and explain, for no real capability gain. Real validation confirms this works end to end;
+the one real blocker found (the Sheets API being disabled for the Google Cloud project) was a
+one-time console toggle, unrelated to which credential model was chosen.
+
+**Consequences:** Sheets and Drive share one point of failure/revocation — if the human account's
+OAuth grant is ever revoked, both integrations stop working together, not independently. Given
+they already share the same real Google account context in this project, this is an acceptable,
+simpler trade-off over managing two credentials.
+
+**Relevant files:** `src/lib/googleSheets/googleSheetsProvider.ts`; `src/lib/googleDrive/oauthClient.ts`;
+`docs/GOOGLE_SETUP.md`; `docs/ARCHITECTURE.md` §8.
+
+## Phase 9: full-snapshot Sheets sync, not incremental keyed updates
+
+**Decision:** `src/lib/googleSheets/sync.ts`'s `syncCatalogToSheet()` rewrites the entire visible
+catalog's data range on every run (header + every currently-visible book, in `sortTitle` order),
+then clears a generous trailing range to remove any stale rows from a previous, larger sync —
+never a row-by-row diff/patch engine keyed by a stable per-row identifier.
+
+**Why:** At this project's real scale (~1,500 rows at full collection size), a full-snapshot
+rewrite is simpler to reason about and cannot drift from canonical data the way an incremental
+engine with its own row-identity bookkeeping can (a genuinely subtle class of bug: a row that
+moved, a book that was deleted and its slot never reclaimed, etc.). This also directly matches
+this project's own Phase 0 design note that a bulk-import burst should never make one synchronous
+Sheets write per book — a full-snapshot sync run once at the end of a batch is the natural fit. A
+hidden `book_id` column is still included in every row for any future incremental work, and
+`book_sheet_sync`'s per-book bookkeeping (last synced, content hash) is still real and useful
+observability even though the sync mechanism itself doesn't depend on it to decide what changed.
+
+**Consequences:** Every sync call rewrites every visible row's data, even unchanged ones — a real,
+accepted cost at this scale (a single `values.update` batch call, not one call per row). If the
+catalog ever grows by orders of magnitude beyond ~1,500, this would need revisiting.
+
+**Relevant files:** `src/lib/googleSheets/sync.ts`; `src/db/schema/sheets.ts`;
+`docs/ARCHITECTURE.md` §8.
+
+## Phase 9: `advanceParentJob` — a real single-item assumption in shared Phase 7 code, fixed in place
+
+**Decision:** `src/lib/intake/persistence.ts`'s `completeParentJob()` (renamed `advanceParentJob()`)
+now atomically increments a real per-outcome counter (`processedItems`/`failedItems`/
+`skippedItems`) and marks the parent job `"completed"` only once every one of its `totalItems` has
+been accounted for — never unconditionally after one item.
+
+**Why:** The original function set `processedItems: 1` and `status: "completed"`
+unconditionally, correct only because every existing caller (`single_add`/`teacher_capture` jobs)
+always has exactly one item. Phase 9's `bulk_import` jobs are the first real caller with more than
+one — the bug was latent, never exercised, until this phase. Fixed as a small, targeted change to
+the ONE function, not a new job-tracking system; a real integration test
+(`tests/integration/db/persistence.test.ts`) confirms every existing single-item caller's
+behavior is byte-for-byte unchanged.
+
+**Relevant files:** `src/lib/intake/persistence.ts`; `tests/integration/db/persistence.test.ts`;
+`tests/integration/db/bulkImport.test.ts`.

@@ -146,9 +146,45 @@ must hold regardless of what a later phase adds:
   referenced by a non-archived book cannot simply be deactivated, and (as of the final closure
   pass) a deactivated category can no longer receive a brand-new assignment either.
 
-**PHASE 9 HAS NOT STARTED.** It may only begin once the driver thread explicitly decides to start
-it — this document being current is not itself that decision, and Phase 9 must not redesign
-Phase 8's approved architecture.
+**PHASE 9 (Google Sheets + Bulk Import Infrastructure) IS IMPLEMENTED AND REAL-VALIDATED** — a
+real, persistent Google Sheet ("SSJC Library Catalog") synced from canonical PostgreSQL, and a
+standalone bulk-import CLI/worker that reuses Phase 7's intake pipeline (never a second
+implementation of it) to turn Drive photographs into real catalog books. Both were validated
+against real external services: real Drive enumeration (1,618 real images found), a real 3-image
+bulk-import run (real Drive + Gemini + Open Library calls, 3 real books created and one confirmed
+findable via Find's own real search query), and a real Sheets create/sync/reuse round trip against
+the live Google account. **Read `docs/BULK_IMPORT.md` and `docs/DECISIONS.md`'s Phase 9 entries
+before changing any part of the bulk-import or Sheets-sync architecture.** These Phase 9
+invariants must hold regardless of what a later phase adds, alongside every Phase 8 invariant
+above (Phase 9 did not redesign any of them):
+
+- Canonical PostgreSQL is the only source of truth; the flow is always `Drive → bulk importer →
+  PostgreSQL → search/Admin Review → derived Sheet` — never `Drive → Sheet → PostgreSQL`, and
+  never `Sheet → PostgreSQL` in any direction.
+- The Sheet is derived and reference-only — it never writes back to canonical data. A person
+  editing a cell directly in the Sheet has that edit silently overwritten on the next sync; this is
+  intentional, documented behavior.
+- The bulk importer's conservative auto-completion gate never "guesses harder" merely because no
+  teacher is present — weak identity, ambiguous/unresolved reconciliation, any real duplicate
+  signal, or a missing/low-confidence category all route to Admin Review's existing computed
+  queue, never a forced completion.
+- Duplicate PHOTO is not the same claim as duplicate BOOK — the same Drive file reprocessed is a
+  pure idempotency case (never a second book); the same image content under a different Drive
+  file id is genuinely ambiguous and goes through the existing narrow duplicate-resolution
+  architecture, never a silent copy-count increment.
+- The bulk importer has its OWN, separately-configured Drive source root
+  (`GOOGLE_DRIVE_BULK_IMPORT_ROOT_FOLDER_ID`) — never the same env var as the interactive
+  Add-a-Book flow's root, even where (as in this project's real environment) one happens to be an
+  ancestor folder of the other.
+- The full ~1,500-image collection was deliberately NOT processed by Phase 9 — only a bounded,
+  real 3-image validation sample. A plain `import:run` cannot accidentally start an unbounded job;
+  `import:create-job` requires an explicit `--limit`/`--file-id`.
+
+**PHASE 10 (Real Collection Import + Taxonomy Finalization) HAS NOT STARTED.** It may only begin
+once the driver thread explicitly decides to start it — this document being current is not itself
+that decision — and per Phase 9's own design intent, it should not need a new importer or a new
+Sheets sync architecture to grow from a small batch to the full collection and finalize taxonomy
+using Phase 8's existing human tools.
 
 See `docs/IMPLEMENTATION_STATUS.md` for the authoritative, continuously updated detail — this
 file only orients you to the process, not the current state, since state changes every phase and
@@ -636,7 +672,11 @@ must not silently re-decide or re-break:
    documented, reasoned scope boundaries (`docs/DECISIONS.md`), not gaps to silently fill in
    without re-reading why.
 
-Phase 9 is the next phase in the plan — it must not begin without explicit approval, per the
-process above. Before starting it, read `docs/AI_PIPELINE.md` §10 for what Phase 7's
-real-provider validation did and didn't confirm (Google Books untested — no key), and
-`docs/TAXONOMY.md` for what Phase 8 deliberately left for Phase 11.
+Phase 9 (Google Sheets + Bulk Import Infrastructure) is complete and real-validated — see
+`docs/IMPLEMENTATION_STATUS.md`. **Phase 10 (Real Collection Import + Taxonomy Finalization,
+the old roadmap's Phases 10–12 consolidated) is next and has not started** — it must not begin
+without explicit approval, per the process above. Before starting it, read `docs/BULK_IMPORT.md`
+for the infrastructure Phase 9 already built and validated, `docs/AI_PIPELINE.md` §10 for what
+Phase 7's real-provider validation did and didn't confirm (Google Books untested — no key), and
+`docs/TAXONOMY.md` for what Phase 8 deliberately left for this consolidated taxonomy-finalization
+work.

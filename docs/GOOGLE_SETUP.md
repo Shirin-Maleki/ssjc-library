@@ -56,6 +56,21 @@ You'll need:
 2. Search for "Google Drive API".
 3. Click it, then click **Enable**.
 
+### 2b. Also enable the Google Sheets API (Phase 9)
+
+Required only once the Teacher Catalog / `npm run sheets:sync` is used — the Sheets API is a
+separate API from Drive and must be enabled independently, even though both share the same
+OAuth credential and scope below. Real Phase 9 validation found this NOT enabled by default and
+hit a real `SERVICE_DISABLED` 403 on first use — this is a one-time console step, not a code or
+scope problem, and does not require re-running the authorization helper (step 6) or any new
+consent.
+
+1. In the Cloud Console's left sidebar, go to **APIs & Services → Library**.
+2. Search for "Google Sheets API".
+3. Click it, then click **Enable**.
+4. If a request happens within the next minute or two, Google's own error message says to wait
+   a few minutes for the change to propagate — this is normal.
+
 ## 3. Configure the Google Auth Platform (OAuth consent screen)
 
 1. Go to **APIs & Services → OAuth consent screen** (Google may call this "Google Auth
@@ -80,6 +95,11 @@ You'll need:
 
    Do not add the broader `https://www.googleapis.com/auth/drive` scope — this
    application deliberately requests only these two (see `docs/GOOGLE_INTEGRATION.md`).
+
+   **These same two scopes also cover the Google Sheets API (Phase 9)** — `drive.file` is a
+   documented, valid scope for the Sheets API for spreadsheets this application itself creates,
+   confirmed by real Phase 9 validation. No third scope, no separate consent, no re-running step
+   6 is needed for Sheets sync to work — only enabling the Sheets API itself (step 2b above).
 
    **A Workspace administrator may need to approve this application's Drive scopes**
    before anyone in the organization can authorize it — if step 6 below fails with a
@@ -117,6 +137,17 @@ GOOGLE_DRIVE_ROOT_FOLDER_ID=<the Drive folder ID from "Before you start">
 Leave `GOOGLE_OAUTH_REFRESH_TOKEN` blank for now — the next step fills it in
 automatically. Never type a value into it by hand, and never commit `.env.local` (it's
 already gitignored).
+
+**Only if you plan to run the bulk importer** (`docs/BULK_IMPORT.md`), also set:
+
+```
+GOOGLE_DRIVE_BULK_IMPORT_ROOT_FOLDER_ID=<the bulk-import source folder ID>
+```
+
+Deliberately a SEPARATE value from `GOOGLE_DRIVE_ROOT_FOLDER_ID` above, even if in your real
+environment the bulk-import folder happens to be an ancestor of the interactive-flow folder (it
+is, in this project's real setup) — this keeps the interactive flow's own Drive boundary exactly
+as narrow as it already was, unaffected by whatever the bulk-import root is configured to.
 
 ## 6. Run the authorization helper
 

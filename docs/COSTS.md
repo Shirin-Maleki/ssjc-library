@@ -5,16 +5,17 @@ to cost as later phases add real external services. Updated as each phase change
 picture — never asserted from memory without checking the provider's own current
 documentation first.
 
-## Current external services (through Phase 7)
+## Current external services (through Phase 9)
 
 | Service | Phase | Cost model |
 |---|---|---|
 | PostgreSQL (local dev; Supabase in production) | 4 | Supabase free tier covers this project's tiny scale; see `docs/DATABASE_SETUP.md`. |
 | Google Gemini embedding API (`gemini-embedding-2`) | 5 | Optional — only used when `GEMINI_API_KEY` is configured. Free-tier quota observed to be rate-limited under heavy back-to-back testing in a single session (`docs/DECISIONS.md`); ordinary usage (one query embedding per real teacher search, one document batch per catalog embedding run) is far below that. |
 | Google Drive API | 6 | See below. |
-| Google Gemini vision + enrichment (`gemini-3.8-flash`) | 7 | Shares the same `GEMINI_API_KEY` as embeddings — never a second key. See below. |
+| Google Gemini vision + enrichment (`gemini-3.8-flash`) | 7 | Shares the same `GEMINI_API_KEY` as embeddings — never a second key. See below, and "Bulk import (Phase 9)" below for real per-item cost. |
 | Google Books API | 7 | Optional (`GOOGLE_BOOKS_API_KEY`). Free tier, ~10,000 requests/day. Not real-tested this session (no key available) — see "Add a Book (Phase 7)" below. |
 | Open Library Search API | 7 | Free, no key, no published rate limit found in its own docs beyond "identify your client" — kept low-volume and cached regardless. |
+| Google Sheets API | 9 | Standard Drive/Sheets API usage — no additional charge within Google's published quota limits, same as Drive (below). Required a one-time Google Cloud Console step to enable (see "Google Sheets (Phase 9)" below) — this was not a code or scope problem. |
 
 ## Add a Book (Phase 7)
 
@@ -127,6 +128,52 @@ convenience; the source/original photo lives in Drive once. (A later phase's
 *display*-cover derivation — `docs/DATA_MODEL.md` §5 — stores a separate, deliberately
 different, resized copy in Supabase Storage for fast rendering; that is a distinct,
 already-justified design decision from a prior phase's review, not a Phase 6 change.)
+
+## Bulk import (Phase 9)
+
+**Real, observed per-item cost from an actual bulk-import run against the real SSJC Drive
+collection** (`docs/IMPLEMENTATION_STATUS.md`'s Phase 9 section has the full real-validation
+record) — 3 real images, real `gemini-3.8-flash` calls, real usage metadata captured directly from
+the API response (`src/lib/ai/geminiProvider.ts`'s `analyzeCover` now surfaces
+`usageMetadata.promptTokenCount`/`candidatesTokenCount` when Google's SDK response includes it —
+this is the first caller to read it):
+
+- Average 2,398 prompt tokens + 440 output tokens per item.
+- At current published pricing (checked 2026-09-23, `https://ai.google.dev/gemini-api/docs/pricing`
+  — input $0.75/1M tokens, output $3.75/1M tokens through 2026-12-31, stepping to
+  $1.50/$7.50 on 2027-01-01): **≈$0.00345 per real image processed.**
+- **Projected 100 images: ≈$0.34. Projected the full ~1,500-image collection: ≈$5.17.** Both are
+  linear extrapolations from 3 real samples, not independently re-measured at that scale — a real
+  Phase 10 100-image batch will produce a much better-founded estimate before the full collection
+  ever runs, and `src/lib/bulkImport/pricing.ts` recomputes this automatically from whatever real
+  samples that batch produces.
+- These numbers do NOT include: Google Books API calls (optional, no key configured this session),
+  Open Library calls (free), embedding calls (`gemini-embedding-2`, $0.20/1M text tokens or
+  $0.00012/image — run once per batch via the existing `embeddings:generate --mode=missing`, not
+  per item), or Drive API calls (no additional charge within Google's published quota, same as
+  Phase 6).
+- **The observed daily quota constraint from Phase 7** (`GenerateRequestsPerDayPerProjectPerModel-
+  FreeTier`, 20 real `gemini-3.8-flash` requests/day on the free tier — see "Add a Book (Phase 7)"
+  above) applies identically to bulk import: real validation deliberately used only 3 of that
+  budget. **Processing the full ~1,500-image collection under free-tier-only conditions is not
+  feasible** (it would take ~75 days at 20/day) — Phase 10 will need the project's billing/paid
+  tier genuinely enabled for real throughput, not just configured. This project's Google Cloud
+  project already has billing enabled with a spending cap (per this pass's own brief) — that caps
+  cost, but does not by itself remove the free-tier per-model daily request ceiling if the project
+  is still being billed at free-tier rates; re-verify actual paid-tier throughput before Phase 10
+  commits to a real processing timeline.
+
+## Google Sheets (Phase 9)
+
+Standard Sheets API usage (spreadsheet create/read/update/batchUpdate, all read-mostly by volume
+here) carries no additional charge within Google's published quota limits, exactly like Drive.
+**A one-time, real, non-code blocker was found and resolved during this phase**: the Sheets API
+was not enabled for this project's Google Cloud project (a genuine `SERVICE_DISABLED` 403 on first
+real attempt) — enabling it in Google Cloud Console (one click, the URL is project-specific and
+was surfaced directly in the real error) resolved it immediately, with no scope change, no
+re-consent, no code change. The existing `drive.file` OAuth scope (Phase 6) is genuinely sufficient
+for the Sheets API per Google's own scope reference — confirmed both by documentation and by the
+real, successful create/sync calls in this pass.
 
 ## What would change this picture
 

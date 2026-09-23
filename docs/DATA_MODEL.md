@@ -370,6 +370,18 @@ books/copies split rather than pointing at two overlapping targets.
 | `started_at` / `completed_at` | timestamptz | nullable |
 | `created_at` | timestamptz | |
 
+**`drive_file_id` partial unique index (Phase 9, `drizzle/0006_...sql`)** — scoped to only the
+three ACTIVE statuses (`pending`/`processing`/`needs_review`), enforcing "the same Drive source
+file never has two simultaneously-active ingestion items" as a database-level backstop for the
+bulk importer (`docs/BULK_IMPORT.md`). Deliberately not a global unique constraint on
+`drive_file_id` — the existing, previously-unused `reimport` value on `ingestion_job_type`
+anticipates a legitimate future case where the same file gets a fresh item under a new job (e.g.
+a Phase 10 taxonomy-driven reimport); a global constraint would permanently foreclose that. The
+real primary mechanism is still job-creation-time idempotency (`src/lib/bulkImport/jobs.ts` looks
+up existing items by `driveFileId` first and never re-enqueues an already-tracked file) — this
+index is defense-in-depth, exactly like the existing `book_copies.source_ingestion_item_id`
+partial unique index above.
+
 **`intake_draft` (Phase 7)** — everything needed to resume a single-book intake
 without re-uploading the photo or re-running any provider call: confirmed Drive
 source metadata (file id/filename/MIME/size/checksum — never the ephemeral
@@ -436,8 +448,18 @@ normalized query, so a repeat lookup during bulk import is a cache read, not a r
 
 ## 11. Sheets sync, audit & configuration
 
-`book_sheet_sync`, `audit_log`, `system_settings`, `login_attempts` are unchanged from the
-first draft.
+`audit_log`, `login_attempts` are unchanged from the first draft.
+
+`book_sheet_sync` and `system_settings` were schema-only through Phase 8 ("no Google Sheets
+integration runs yet; this is persistence only") — **Phase 9 is the first phase to actually write
+to either.** `book_sheet_sync` now gets one upserted row per book on every `npm run sheets:sync`
+run (last synced timestamp, a content hash of that book's synced row, sync status), cleaned up
+(deleted) for any book that no longer qualifies for export; `system_settings` now holds exactly
+one real row, keyed `google_sheets_catalog_target`, holding the one persistent target
+spreadsheet's id/tab id/URL/creation and last-sync timestamps — the durable answer to "which
+spreadsheet is the target," read and updated by `src/lib/googleSheets/targetState.ts`. Neither
+column shape changed; only real writes started happening. See `docs/BULK_IMPORT.md` and
+`docs/ARCHITECTURE.md` §8 for the full sync architecture.
 
 ## 12. Schema complexity review
 
@@ -465,7 +487,7 @@ or **(C)** deferrable/removable — with the actual disposition applied.
 | `ingestion_jobs`, `ingestion_items` | A | Kept | Core resumable/idempotent import requirement |
 | `book_identity_candidates` | B | Kept | Directly serves "reconcile candidates, don't blindly take the first result," and gives admins a real audit trail instead of a black box for misidentified books |
 | `metadata_provider_cache` | B | Kept | Directly serves explicit cost/rate-limit-control requirement for bulk import |
-| `book_sheet_sync` | B | Kept | Incremental Sheets sync cannot track drift without this |
+| `book_sheet_sync` | B | Kept | Phase 9 built full-snapshot sync rather than the originally-imagined incremental engine, but this table is still real, useful per-book sync observability (last synced, content hash, status) — not dead weight |
 | `audit_log` | B | Kept | Already scoped narrowly to admin destructive actions only, per explicit requirement |
 | `system_settings` | A | Kept | Required as soon as any threshold exists (Phase 1 login throttling, Phase 5 ranking weights, Phase 7 confidence routing) |
 | `login_attempts` | A | Kept | Needed starting Phase 1, not deferrable |

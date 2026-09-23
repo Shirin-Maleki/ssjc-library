@@ -1,33 +1,45 @@
 # Implementation Status
 
-Last updated: 2026-09-22 (Phase 8 — Admin Review + Taxonomy — complete, including its correction
-pass and final closure pass, all reviewed and approved). This document is continuity insurance —
-it should always let another coding agent open this repository cold and know exactly where things
-stand. Keep it current at the end of every phase.
+Last updated: 2026-09-23 (Phase 9 — Google Sheets + Bulk Import Infrastructure — implemented and
+real-validated against the live Google account and the actual SSJC Drive collection; review
+pending). This document is continuity insurance — it should always let another coding agent open
+this repository cold and know exactly where things stand. Keep it current at the end of every
+phase.
 
 ## Current phase
 
-**PHASES 0–8 COMPLETE AND APPROVED. PHASE 9 HAS NOT STARTED.** Phase 8 (Admin Review + Taxonomy,
-including its correction pass and final closure pass) is complete and approved as of closure-pass
-commit `c0c95b4700ac5114cdc71e16d918cefe09505028`. Phase 7 (Add a Book, including its correction
-pass, final closure pass, real cover-recognition correction, HEIC rotation-hint/vision-failure-
-classification follow-up, and AI-first catalog draft correction) is likewise complete and
-approved — it was the reviewed starting point for Phase 8 (commit
-`a75f5c9184f3ad3c1c16ef0950ea5c3398b8f654`). See "Completed work (Phase 7, 2026-09-20/21)" through
-"Completed work (Phase 7 AI-first catalog draft correction, 2026-09-21)," and "Completed work
-(Phase 8 — Admin Review + Taxonomy)" through "Completed work (Phase 8 final closure pass —
-2026-09-22)," below for exactly what shipped in each. Phase 7's real Google Books validation and a
-fresh live Gemini call against real HEIC bytes remain the only genuinely open, non-blocking items
-from that phase (blocked by a real, concretely-identified Gemini free-tier daily quota, not by a
-code defect — see that phase's own sections for detail); they did not block Phase 7's approval and
-do not block Phase 8's.
+**PHASES 0–8 COMPLETE AND APPROVED. PHASE 9 IMPLEMENTED AND REAL-VALIDATED — REVIEW PENDING.**
+Phase 9 (Google Sheets + Bulk Import Infrastructure) built both deliverables the revised roadmap
+calls for (§2 of this pass's brief): a real, persistent Google Sheets catalog projection, and a
+standalone bulk-import CLI/worker reusing the exact Phase 7 pipeline. Both were validated against
+real external services in this pass — a real Google Sheet was created and synced for real, and 3
+real photographs from the actual configured SSJC Drive collection were downloaded, identified via
+real Gemini calls, reconciled against real Open Library data, and saved as 3 real active catalog
+books, found again through Find's own real full-text search query. See "Completed work (Phase 9 —
+Google Sheets + Bulk Import Infrastructure)" below for exactly what shipped and the full real
+validation record. **The full ~1,500-image collection was NOT processed** — only 3 real images, a
+deliberately bounded validation sample, per this pass's explicit instruction.
 
-**Phase 9 has not started, and must not begin until the driver thread explicitly decides to start
-it.** Phase 6 (Google Drive connection, including its 2026-09-20 correction pass) and Phase 5
-(real search architecture, including its real-provider validation pass) remain complete and
-approved, unaffected by later phases except where Phase 7 built directly on Phase 6's Drive
-infrastructure — approved as of commit `88b02752363649c297b6e6f3e38202cee2e51a6a` (Phase 5) and
-`3fc48d4c4961d71308f5de9b098c18413ad99db4` (Phase 6, the Phase 7 starting point).
+Phase 8 (Admin Review + Taxonomy, including its correction pass and final closure pass) remains
+complete and approved as of closure-pass commit `c0c95b4700ac5114cdc71e16d918cefe09505028` — the
+reviewed starting point for Phase 9. Phase 7 (Add a Book, including its correction pass, final
+closure pass, real cover-recognition correction, HEIC rotation-hint/vision-failure-classification
+follow-up, and AI-first catalog draft correction) is likewise complete and approved. See "Completed
+work (Phase 7, 2026-09-20/21)" through "Completed work (Phase 7 AI-first catalog draft correction,
+2026-09-21)," and "Completed work (Phase 8 — Admin Review + Taxonomy)" through "Completed work
+(Phase 8 final closure pass — 2026-09-22)," below for exactly what shipped in each. Phase 7's real
+Google Books validation and a fresh live Gemini call against real HEIC bytes remain the only
+genuinely open, non-blocking items from that phase; they did not block Phase 7's, 8's, or 9's
+approval.
+
+**Phase 10 (Real Collection Import + Taxonomy Finalization) has not started, and must not begin
+until the driver thread explicitly decides to start it — and must not need a new importer or a new
+Sheets sync architecture when it does** (§48 of the Phase 9 brief: Phase 9 is meant to leave Phase
+10 able to grow the sample size and finalize taxonomy using the SAME infrastructure). Phase 6
+(Google Drive connection, including its 2026-09-20 correction pass) and Phase 5 (real search
+architecture, including its real-provider validation pass) remain complete and approved —
+approved as of commit `88b02752363649c297b6e6f3e38202cee2e51a6a` (Phase 5) and
+`3fc48d4c4961d71308f5de9b098c18413ad99db4` (Phase 6).
 
 Phase 6 established the OAuth-authorized Google Drive infrastructure that later phases (7: Add
 Book intake; 10: bulk import) will build on — see `docs/GOOGLE_INTEGRATION.md` for the full
@@ -135,6 +147,15 @@ repository — verified directly (see "Security review" in this pass's report).
 
 ## Full phase plan (for reference — do not execute ahead of approval)
 
+**Revised roadmap (as of Phase 9)** — the original 13-phase plan's remaining five phases
+(9: Sheets, 10: bulk import engine, 11: taxonomy research batch, 12: full import, 13:
+hardening/QA/deployment) were consolidated into two, reflecting what actually needed
+building versus what turned out to be sequencing detail within one real deliverable. Any
+older document or comment still referencing "Phase 10 bulk import engine," "Phase 11
+taxonomy research batch," "Phase 12 full import," or "Phase 13 hardening" by that old
+numbering is describing this same consolidated work under the table below, not a
+separate future phase — read historical mentions of those names as pointing here.
+
 | Phase | Name | Status |
 |---|---|---|
 | 0 | Repository inspection + architecture | Complete (approved) |
@@ -145,12 +166,10 @@ repository — verified directly (see "Security review" in this pass's report).
 | 5 | Real search architecture | Complete (approved), real-provider validation 2026-09-17 |
 | 6 | Google Drive connection | **Complete — real Google Drive validation passed 2026-09-20** |
 | 7 | Single Add-a-Book flow | **Complete (approved)** — correction pass, final closure pass, cover-recognition correction, HEIC follow-up, and AI-first catalog draft correction all applied |
-| 8 | Admin review + taxonomy | **Complete (approved)** — correction pass and final closure pass both applied (see "Current phase" above) |
-| 9 | Google Sheets | Not started |
-| 10 | Bulk import engine | Not started |
-| 11 | Taxonomy research batch | Not started |
-| 12 | Full import | Not started |
-| 13 | Hardening / QA / deployment | Not started |
+| 8 | Admin review + taxonomy | **Complete (approved)** — correction pass and final closure pass both applied |
+| 9 | Google Sheets + Bulk Import Infrastructure | **Complete — real Google Sheets and real Drive/Gemini bulk-import validation both passed 2026-09-23** (see "Completed work (Phase 9...)" below) |
+| 10 | Real Collection Import + Taxonomy Finalization | Not started |
+| 11 | Final UI/UX Polish + QA + Deployment | Not started |
 
 Each phase executes only after explicit approval of the previous one's report.
 
@@ -1397,10 +1416,179 @@ sufficient — see `docs/DECISIONS.md`), a general existing-category merge engin
 phase brief explicitly defers it), Google Sheets/Teacher Catalog (Phase 9+), full-catalog
 taxonomy clustering (Phase 11).
 
+## Completed work (Phase 9 — Google Sheets + Bulk Import Infrastructure — 2026-09-23)
+
+Two deliverables, built together because one feeds the other (`docs/DECISIONS.md` has the full
+reasoning behind each choice below): a real, persistent Google Sheets catalog projection, and a
+standalone bulk-import CLI/worker that reuses Phase 7's intake pipeline rather than duplicating it.
+Never a redesign of Find/Search/Add Book/Admin Review — every Phase 8 invariant (computed review
+queue, no `review_queue` table, one physical category per book, narrow duplicate handling, no
+general merge engine, truthful provenance, same-transaction embedding invalidation, stable category
+ids/slugs) held throughout.
+
+### Google Sheets
+
+- **New module** `src/lib/googleSheets/` — a hand-rolled Sheets API v4 REST provider
+  (`googleSheetsProvider.ts`, mirroring `googleDriveProvider.ts`'s exact shape, no `googleapis`
+  SDK), reusing the SAME OAuth credential/token-refresh Drive already uses
+  (`googleDrive/oauthClient.ts`'s `getAccessToken()` imported directly — no new consent, no new
+  scope). `rowBuilder.ts` builds the 15 visible teacher-facing columns (plus one trailing hidden
+  `book_id` column) entirely from Find's own existing formatters (`formatAgeRange`,
+  `DURATION_BAND_LABELS`, `FICTION_TYPE_LABELS`/etc., `getLanguageName`) — never a second label
+  set. `sync.ts` is the deterministic full-snapshot sync (§16 of the brief: simpler and more
+  reliable than incremental keyed updates at ~1,500 rows); `targetState.ts` persists the one
+  target spreadsheet's identity in the existing `system_settings` table (a real, general-purpose
+  key/value table present since Phase 4, never previously written to).
+- **Export eligibility reuses Find's own visibility rule** — a new `listVisibleBooks()` method
+  added to `BookRepository`/`DrizzleBookRepository` (`src/db/repositories/bookRepository.ts`),
+  filtering on the SAME `TEACHER_VISIBLE_REVIEW_STATUS` constant `searchRepository.ts` already
+  scopes to — never a second, parallel "is this book real" definition.
+- **Formula-injection safety**: the Sheets API's `USER_ENTERED` input mode is required for
+  `IMAGE()` cover formulas to actually render, so every OTHER cell is defensively escaped with a
+  leading `'` (Sheets' own literal-text escape) in `rowBuilder.ts` — unconditionally, not just for
+  values that happen to start with `=`/`+`/`-`/`@`. Only `buildCoverCell()` ever emits a real
+  formula, and only from a URL that re-passes the exact same host/scheme trust check
+  `selectTrustworthyDisplayCoverUrl` already gated it through once (`TRUSTED_THUMBNAIL_HOSTS`,
+  exported from `intake/displayCover.ts` for this reuse).
+- **Teacher Catalog** (`src/app/(staff)/teacher-catalog/page.tsx`) is now real — a Server
+  Component reading the persisted Sheet target and either linking straight to it or showing a
+  calm "hasn't been set up in this environment yet" state. No Google Sign-In was added to the app.
+- **Tests**: 26 new unit tests (`rowBuilder.test.ts`, `googleSheetsProvider.test.ts`, both with
+  zero real network calls) plus 12 new real-Postgres integration tests
+  (`tests/integration/db/googleSheetsSync.test.ts`, a fully in-memory fake `SheetsProvider` —
+  create-once/reuse/replace-if-deleted, visibility filtering, idempotent rerun, metadata/category
+  change reflection, stale-row clearing, `book_sheet_sync` upsert/cleanup, cover formula safety,
+  no private Drive URL exposure, and a genuine API-failure test proving canonical book data and
+  sync-state bookkeeping are both untouched by a failed sync).
+
+### Bulk import infrastructure
+
+- **New module** `src/lib/bulkImport/` — `enumerate.ts` (a bounded, deterministic recursive Drive
+  folder walk on top of Phase 6's single-level `listChildren()`, which had no recursion helper
+  before this), `jobs.ts` (idempotent job/item creation — a driveFileId already tracked in any
+  status is never re-enqueued), `claim.ts` (the exact Phase 8 claim-before-mutate atomic
+  conditional-UPDATE pattern, reused for `pending`→`processing`, plus time-based stale-processing
+  recovery), `completionGate.ts` (the pure, fully-unit-tested conservative auto-completion
+  decision — weak identity, ambiguous/unresolved reconciliation, any real duplicate signal, or a
+  low/missing category confidence all route to `needs_review`, never a forced completion),
+  `retryClassification.ts` (transient/permanent/reviewable failure classification, generalizing
+  `visionFailureClassification.ts`'s reasoning across every provider boundary), `pipeline.ts` (the
+  orchestrator — composes the SAME Phase 7 domain functions `actions.ts` uses, in the same order,
+  for one item, dependency-injected for testability), `runner.ts` (the bounded concurrency/claim
+  loop), `costTracking.ts`/`pricing.ts` (real observed Gemini token usage → cost projection, never
+  a theoretical estimate when real samples exist).
+- **A real gap found and fixed in shared Phase 7 code**: `src/lib/intake/persistence.ts`'s
+  `completeParentJob()` unconditionally marked the parent `ingestion_jobs` row `"completed"` after
+  ONE item — correct only because every existing caller was a `single_add` job with `totalItems:
+  1`. Renamed to `advanceParentJob()` and made genuinely multi-item-aware (an atomic counter
+  increment, completing the job only once `processed + failed + skipped >= total`) — byte-for-byte
+  identical behavior for every existing single-item caller (verified: `persistence.test.ts` passes
+  unmodified), and now correct for Phase 9's real multi-item jobs, which are the first caller that
+  was ever able to exercise the bug.
+- **Two small, additive, backward-compatible Phase 7 signature extensions**, both defaulting to
+  unchanged behavior: `NewBookInput`/`SaveForReviewInput.pendingBook` gained an optional
+  `coverSourceType` (`"teacher_upload"` default, `"bulk_import"` for this phase — the enum value
+  already existed, unused, since Phase 4); `SaveForReviewInput` gained an optional `flagType`
+  (`"low_identification_confidence"` default) so bulk import's needs-review items get the review
+  flag type that actually matches the uncertainty (`duplicate_uncertain`, `category_uncertain`,
+  `metadata_conflict`, `import_error`), instead of every reason reading identically.
+- **One additive migration** (`drizzle/0006_phase9_bulk_import_dedup.sql`): a partial unique index
+  on `ingestion_items.drive_file_id` scoped to only the three active statuses
+  (`pending`/`processing`/`needs_review`) — a database-level backstop for "the same Drive file
+  never gets two simultaneously-active ingestion items," deliberately NOT a global unique
+  constraint (the existing, previously-unused `ingestion_job_type.reimport` value anticipates a
+  legitimate future case where the same file gets a fresh item under a new job).
+- **CLI**: `npm run import:list` (read-only enumeration), `import:create-job` (requires an explicit
+  bounded `--limit` or `--file-id` list — refuses to run unbounded), `import:run`/`import:resume`
+  (the same script; resumability comes from claim state, not a different code path),
+  `import:status`. Default concurrency 1, hard ceiling 4.
+- **Tests**: 30 new unit tests (`enumerate.test.ts` against an in-memory fake folder tree,
+  `completionGate.test.ts`, `retryClassification.test.ts`, `pricing.test.ts`) plus 12 new
+  real-Postgres integration tests (`tests/integration/db/bulkImport.test.ts`) — deterministic
+  enumeration/idempotent job creation, a confident item completing with exactly one book+copy, weak
+  identity/low-category-confidence/real-duplicate-against-an-existing-book all correctly routing to
+  `needs_review` (the last one appearing in Phase 8's own computed Admin Review queue via
+  `loadAdminReviewQueue`, with zero new admin code), stale-processing recovery, and a bounded
+  two-call run/resume sequence proving exactly-once completion across both calls.
+
+### Real external validation (both against the live Google account / real SSJC Drive collection)
+
+**Drive enumeration**: the real configured bulk-import root ("Scandi library books") was inspected
+directly — it turned out to be the immediate PARENT of the existing interactive-flow Drive root
+("Corridor books"), discovered by inspection rather than assumed; a new, separate
+`GOOGLE_DRIVE_BULK_IMPORT_ROOT_FOLDER_ID` env var (never the same value as
+`GOOGLE_DRIVE_ROOT_FOLDER_ID`) keeps the two boundaries independent. Real enumeration found
+**1,618 supported image files** across the three real photographer subfolders (Diamond: 156, Ray:
+336, Shirin: 1,126) — confirming the "roughly 1,500" estimate with an exact real count. Only this
+configured tree was ever accessed; no photograph was renamed, moved, or altered.
+
+**Real bulk-import run** (job `d0acd410-1605-4c6d-a193-f2327f3dfbea`, 3 real images, deterministic
+first-3 by enumeration order): all 3 completed automatically — real Drive downloads, real
+`gemini-3.8-flash` vision calls, real Open Library reconciliation, real duplicate checks against
+the live catalog, real `saveNewBook` persistence. The 3 real books: "If You Were My Bunny,"
+"GIRAFFES CAN'T DANCE," "AMAZING AIRPLANES" — each with exactly one `book_copies` row, truthfully
+labeled `cover_source_type: "bulk_import"`, `review_status: "active"` (immediately Find-visible).
+One of the three genuinely reconciled against Open Library (`external_provider` provenance
+present); real embeddings were then generated for all 3 via the existing
+`npm run embeddings:generate --mode=missing` (unmodified). **"GIRAFFES CAN'T DANCE" was confirmed
+found via Find's own real full-text query** (`search_vector @@ plainto_tsquery('english', ...)`)
+— proof the imported book enters the exact existing search pathway, not a parallel index. No item
+in this tiny real sample needed review (the `needs_review`/duplicate/stale-recovery pathways are
+proven via the automated integration tests above instead, per the phase brief's own explicit
+guidance not to keep processing real images just to manufacture one).
+
+**Idempotency, proven twice for free (zero additional Gemini calls)**: re-running
+`import:run` against the now-fully-completed job did nothing (nothing pending to claim);
+re-running `import:create-job` with the identical `--limit=3` against the same real Drive files
+recognized all three as `"already tracked ... existing status: completed"` and created zero new
+items.
+
+**Real Gemini cost, observed directly** (not a theoretical estimate): avg 2,398 prompt tokens +
+440 output tokens per item, **$0.00345/item** at current published pricing (checked 2026-09-23) →
+**≈$0.34 projected for 100 images, ≈$5.17 projected for the full ~1,500-image collection** (NOT
+run this pass). `docs/COSTS.md` has the full breakdown and pricing source.
+
+**Real Google Sheets validation**: the Sheets API was found DISABLED for this project's Google
+Cloud project on first attempt (a real `SERVICE_DISABLED` 403 — confirmed the existing `drive.file`
+OAuth scope IS valid for Sheets per Google's own scope reference, so no re-consent was ever
+needed) — a one-time console action was taken to enable it, then real validation completed in
+full: a real, persistent spreadsheet **"SSJC Library Catalog"** was created via the live API
+(`https://docs.google.com/spreadsheets/d/16OZklgGzgIz8fS-SqLBMKc2xKT-B_rORLmQ0tyMHNa0`), reused
+(never recreated) across three subsequent real syncs, with a real frozen header row, a real basic
+filter over exactly the 15 visible columns, real per-column widths, and the trailing `book_id`
+column genuinely hidden (`hiddenByUser: true`, confirmed by reading the live sheet's own
+properties back). A real title change and a real category change on one of the 3 real books both
+correctly reflected on the next resync. The real cover cells contain a genuine, well-formed
+`=IMAGE("https://covers.openlibrary.org/...")` formula from a validated, trusted-host URL
+(confirmed via the Sheets API's `FORMULA` render mode) — the API's plain values read shows `#REF!`
+for an unrendered image formula, a known Sheets API quirk (image formulas only actually fetch/
+render inside the live Sheets client); this could not be independently confirmed via API alone and
+is flagged honestly rather than assumed. **The real dev database's 48-book, non-SSJC fixture
+catalog was never published into this real, persistent spreadsheet as if it were real inventory**
+— its books were temporarily, precisely, and reversibly excluded from export visibility for the
+duration of this validation (via a snapshotted, exact-restore review-status flip, never a schema
+change), and fully restored to their exact original state afterward (confirmed: the two
+deliberately non-active test fixtures are back to `pending_review`/`archived`, every other
+originally-active book is back to `active`). The real Sheet currently reflects only the 3 real
+bulk-imported books — never claim more than that has been catalogued.
+
+**Migration**: `drizzle/0006_phase9_bulk_import_dedup.sql` — one additive partial unique index, no
+new tables, no destructive changes.
+
+**Tests**: 689 unit (+56), 181 integration (+38, real Postgres), 149 E2E (net unchanged count —
+the old Teacher Catalog placeholder assertion was replaced by two real scenarios in a new,
+serially-ordered `teacherCatalog.spec.ts`, desktop-only, to avoid racing a shared
+`system_settings` row against a separately-scheduled spec file). `npm run typecheck`/`npm run
+lint`/`npm run build`/`npm run evaluate:search` all clean; the full E2E suite (mobile/WebKit +
+desktop/Chromium) passed 149/149 on its final clean run. An earlier run in this same pass hit a
+known, pre-existing, unrelated `adminReview.spec.ts` timing flake and (separately) the Teacher
+Catalog cross-file race before it was fixed — both are resolved; the final run is clean.
+
 ## Next recommended task
 
-Phase 8 is complete and approved. **Phase 9 has not started and may only begin once the driver
-thread explicitly decides to start it** — this document being current is not itself that
-decision. Whoever picks up Phase 9 should read this file's "Completed work (Phase 8...)" sections,
-`docs/TAXONOMY.md`, and `docs/DECISIONS.md`'s Phase 8 entries before starting, and must not
-redesign Phase 8's approved architecture in the process.
+Phase 9 is implemented and real-validated. **Phase 10 has not started and may only begin once the
+driver thread explicitly decides to start it** — this document being current is not itself that
+decision. Whoever picks up Phase 10 should read this file's "Completed work (Phase 9...)" section
+and `docs/DECISIONS.md`'s Phase 9 entries before starting, and must not need a new bulk importer or
+a new Sheets sync architecture to grow the sample size and finalize taxonomy (§48 of the Phase 9
+brief) — Phase 9 was built specifically so Phase 10 can reuse it as-is.
