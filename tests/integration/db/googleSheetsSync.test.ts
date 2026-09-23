@@ -1,6 +1,6 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
-import { books, bookSheetSync, physicalCategories, systemSettings } from "@/db/schema";
+import { books, bookCopies, bookSheetSync, libraryLocations, physicalCategories, systemSettings } from "@/db/schema";
 import { findOrCreateSpreadsheet, syncCatalogToSheet } from "@/lib/googleSheets/sync";
 import { getSheetsTarget } from "@/lib/googleSheets/targetState";
 import type { CreateSpreadsheetResult, SheetsBatchUpdateRequest, SheetsProvider, SpreadsheetMeta } from "@/lib/googleSheets/provider";
@@ -64,11 +64,16 @@ function fakeSheetsProvider() {
 describe.skipIf(!hasTestDb)("Phase 9 Google Sheets sync (against a real Postgres database)", () => {
   const { db, client } = hasTestDb ? createTestDb() : ({} as ReturnType<typeof createTestDb>);
   const createdBookIds: string[] = [];
+  const createdLocationIds: string[] = [];
 
   afterEach(async () => {
     for (const id of createdBookIds.splice(0)) {
+      await db.delete(bookCopies).where(eq(bookCopies.bookId, id));
       await db.delete(bookSheetSync).where(eq(bookSheetSync.bookId, id));
       await db.delete(books).where(eq(books.id, id));
+    }
+    for (const id of createdLocationIds.splice(0)) {
+      await db.delete(libraryLocations).where(eq(libraryLocations.id, id));
     }
     await db.delete(systemSettings).where(eq(systemSettings.key, "google_sheets_catalog_target"));
   });
@@ -269,5 +274,84 @@ describe.skipIf(!hasTestDb)("Phase 9 Google Sheets sync (against a real Postgres
     expect(result.rowsWritten).toBeGreaterThanOrEqual(1);
     const [syncRow] = await db.select().from(bookSheetSync).where(eq(bookSheetSync.bookId, bookId)).limit(1);
     expect(syncRow?.syncStatus).toBe("synced");
+  });
+
+  // ---------------------------------------------------------------------
+  // Location column (Phase 9 addendum — physical copy locations)
+  // ---------------------------------------------------------------------
+
+  async function makeLocation(displayName: string) {
+    const [row] = await db.insert(libraryLocations).values({ slug: `sync-test-${displayName.toLowerCase().replace(/\s+/g, "-")}`, displayName }).returning({ id: libraryLocations.id });
+    createdLocationIds.push(row.id);
+    return row.id;
+  }
+
+  function locationCellFor(values: (string | number)[][], title: string): string | number {
+    const row = values.find((r) => r[1] === `'${title}`);
+    return row![14];
+  }
+
+  it("shows a bare location for one copy at one location, a count for several at one location, and 'Not specified' for none recorded", async () => {
+    const l1 = await makeLocation("Sync Test Solo Room");
+    const bareId = await makeActiveBook({ title: "Location Bare Book", normalizedTitle: "location bare book", sortTitle: "Location Bare Book" });
+    await db.insert(bookCopies).values({ bookId: bareId, currentLocationId: l1 });
+
+    const severalId = await makeActiveBook({ title: "Location Several Book", normalizedTitle: "location several book", sortTitle: "Location Several Book" });
+    await db.insert(bookCopies).values([{ bookId: severalId, currentLocationId: l1 }, { bookId: severalId, currentLocationId: l1 }]);
+
+    const noneId = await makeActiveBook({ title: "Location None Book", normalizedTitle: "location none book", sortTitle: "Location None Book" });
+    await db.insert(bookCopies).values({ bookId: noneId }); // no location recorded
+
+    const provider = fakeSheetsProvider();
+    const result = await syncCatalogToSheet(db, provider);
+    const sheet = provider.spreadsheets.get(result.spreadsheetId)!;
+    const dataRange = [...sheet.values.keys()].find((r) => r.includes("A1"))!;
+    const values = sheet.values.get(dataRange)!;
+
+    expect(locationCellFor(values, "Location Bare Book")).toBe("'Sync Test Solo Room");
+    expect(locationCellFor(values, "Location Several Book")).toBe("'Sync Test Solo Room (2)");
+    // A real copy with no location recorded is its own honest single bucket
+    // ("Location not recorded"), never conflated with the zero-copies
+    // fallback ("Not specified") — see `formatLocationSummary`'s own doc
+    // comment.
+    expect(locationCellFor(values, "Location None Book")).toBe("'Location not recorded");
+  });
+
+  it("shows every location with its own count, deterministically, when a book's copies span several locations", async () => {
+    const l1 = await makeLocation("Sync Test Room A");
+    const l2 = await makeLocation("Sync Test Room B");
+    const bookId = await makeActiveBook({ title: "Location Spread Book", normalizedTitle: "location spread book", sortTitle: "Location Spread Book" });
+    await db.insert(bookCopies).values([{ bookId, currentLocationId: l1 }, { bookId, currentLocationId: l2 }]);
+
+    const provider = fakeSheetsProvider();
+    const result = await syncCatalogToSheet(db, provider);
+    const sheet = provider.spreadsheets.get(result.spreadsheetId)!;
+    const dataRange = [...sheet.values.keys()].find((r) => r.includes("A1"))!;
+    const values = sheet.values.get(dataRange)!;
+
+    expect(locationCellFor(values, "Location Spread Book")).toBe("'Sync Test Room A (1), Sync Test Room B (1)");
+  });
+
+  it("reflects a real location change (a Move a Book action) on the next sync", async () => {
+    const l1 = await makeLocation("Sync Test Before Room");
+    const l2 = await makeLocation("Sync Test After Room");
+    const bookId = await makeActiveBook({ title: "Location Change Book", normalizedTitle: "location change book", sortTitle: "Location Change Book" });
+    const [copy] = await db.insert(bookCopies).values({ bookId, currentLocationId: l1 }).returning({ id: bookCopies.id });
+
+    const provider = fakeSheetsProvider();
+    const before = await syncCatalogToSheet(db, provider);
+    const beforeSheet = provider.spreadsheets.get(before.spreadsheetId)!;
+    const beforeRange = [...beforeSheet.values.keys()].find((r) => r.includes("A1"))!;
+    expect(locationCellFor(beforeSheet.values.get(beforeRange)!, "Location Change Book")).toBe("'Sync Test Before Room");
+
+    // The exact mutation `moveCopy()` performs — asserting the sync layer
+    // picks it up, not re-testing the move logic itself (covered in
+    // tests/integration/db/locations.test.ts).
+    await db.update(bookCopies).set({ currentLocationId: l2 }).where(eq(bookCopies.id, copy.id));
+
+    const after = await syncCatalogToSheet(db, provider);
+    const afterSheet = provider.spreadsheets.get(after.spreadsheetId)!;
+    const afterRange = [...afterSheet.values.keys()].find((r) => r.includes("A1"))!;
+    expect(locationCellFor(afterSheet.values.get(afterRange)!, "Location Change Book")).toBe("'Sync Test After Room");
   });
 });

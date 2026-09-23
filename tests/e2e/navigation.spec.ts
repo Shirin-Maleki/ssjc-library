@@ -7,13 +7,15 @@ test.describe("Home navigation", () => {
   });
 
   // "Find a Book" (Phase 2), "Reading Lists" / "Library Guide" (Phase 3),
-  // "Add a Book" (Phase 7), and "Teacher Catalog" (Phase 9) are intentionally
-  // not placeholders any more — each replaced its placeholder with a real
-  // experience, covered by its own spec file instead (find.spec.ts,
-  // readingLists.spec.ts, guide.spec.ts, addBook.spec.ts, teacherCatalog.spec.ts
-  // — the Teacher Catalog scenarios both live there, in one serially-ordered
-  // file, specifically to avoid racing a shared `system_settings` row against
-  // whatever order separate spec files happen to be scheduled in).
+  // "Add a Book" (Phase 7), "Teacher Catalog" (Phase 9), and "Move a Book"
+  // (Phase 9 addendum) are intentionally not placeholders any more — each
+  // replaced its placeholder with a real experience, covered by its own spec
+  // file instead (find.spec.ts, readingLists.spec.ts, guide.spec.ts,
+  // addBook.spec.ts, teacherCatalog.spec.ts, moveBook.spec.ts +
+  // moveBookLocation.spec.ts — the state-mutating Move scenario lives alone in
+  // the latter, desktop-only and serially-ordered, to avoid racing shared
+  // `book_copies`/`system_settings` rows against whatever order separate spec
+  // files happen to be scheduled in).
 
   test("the two primary actions are visually dominant over secondary navigation", async ({ page }) => {
     const findTile = page.getByRole("link", { name: /Find a Book/ });

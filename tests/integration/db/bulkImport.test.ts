@@ -1,6 +1,6 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { eq, inArray } from "drizzle-orm";
-import { books, bookCopies, ingestionItems, ingestionJobs, physicalCategories, reviewFlags } from "@/db/schema";
+import { books, bookCopies, ingestionItems, ingestionJobs, libraryLocations, physicalCategories, reviewFlags } from "@/db/schema";
 import { createBulkImportJob, getJobStatus } from "@/lib/bulkImport/jobs";
 import { claimNextPendingItem, recoverStaleProcessingItems } from "@/lib/bulkImport/claim";
 import { processOneClaimedItem, type BulkPipelineDeps } from "@/lib/bulkImport/pipeline";
@@ -108,6 +108,7 @@ describe.skipIf(!hasTestDb)("Phase 9 bulk import (against a real Postgres databa
   const { db, client } = hasTestDb ? createTestDb() : ({} as ReturnType<typeof createTestDb>);
   const createdJobIds: string[] = [];
   const createdBookIds: string[] = [];
+  const createdLocationIds: string[] = [];
 
   afterEach(async () => {
     // `book_copies.source_ingestion_item_id` <-> `ingestion_items.resulting_copy_id`
@@ -128,6 +129,9 @@ describe.skipIf(!hasTestDb)("Phase 9 bulk import (against a real Postgres databa
     for (const id of createdJobIds.splice(0)) {
       await db.delete(ingestionItems).where(eq(ingestionItems.jobId, id));
       await db.delete(ingestionJobs).where(eq(ingestionJobs.id, id));
+    }
+    for (const id of createdLocationIds.splice(0)) {
+      await db.delete(libraryLocations).where(eq(libraryLocations.id, id));
     }
   });
 
@@ -229,6 +233,46 @@ describe.skipIf(!hasTestDb)("Phase 9 bulk import (against a real Postgres databa
 
     const [jobRow] = await db.select().from(ingestionJobs).where(eq(ingestionJobs.id, job.jobId)).limit(1);
     expect(jobRow.status).toBe("completed"); // single-item job, matches Phase 7's own completion semantics
+  });
+
+  it("Phase 9 addendum §10: a job's configured initial location is assigned to the physical copy it creates", async () => {
+    const [location] = await db.insert(libraryLocations).values({ slug: "bulk-import-test-location", displayName: "Bulk Import Test Room" }).returning({ id: libraryLocations.id });
+    createdLocationIds.push(location.id);
+
+    const job = await createBulkImportJob(db, { sourceFolderId: ROOT_FOLDER_ID, listChildren: makeListChildren(["with-location"]), initialLocationId: location.id });
+    createdJobIds.push(job.jobId);
+    const claimed = await claimNextPendingItem(db, job.jobId);
+
+    const ai = fakeAiProvider({ coverEvidence: coverEvidence({ visibleIsbn: "9781234567898", visibleTitle: "A Located Bulk Book" }), aiSuggestions: enrichment(), aiSuggestionsStatus: "valid" });
+    const candidate: NormalizedMetadataCandidate = { provider: "open_library", providerIdentifier: "OL-located", title: "A Located Bulk Book", authors: ["Bulk Author"], isbn13: "9781234567898", language: "English" };
+    const deps: BulkPipelineDeps = { ...makeDeps(ai, [fakeMetadataProvider([candidate])]), initialLocationId: location.id };
+    const outcome = await processOneClaimedItem(deps, { itemId: claimed!.id, driveFileId: "with-location", fileName: "with-location.jpg", mimeType: "image/jpeg", sizeBytes: 1000 }, 3);
+    await trackAnyPendingBookForCleanup(claimed!.id);
+
+    expect(outcome.kind).toBe("completed");
+    if (outcome.kind !== "completed") return;
+    createdBookIds.push(outcome.bookId);
+
+    const [copy] = await db.select().from(bookCopies).where(eq(bookCopies.bookId, outcome.bookId)).limit(1);
+    expect(copy.currentLocationId).toBe(location.id);
+  });
+
+  it("a bulk-import job created with no --location leaves its copies with no location recorded, never a guessed default", async () => {
+    const job = await createBulkImportJob(db, { sourceFolderId: ROOT_FOLDER_ID, listChildren: makeListChildren(["no-location"]) });
+    createdJobIds.push(job.jobId);
+    const claimed = await claimNextPendingItem(db, job.jobId);
+
+    const ai = fakeAiProvider({ coverEvidence: coverEvidence({ visibleIsbn: "9781234567899", visibleTitle: "An Unlocated Bulk Book" }), aiSuggestions: enrichment(), aiSuggestionsStatus: "valid" });
+    const candidate: NormalizedMetadataCandidate = { provider: "open_library", providerIdentifier: "OL-unlocated", title: "An Unlocated Bulk Book", authors: ["Bulk Author"], isbn13: "9781234567899", language: "English" };
+    const outcome = await processOneClaimedItem(makeDeps(ai, [fakeMetadataProvider([candidate])]), { itemId: claimed!.id, driveFileId: "no-location", fileName: "no-location.jpg", mimeType: "image/jpeg", sizeBytes: 1000 }, 3);
+    await trackAnyPendingBookForCleanup(claimed!.id);
+
+    expect(outcome.kind).toBe("completed");
+    if (outcome.kind !== "completed") return;
+    createdBookIds.push(outcome.bookId);
+
+    const [copy] = await db.select().from(bookCopies).where(eq(bookCopies.bookId, outcome.bookId)).limit(1);
+    expect(copy.currentLocationId).toBeNull();
   });
 
   it("weak identification routes to needs_review with a low_identification_confidence flag, and appears in Phase 8's computed Admin Review queue", async () => {

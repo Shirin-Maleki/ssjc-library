@@ -19,11 +19,11 @@ describe.skipIf(!hasTestDb)("Migration / schema (against a real Postgres databas
     if (hasTestDb) await client.end();
   });
 
-  it("the approved 23-table schema exists", async () => {
+  it("the approved 24-table schema exists (Phase 9 addendum added library_locations)", async () => {
     const rows = await db.execute<{ count: string }>(
       sql`select count(*)::text as count from information_schema.tables where table_schema = 'public'`
     );
-    expect(Number(rows[0].count)).toBe(23);
+    expect(Number(rows[0].count)).toBe(24);
   });
 
   it("rejects an age_min greater than age_max (check constraint)", async () => {

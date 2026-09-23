@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildCatalogRow, buildCoverCell, CATALOG_HEADER_ROW, VISIBLE_COLUMN_COUNT } from "@/lib/googleSheets/rowBuilder";
+import { buildCatalogRow, buildCoverCell, formatLocationSummary, CATALOG_HEADER_ROW, VISIBLE_COLUMN_COUNT } from "@/lib/googleSheets/rowBuilder";
 import type { Book } from "@/lib/catalog/types";
 
 function book(overrides: Partial<Book> = {}): Book {
@@ -48,10 +48,18 @@ describe("googleSheets/rowBuilder — buildCoverCell", () => {
 });
 
 describe("googleSheets/rowBuilder — buildCatalogRow header/shape", () => {
-  it("has exactly 16 columns: 15 visible teacher-facing columns plus one trailing hidden id column", () => {
-    expect(CATALOG_HEADER_ROW.length).toBe(16);
-    expect(VISIBLE_COLUMN_COUNT).toBe(15);
+  it("has exactly 17 columns: 16 visible teacher-facing columns plus one trailing hidden id column", () => {
+    expect(CATALOG_HEADER_ROW.length).toBe(17);
+    expect(VISIBLE_COLUMN_COUNT).toBe(16);
     expect(CATALOG_HEADER_ROW[CATALOG_HEADER_ROW.length - 1]).toMatch(/hidden/i);
+  });
+
+  it("places Location between Physical Category and Copy Count", () => {
+    const categoryIndex = CATALOG_HEADER_ROW.indexOf("Physical Category");
+    const locationIndex = CATALOG_HEADER_ROW.indexOf("Location");
+    const copyCountIndex = CATALOG_HEADER_ROW.indexOf("Copy Count");
+    expect(locationIndex).toBe(categoryIndex + 1);
+    expect(copyCountIndex).toBe(locationIndex + 1);
   });
 
   it("never exposes a UUID, provenance, or internal field name in the visible header row", () => {
@@ -63,71 +71,104 @@ describe("googleSheets/rowBuilder — buildCatalogRow header/shape", () => {
 describe("googleSheets/rowBuilder — buildCatalogRow formula-injection safety", () => {
   it("escapes a title/author/description that begins with =, +, -, or @ so it never becomes a live formula", () => {
     for (const dangerous of ["=1+1", "+SUM(A1:A10)", "-2+2", "@import"]) {
-      const row = buildCatalogRow(book({ title: dangerous, description: dangerous }), "Stories & Imagination");
+      const row = buildCatalogRow(book({ title: dangerous, description: dangerous }), "Stories & Imagination", "Corridor 218");
       expect(row[1]).toBe(`'${dangerous}`); // Title column
       expect(row[6]).toBe(`'${dangerous}`); // Short Description column
     }
   });
 
   it("escapes ordinary safe text too, unconditionally, not only text that looks dangerous", () => {
-    const row = buildCatalogRow(book({ title: "A Perfectly Normal Title" }), "Stories & Imagination");
+    const row = buildCatalogRow(book({ title: "A Perfectly Normal Title" }), "Stories & Imagination", "Corridor 218");
     expect(row[1]).toBe("'A Perfectly Normal Title");
   });
 
   it("never turns book metadata into the one legitimate formula cell (the cover column stays formula-only for a trusted cover URL)", () => {
-    const row = buildCatalogRow(book({ title: "=HYPERLINK(\"http://evil.com\")" }), "Stories & Imagination");
+    const row = buildCatalogRow(book({ title: "=HYPERLINK(\"http://evil.com\")" }), "Stories & Imagination", "Corridor 218");
     expect(row[0]).toBe(""); // no display cover set on this fixture — never derived from the title
   });
 
+  it("escapes the location summary too, unconditionally, since it's ultimately built from admin-entered location names", () => {
+    const row = buildCatalogRow(book(), "cat", "=HYPERLINK(\"http://evil.com\")");
+    expect(row[14]).toBe('\'=HYPERLINK("http://evil.com")');
+  });
+
   it("sends the copy count as a real number, never a string subject to formula interpretation", () => {
-    const row = buildCatalogRow(book({ copyCount: 3 }), "Stories & Imagination");
-    expect(row[14]).toBe(3);
-    expect(typeof row[14]).toBe("number");
+    const row = buildCatalogRow(book({ copyCount: 3 }), "Stories & Imagination", "Corridor 218");
+    expect(row[15]).toBe(3);
+    expect(typeof row[15]).toBe("number");
   });
 });
 
 describe("googleSheets/rowBuilder — buildCatalogRow teacher-friendly formatting", () => {
   it("uses the category display label, never the raw slug", () => {
-    const row = buildCatalogRow(book(), "Stories & Imagination");
+    const row = buildCatalogRow(book(), "Stories & Imagination", "Corridor 218");
     expect(row[13]).toBe("'Stories & Imagination");
   });
 
+  it("places the location summary right after the category column", () => {
+    const row = buildCatalogRow(book(), "cat", "Corridor 218 (2)");
+    expect(row[14]).toBe("'Corridor 218 (2)");
+  });
+
   it("uses a friendly language name, not a raw ISO code", () => {
-    const row = buildCatalogRow(book({ languageCode: "en" }), "x");
+    const row = buildCatalogRow(book({ languageCode: "en" }), "x", "loc");
     expect(row[8]).toBe("'English");
   });
 
   it("formats a real age range using the same formatter Find uses", () => {
-    const row = buildCatalogRow(book({ ageMinMonths: 24, ageMaxMonths: 60 }), "x");
+    const row = buildCatalogRow(book({ ageMinMonths: 24, ageMaxMonths: 60 }), "x", "loc");
     expect(row[5]).toBe("'2–5 years");
   });
 
   it("falls back to 'Not specified' for genuinely unrecorded fiction/illustration/visual-realism fields, never fabricating a value", () => {
-    const row = buildCatalogRow(book({ fictionType: undefined, illustrationStyles: [], visualRealism: undefined }), "x");
+    const row = buildCatalogRow(book({ fictionType: undefined, illustrationStyles: [], visualRealism: undefined }), "x", "loc");
     expect(row[9]).toBe("'Not specified");
     expect(row[10]).toBe("'Not specified");
     expect(row[11]).toBe("'Not specified");
   });
 
   it("joins multiple authors/illustrators/tags with commas", () => {
-    const row = buildCatalogRow(book({ authors: ["A", "B"], illustrators: ["C", "D"], tags: ["x", "y"] }), "cat");
+    const row = buildCatalogRow(book({ authors: ["A", "B"], illustrators: ["C", "D"], tags: ["x", "y"] }), "cat", "loc");
     expect(row[2]).toBe("'A, B");
     expect(row[3]).toBe("'C, D");
     expect(row[7]).toBe("'x, y");
   });
 
   it("uses a readable read-time band, never a raw minutes number", () => {
-    const row = buildCatalogRow(book({ readAloudMinutes: 3 }), "cat");
+    const row = buildCatalogRow(book({ readAloudMinutes: 3 }), "cat", "loc");
     expect(row[12]).toBe("'Under 5 minutes");
   });
 
   it("defaults copy count to 0 rather than leaving it blank when unrecorded", () => {
-    const row = buildCatalogRow(book({ copyCount: undefined }), "cat");
-    expect(row[14]).toBe(0);
+    const row = buildCatalogRow(book({ copyCount: undefined }), "cat", "loc");
+    expect(row[15]).toBe(0);
   });
 
   it("includes the real book id in the trailing hidden column for stable identification", () => {
-    const row = buildCatalogRow(book({ id: "abc-123" }), "cat");
-    expect(row[15]).toBe("'abc-123");
+    const row = buildCatalogRow(book({ id: "abc-123" }), "cat", "loc");
+    expect(row[16]).toBe("'abc-123");
+  });
+});
+
+describe("googleSheets/rowBuilder — formatLocationSummary", () => {
+  it("shows a bare label for exactly one copy at exactly one location", () => {
+    expect(formatLocationSummary([{ label: "Corridor 218", count: 1 }])).toBe("Corridor 218");
+  });
+
+  it("shows a count in parentheses for several copies at one location", () => {
+    expect(formatLocationSummary([{ label: "Corridor 218", count: 2 }])).toBe("Corridor 218 (2)");
+  });
+
+  it("shows every location with its own count, deterministically ordered, when copies span several locations", () => {
+    expect(
+      formatLocationSummary([
+        { label: "Corridor 218", count: 1 },
+        { label: "Blue Room", count: 1 },
+      ])
+    ).toBe("Corridor 218 (1), Blue Room (1)");
+  });
+
+  it("falls back to 'Not specified' rather than an empty string when no copies are recorded at all", () => {
+    expect(formatLocationSummary([])).toBe("Not specified");
   });
 });
