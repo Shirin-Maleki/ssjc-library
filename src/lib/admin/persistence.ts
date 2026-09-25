@@ -435,13 +435,19 @@ async function finalizePendingBook(db: Database, input: FinalizePendingBookInput
     await tx.delete(bookContributors).where(and(eq(bookContributors.bookId, bookId), eq(bookContributors.role, "author")));
     for (const [index, author] of input.authors.entries()) {
       const contributorId = await upsertContributor(tx, author);
-      await tx.insert(bookContributors).values({ bookId, contributorId, role: "author", sortOrder: index });
+      await tx
+        .insert(bookContributors)
+        .values({ bookId, contributorId, role: "author", sortOrder: index })
+        .onConflictDoNothing();
     }
 
     await tx.delete(bookContributors).where(and(eq(bookContributors.bookId, bookId), eq(bookContributors.role, "illustrator")));
     for (const [index, illustrator] of (input.illustrators ?? []).entries()) {
       const contributorId = await upsertContributor(tx, illustrator);
-      await tx.insert(bookContributors).values({ bookId, contributorId, role: "illustrator", sortOrder: index });
+      await tx
+        .insert(bookContributors)
+        .values({ bookId, contributorId, role: "illustrator", sortOrder: index })
+        .onConflictDoNothing();
     }
 
     await tx.delete(bookTags).where(eq(bookTags.bookId, bookId));
@@ -785,14 +791,20 @@ export async function updateBookMetadata(db: Database, input: UpdateBookMetadata
       await tx.delete(bookContributors).where(and(eq(bookContributors.bookId, input.bookId), eq(bookContributors.role, "author")));
       for (const [index, author] of (patch.authors ?? []).entries()) {
         const contributorId = await upsertContributor(tx, author);
-        await tx.insert(bookContributors).values({ bookId: input.bookId, contributorId, role: "author", sortOrder: index });
+        await tx
+          .insert(bookContributors)
+          .values({ bookId: input.bookId, contributorId, role: "author", sortOrder: index })
+          .onConflictDoNothing();
       }
     }
     if (patch.illustrators !== undefined) {
       await tx.delete(bookContributors).where(and(eq(bookContributors.bookId, input.bookId), eq(bookContributors.role, "illustrator")));
       for (const [index, illustrator] of (patch.illustrators ?? []).entries()) {
         const contributorId = await upsertContributor(tx, illustrator);
-        await tx.insert(bookContributors).values({ bookId: input.bookId, contributorId, role: "illustrator", sortOrder: index });
+        await tx
+          .insert(bookContributors)
+          .values({ bookId: input.bookId, contributorId, role: "illustrator", sortOrder: index })
+          .onConflictDoNothing();
       }
     }
     if (patch.tags !== undefined) {

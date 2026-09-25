@@ -290,11 +290,17 @@ export async function saveNewBook(db: Database, input: NewBookInput): Promise<Ne
 
     for (const [index, author] of input.authors.entries()) {
       const contributorId = await upsertContributor(tx, author);
-      await tx.insert(bookContributors).values({ bookId, contributorId, role: "author", sortOrder: index });
+      await tx
+        .insert(bookContributors)
+        .values({ bookId, contributorId, role: "author", sortOrder: index })
+        .onConflictDoNothing();
     }
     for (const [index, illustrator] of (input.illustrators ?? []).entries()) {
       const contributorId = await upsertContributor(tx, illustrator);
-      await tx.insert(bookContributors).values({ bookId, contributorId, role: "illustrator", sortOrder: index });
+      await tx
+        .insert(bookContributors)
+        .values({ bookId, contributorId, role: "illustrator", sortOrder: index })
+        .onConflictDoNothing();
     }
 
     for (const tagName of input.tags ?? []) {
@@ -466,7 +472,10 @@ export async function saveForReview(db: Database, input: SaveForReviewInput): Pr
 
       for (const [index, author] of (input.pendingBook.authors ?? []).entries()) {
         const contributorId = await upsertContributor(tx, author);
-        await tx.insert(bookContributors).values({ bookId, contributorId, role: "author", sortOrder: index });
+        await tx
+          .insert(bookContributors)
+          .values({ bookId, contributorId, role: "author", sortOrder: index })
+          .onConflictDoNothing();
       }
 
       await tx.insert(reviewFlags).values({

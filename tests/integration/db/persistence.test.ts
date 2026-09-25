@@ -1,6 +1,6 @@
 import { describe, expect, it, afterAll, afterEach } from "vitest";
 import { eq } from "drizzle-orm";
-import { books, bookCopies, ingestionItems, ingestionJobs, auditLog, reviewFlags, bookFieldProvenance } from "@/db/schema";
+import { books, bookCopies, bookContributors, ingestionItems, ingestionJobs, auditLog, reviewFlags, bookFieldProvenance } from "@/db/schema";
 import { saveNewBook, addAnotherCopy, saveForReview, type NewBookInput } from "@/lib/intake/persistence";
 import { createInitialDraft } from "@/lib/intake/draft";
 import { DrizzleSearchRepository } from "@/db/repositories/searchRepository";
@@ -139,6 +139,25 @@ describe.skipIf(!hasTestDb)("intake/persistence (against a real Postgres databas
     expect(auditRows.some((r) => r.action === "book_created")).toBe(true);
   });
 
+  it("saveNewBook tolerates a duplicate author name (exact repeat or a case/whitespace variant that normalizes the same) without crashing (Stage 10D real-collection regression)", async () => {
+    const ingestionItemId = await makeIngestionItem();
+    const result = await saveNewBook(
+      db,
+      baseInput({ authors: ["Eric Carle", "eric  carle"], illustrators: ["Eric Carle", "Eric Carle"] }, ingestionItemId)
+    );
+    createdBookIds.push(result.bookId);
+
+    const authorRows = await db
+      .select()
+      .from(bookContributors)
+      .where(eq(bookContributors.bookId, result.bookId));
+    expect(authorRows.filter((r) => r.role === "author")).toHaveLength(1);
+    expect(authorRows.filter((r) => r.role === "illustrator")).toHaveLength(1);
+
+    const [itemRow] = await db.select().from(ingestionItems).where(eq(ingestionItems.id, ingestionItemId)).limit(1);
+    expect(itemRow.status).toBe("completed");
+  });
+
   it("rejects a title-less book before ever opening a transaction (minimum-data invariant, §32)", async () => {
     const ingestionItemId = await makeIngestionItem();
     await expect(saveNewBook(db, baseInput({ title: "   " }, ingestionItemId))).rejects.toThrow(/title/i);
@@ -274,5 +293,34 @@ describe.skipIf(!hasTestDb)("intake/persistence (against a real Postgres databas
     // normal teacher Find, exactly like any other non-"active" book (visibility.ts).
     const { ids } = await searchRepository.findVisibleBookIdsPage({ filters: EMPTY_FILTERS, limit: 500 });
     expect(ids).not.toContain(result.bookId);
+  });
+
+  it("saveForReview tolerates a duplicate author name on the pending book without crashing (Stage 10D real-collection regression)", async () => {
+    const ingestionItemId = await makeIngestionItem();
+    const draft = createInitialDraft({ fileId: "drive-3", filename: "cover.jpg", mimeType: "image/jpeg", sizeBytes: 100, checksum: null });
+
+    const result = await saveForReview(db, {
+      ingestionItemId,
+      draft,
+      reviewReason: "Duplicate author credit on cover.",
+      actorLabel: "staff",
+      pendingBook: {
+        title: "Duplicate Author Review Fixture Book",
+        languageCode: "en",
+        coverDriveFileId: "drive-3",
+        coverDriveFolderId: "folder-1",
+        coverFilename: "cover.jpg",
+        coverMimeType: "image/jpeg",
+        authors: ["Tracey Corderoy", "Tracey Corderoy"],
+      },
+    });
+    expect(result.bookId).toBeDefined();
+    createdBookIds.push(result.bookId!);
+
+    const authorRows = await db
+      .select()
+      .from(bookContributors)
+      .where(eq(bookContributors.bookId, result.bookId!));
+    expect(authorRows).toHaveLength(1);
   });
 });
