@@ -35,6 +35,18 @@ A category rename never touches location data, and a copy move never touches a b
 Taxonomy finalization (Phase 10) is exclusively about the first concept; nothing about the
 Phase 9 addendum's location model changes when or how that finalization happens.
 
+## Stage 10 category placement guidance (2026-09-25, product-owner approved)
+
+Stage 10B's real-collection research surfaced a genuine, recurring ambiguity — animal-*character* fiction (Biscuit, Henry and Mudge, Goose and Robin) split unpredictably between Animals & Nature and Stories & Imagination. The product owner reviewed this evidence and approved a clarifying rule, applied here via each category's existing `description` field (`updateCategory()`, Phase 8's own admin mechanism — no schema change, no rename, no ID/slug change):
+
+- **Animals & Nature**: the book's *primary purpose* is learning about real animals, plants, habitats, ecology, nature, or the natural world. An animal appearing as a protagonist does not by itself qualify a book for this shelf.
+- **Stories & Imagination**: the book's primary purpose is fictional/imaginative narrative — character story, fairy tale, adventure, imaginative literature — even when its characters are animals.
+- **World & Cultures**: the book's primary educational/content purpose concerns cultures, places, traditions, global communities, or intercultural/cross-cultural understanding. **Language alone never assigns this category** — a Swedish-language story about feelings still belongs on Feelings & Relationships, not here. Language stays independent, searchable metadata (`books.language_code`), never a taxonomy signal. `World & Cultures` remains active with zero real representation in the 120-book Stage 10A/10B sample — a real, honest null result, not a reason to deactivate it; it may be reassessed once the full collection is known.
+
+None of this created, merged, renamed, or deactivated a category. Digital tags remain the mechanism for animal/topic discoverability regardless of which shelf a book lands on — this guidance is about *shelving*, never about *search*.
+
+**Early/leveled reader material is explicitly NOT a physical category** (product-owner Decision 1, Stage 10C) — Stage 10B found this format/reading-level characteristic in ~45% of its real completed sample, spanning every active category. It is treated as a cross-category reading/format concern, already representable via `books.format` (`early_reader`) and tags, never a shelving decision. If real physical dimensions (unusually small/large trim) ever require special handling, that is a `books.physical_size_exception` question, not a new taxonomy entry.
+
 ## Stable identity vs. display label
 
 - `physical_categories.id` (uuid) is the real relational identity — `books.physical_category_id`

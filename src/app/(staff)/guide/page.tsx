@@ -31,6 +31,14 @@ export default function GuidePage() {
           tags={["animals", "baby animals", "nature"]}
           note="This book physically lives on the Animals & Nature shelf. The tags just help a search for “baby animals” or “nature” find it."
         />
+        <p>
+          <strong>A book with an animal character isn&rsquo;t automatically Animals &amp; Nature.</strong> A
+          storybook where an animal is the main character — a bear, a dog, a goose — belongs on{" "}
+          <strong>Stories &amp; Imagination</strong> if the point of the book is the story. Animals &amp; Nature is
+          for books whose point is learning about real animals, plants, habitats, or the natural world. If you&rsquo;re
+          not sure, ask: is this mainly a story, or mainly a fact book? Either way, an animal-topic search will
+          still find both — the shelf and the search are two different things.
+        </p>
       </Section>
 
       <Divider />
@@ -72,6 +80,27 @@ export default function GuidePage() {
           <li>Return it to that category&rsquo;s shelf — never a different one, even if a tag suggests otherwise.</li>
           <li>Within that shelf, books are ordered alphabetically by title.</li>
         </ol>
+      </Section>
+
+      <Divider />
+
+      <Section heading="Where a book currently is">
+        <p>
+          <strong>Category</strong> and <strong>location</strong> answer two different questions. A book&rsquo;s
+          category is its permanent shelf home and almost never changes. Its <strong>current location</strong> —
+          which corridor or classroom a specific copy is sitting in right now — can change any time a copy is
+          moved or returned.
+        </p>
+        <p>
+          To update where a copy actually is, use <strong>Move a Book</strong>: photograph the cover, confirm which
+          book it is, and say where it&rsquo;s coming from and going to. This only ever changes that one copy&rsquo;s
+          location — it never changes the book&rsquo;s category, and it never creates a new book or a new copy.
+        </p>
+        <p>
+          <Link href="/move" className="font-medium text-brand-primary underline underline-offset-4 hover:text-brand-secondary">
+            Open Move a Book
+          </Link>
+        </p>
       </Section>
 
       <Divider />

@@ -15,13 +15,27 @@ test.describe("Library Guide", () => {
   test("has meaningful section headings, not a wall of undifferentiated text", async ({ page }) => {
     await page.goto("/guide");
     const headings = page.getByRole("heading", { level: 2 });
-    await expect(headings).toHaveCount(6);
+    await expect(headings).toHaveCount(7);
     await expect(page.getByRole("heading", { level: 2, name: "How the library is organized" })).toBeVisible();
     await expect(page.getByRole("heading", { level: 2, name: "How to find a book" })).toBeVisible();
     await expect(page.getByRole("heading", { level: 2, name: "How to return a book" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 2, name: "Where a book currently is" })).toBeVisible();
     await expect(page.getByRole("heading", { level: 2, name: "How to add a book" })).toBeVisible();
     await expect(page.getByRole("heading", { level: 2, name: "Review Later" })).toBeVisible();
     await expect(page.getByRole("heading", { level: 2, name: "Reading Lists" })).toBeVisible();
+  });
+
+  test("explains that an animal-character story still belongs on Stories & Imagination, not Animals & Nature (Phase 10C taxonomy guidance)", async ({ page }) => {
+    await page.goto("/guide");
+    await expect(page.getByText(/isn.t automatically Animals & Nature/i)).toBeVisible();
+  });
+
+  test("explains category vs. current location, and links to Move a Book (Phase 9 addendum / Phase 10C)", async ({ page }) => {
+    await page.goto("/guide");
+    await expect(page.getByRole("heading", { level: 2, name: "Where a book currently is" })).toBeVisible();
+    await expect(page.getByText(/never changes the book.s category/i)).toBeVisible();
+    await page.getByRole("link", { name: "Open Move a Book" }).click();
+    await expect(page).toHaveURL("/move");
   });
 
   test("explains the core physical-category-vs-tags distinction with a real, non-contradictory example", async ({ page }) => {
