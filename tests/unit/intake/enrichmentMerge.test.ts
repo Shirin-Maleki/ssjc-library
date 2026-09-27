@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { mergeProviderSubjectsIntoTags } from "@/lib/intake/enrichmentMerge";
-import { EnrichmentSuggestionSchema, MAX_ENRICHMENT_TAGS } from "@/lib/ai/schemas";
+import { EnrichmentSuggestionSchema, MAX_ENRICHMENT_TAGS, MAX_ENRICHMENT_TAG_LENGTH } from "@/lib/ai/schemas";
 
 describe("intake/enrichmentMerge — mergeProviderSubjectsIntoTags (AI-first catalog draft correction §4/§13)", () => {
   it("merges new provider subjects into the AI tag list", () => {
@@ -60,6 +60,46 @@ describe("intake/enrichmentMerge — mergeProviderSubjectsIntoTags (AI-first cat
       const aiTags = ["a", "b", "c"];
       const manySubjects = Array.from({ length: 15 }, (_, i) => `subject-${i}`);
       const mergedTags = mergeProviderSubjectsIntoTags(aiTags, manySubjects);
+
+      const candidate = {
+        description: "A test description.",
+        tags: mergedTags,
+        fictionType: "fiction" as const,
+        format: "picture_book" as const,
+        ageMinMonths: 36,
+        ageMaxMonths: 72,
+        readAloudMinutes: 5,
+        visualMediaTypes: [] as const,
+        visualRealism: null,
+        physicalCategorySlug: "picture-books",
+        categoryConfidence: "high" as const,
+        categoryReason: "test",
+      };
+
+      const result = EnrichmentSuggestionSchema.safeParse(candidate);
+      expect(result.success).toBe(true);
+    });
+  });
+
+  describe("tag-length schema mismatch fix (Stage 10D real-collection correction) — a provider subject longer than MAX_ENRICHMENT_TAG_LENGTH (40) is skipped, never truncated", () => {
+    it("a real, verbose Library-of-Congress-style Open Library subject over 40 chars is skipped entirely", () => {
+      const overLong = "Juvenile fiction -- Animals -- Africa -- Pictorial works";
+      expect(overLong.length).toBeGreaterThan(MAX_ENRICHMENT_TAG_LENGTH);
+      const result = mergeProviderSubjectsIntoTags(["forest"], [overLong, "Adventure"]);
+      expect(result).toEqual(["forest", "Adventure"]);
+      expect(result).not.toContain(overLong);
+    });
+
+    it("a subject exactly at the 40-char limit is kept; one character over is skipped", () => {
+      const exact = "a".repeat(MAX_ENRICHMENT_TAG_LENGTH);
+      const overByOne = "a".repeat(MAX_ENRICHMENT_TAG_LENGTH + 1);
+      const result = mergeProviderSubjectsIntoTags([], [exact, overByOne]);
+      expect(result).toEqual([exact]);
+    });
+
+    it("the merged result (with an over-long subject present in the input) still validates successfully against the real EnrichmentSuggestionSchema", () => {
+      const overLong = "A subject heading that is deliberately far longer than forty characters";
+      const mergedTags = mergeProviderSubjectsIntoTags(["a", "b"], [overLong, "short-one"]);
 
       const candidate = {
         description: "A test description.",

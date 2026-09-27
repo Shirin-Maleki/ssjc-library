@@ -71,9 +71,18 @@ export type CoverIdentification = z.infer<typeof CoverIdentificationSchema>;
  */
 export const MAX_ENRICHMENT_TAGS = 8;
 
+/** The one canonical per-tag length cap — exported for the same reason as
+ * `MAX_ENRICHMENT_TAGS` above (`src/lib/intake/enrichmentMerge.ts`'s provider-subject
+ * merge must enforce this exact limit too, not just the tag count, or a real
+ * provider subject longer than this — Open Library subjects are often verbose
+ * Library-of-Congress-style phrases — can merge past this schema's max(40) and fail
+ * `parseIntakeDraft()`'s validation at save time, exactly like the Phase 7 MAX_TAGS
+ * count drift this file already documents). */
+export const MAX_ENRICHMENT_TAG_LENGTH = 40;
+
 export const EnrichmentSuggestionSchema = z.object({
   description: z.string().min(1).max(400).nullable(),
-  tags: z.array(z.string().min(1).max(40)).max(MAX_ENRICHMENT_TAGS),
+  tags: z.array(z.string().min(1).max(MAX_ENRICHMENT_TAG_LENGTH)).max(MAX_ENRICHMENT_TAGS),
   fictionType: z.enum(["fiction", "nonfiction"]).nullable(),
   format: z
     .enum(["board_book", "picture_book", "early_reader", "chapter_book", "informational_reference", "activity_book", "other"])
